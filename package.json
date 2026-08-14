@@ -1,0 +1,22 @@
+{
+  "name": "super-converter-parser",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Exploratory Playwright spike for Keyword Surfer data in Google SERP",
+  "type": "module",
+  "scripts": {
+    "probe": "tsx src/spike.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright-core": "^1.54.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}
