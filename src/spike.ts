@@ -5,7 +5,7 @@ import { chromium, type Frame, type Page } from 'playwright-core';
 
 const keyword = process.argv.slice(2).join(' ').trim() || 'compare lists';
 const cdpUrl = process.env.CDP_URL ?? 'http://127.0.0.1:9222';
-const waitMs = Number(process.env.SURFER_WAIT_MS ?? 12_000);
+const waitMs = Number(process.env.SURFER_WAIT_MS ?? 30_000);
 const debugDirectory = 'debug';
 
 type FrameProbe = {
@@ -28,6 +28,59 @@ type OrganicCandidate = {
   title: string;
   url: string;
 };
+
+type SurferResult = {
+  volume: number | null;
+  cpc: number | null;
+  rawText: string | null;
+};
+
+function parseSurferNumber(value: string | undefined): number | null {
+  if (!value) return null;
+
+  const normalized = value.replace(/[$,\s]/g, '').toUpperCase();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)([KMB])?$/);
+  if (!match) return null;
+
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+
+  const multiplier =
+    match[2] === 'K'
+      ? 1_000
+      : match[2] === 'M'
+        ? 1_000_000
+        : match[2] === 'B'
+          ? 1_000_000_000
+          : 1;
+  return number * multiplier;
+}
+
+async function readSurferResult(page: Page): Promise<SurferResult> {
+  const widget = page.locator('.surfer-main-keyword-widget').first();
+  const deadline = Date.now() + waitMs;
+  let lastRawText: string | null = null;
+
+  while (Date.now() <= deadline) {
+    const rawText = (await widget.innerText().catch(() => '')).trim();
+    if (rawText) lastRawText = rawText;
+
+    const values = rawText.match(/\$?\s*\d[\d,.]*\s*[KMB]?/gi) ?? [];
+    const volume = parseSurferNumber(values[0]);
+
+    if (volume !== null) {
+      return {
+        volume,
+        cpc: parseSurferNumber(values[1]),
+        rawText,
+      };
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return { volume: null, cpc: null, rawText: lastRawText };
+}
 
 async function waitForManualCaptcha(page: Page): Promise<void> {
   const captchaVisible = await page
@@ -185,8 +238,15 @@ async function main(): Promise<void> {
   await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await waitForManualCaptcha(page);
 
-  console.log(`Жду расширение: ${waitMs} ms`);
-  await page.waitForTimeout(waitMs);
+  console.log(`Жду Keyword Surfer: до ${waitMs} ms`);
+  const surfer = await readSurferResult(page);
+
+  if (surfer.volume === null) {
+    console.log('Виджет Keyword Surfer не найден или volume не распознан.');
+  } else {
+    console.log(`Keyword Surfer volume: ${surfer.volume}`);
+    console.log(`Keyword Surfer CPC: ${surfer.cpc ?? 'не найден'}`);
+  }
 
   await page.screenshot({
     path: `${debugDirectory}/google-serp.png`,
@@ -218,6 +278,7 @@ async function main(): Promise<void> {
     timestamp: new Date().toISOString(),
     cdpUrl,
     pageUrl: page.url(),
+    surfer,
     frameCount: frames.length,
     frames,
     organicCandidates,
