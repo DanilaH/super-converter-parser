@@ -53,9 +53,13 @@ async function waitForManualCaptcha(page: Page): Promise<void> {
 }
 
 async function probeFrame(frame: Frame): Promise<FrameProbe> {
-  const data = await frame.evaluate(() => {
+  // Keep browser-side code as a string. When this callback was written as a
+  // TypeScript function, tsx/esbuild injected its __name helper. Playwright
+  // serialized the callback without that module-level helper, so it crashed in
+  // Chrome before any DOM inspection could run.
+  const script = String.raw`(() => {
     const marker = /keyword|surfer|volume|cpc|search volume|monthly searches/i;
-    const clean = (value: string | null | undefined, limit = 500) =>
+    const clean = (value, limit = 500) =>
       (value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
 
     const bodyText = document.body?.innerText ?? '';
@@ -67,15 +71,14 @@ async function probeFrame(frame: Frame): Promise<FrameProbe> {
 
     const suspiciousElements = Array.from(document.querySelectorAll('*'))
       .map((element) => {
-        const htmlElement = element as HTMLElement;
         const signature = [
           element.tagName,
           element.id,
           element.className,
           Array.from(element.attributes)
-            .map((attribute) => `${attribute.name}=${attribute.value}`)
+            .map((attribute) => attribute.name + '=' + attribute.value)
             .join(' '),
-          htmlElement.innerText,
+          element.innerText,
         ].join(' ');
 
         if (!marker.test(signature)) return null;
@@ -85,10 +88,10 @@ async function probeFrame(frame: Frame): Promise<FrameProbe> {
           id: element.id,
           className:
             typeof element.className === 'string' ? clean(element.className, 200) : '',
-          text: clean(htmlElement.innerText, 300),
+          text: clean(element.innerText, 300),
         };
       })
-      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .filter((value) => value !== null)
       .slice(0, 150);
 
     const iframes = Array.from(document.querySelectorAll('iframe')).map((iframe) => ({
@@ -103,19 +106,17 @@ async function probeFrame(frame: Frame): Promise<FrameProbe> {
         const root = element.shadowRoot;
         if (!root) return [];
 
-        return [
-          {
-            host: [
-              element.tagName.toLowerCase(),
-              element.id ? `#${element.id}` : '',
-              typeof element.className === 'string' && element.className
-                ? `.${element.className.split(/\s+/).join('.')}`
-                : '',
-            ].join(''),
-            text: clean(root.textContent, 1_000),
-            html: clean(root.innerHTML, 2_000),
-          },
-        ];
+        return [{
+          host: [
+            element.tagName.toLowerCase(),
+            element.id ? '#' + element.id : '',
+            typeof element.className === 'string' && element.className
+              ? '.' + element.className.split(/\s+/).join('.')
+              : '',
+          ].join(''),
+          text: clean(root.textContent, 1000),
+          html: clean(root.innerHTML, 2000),
+        }];
       })
       .slice(0, 100);
 
@@ -125,9 +126,11 @@ async function probeFrame(frame: Frame): Promise<FrameProbe> {
       suspiciousElements,
       iframes,
       shadowRoots,
-      bodyPreview: clean(bodyText, 3_000),
+      bodyPreview: clean(bodyText, 3000),
     };
-  });
+  })()`;
+
+  const data = (await frame.evaluate(script)) as Omit<FrameProbe, 'name' | 'url'>;
 
   return {
     name: frame.name(),
