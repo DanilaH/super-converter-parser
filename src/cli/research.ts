@@ -7,6 +7,7 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { collectKeyword } from '../browser/collect.js';
 import {
+  buildKeywordRecords,
   createRunId,
   ensureWritableDirectory,
   writeJsonFile,
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
   const context = getPrimaryContext(browser);
   await preflightGoogleAndSurfer(context, config);
   console.log('  ✓ Google reachable');
-  console.log(`  ✓ Keyword Surfer detected (${config.research.market} market)`);
+  console.log(`  ✓ Keyword Surfer injection detected; configured market: ${config.research.market}`);
 
   const rows = await loadSeedRows(options.seedsPath);
   const keywords = buildSeedKeywords(rows);
@@ -109,23 +110,14 @@ async function main(): Promise<void> {
   };
   await writeJsonFile(`${runDirectory}/manifest.json`, manifest, 'run manifest');
 
-  const records: KeywordRecord[] = [];
+  const records: KeywordRecord[] = buildKeywordRecords(keywords);
   const serpRows: SerpResult[] = [];
   const geoWarnings: string[] = [];
 
   for (let index = 0; index < keywords.length; index += 1) {
     const seed = keywords[index] as SeedKeyword;
-    const id = `kw-${String(index + 1).padStart(4, '0')}`;
-    const record: KeywordRecord = {
-      id,
-      keyword: seed.keyword,
-      normalizedKeyword: seed.normalizedKeyword,
-      sources: [{ type: 'seed' }],
-      surfer: null,
-      google: null,
-      status: 'running',
-      error: null,
-    };
+    const record = records[index] as KeywordRecord;
+    record.status = 'running';
 
     console.log(`[${index + 1}/${keywords.length}] ${seed.normalizedKeyword}`);
     const { record: result, serpRows: rowsForKeyword, debugArtifactPath } = await collectKeyword(

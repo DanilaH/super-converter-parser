@@ -1,6 +1,6 @@
 import type { ResearchConfig } from '../config/config.js';
 
-export const GOOGLE_PARSER_VERSION = '1.0.0';
+export const GOOGLE_PARSER_VERSION = '1.1.0';
 
 export const GOOGLE_SELECTORS = {
   organicResults: '#search a[href^="http"]:has(h3)',
@@ -38,6 +38,20 @@ export const ORGANIC_EXTRACT_SCRIPT = String.raw`(() => {
     out.push({ href, title });
   }
   return out;
+})()`;
+
+export function isNoResultsPageText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.indexOf('did not match any documents') !== -1 ||
+    lower.indexOf('no results found') !== -1
+  );
+}
+
+// Self-contained browser copy of isNoResultsPageText; keep both in sync.
+export const GOOGLE_NO_RESULTS_SCRIPT = String.raw`(() => {
+  const text = ((document.body && document.body.innerText) || '').toLowerCase();
+  return text.indexOf('did not match any documents') !== -1 || text.indexOf('no results found') !== -1;
 })()`;
 
 export function buildOrganicResults(

@@ -8,6 +8,7 @@ import {
   buildSearchUrl,
   detectGoogleLocationFromText,
   geoMatchesMarket,
+  GOOGLE_NO_RESULTS_SCRIPT,
   LOCATION_EXTRACT_SCRIPT,
   ORGANIC_EXTRACT_SCRIPT,
   type SerpResult,
@@ -84,6 +85,15 @@ export async function collectKeyword(
         title: string;
       }>;
       serpRows = buildOrganicResults(rawOrganic, keyword.normalizedKeyword, config.research.topN);
+      if (serpRows.length === 0) {
+        const noResults = (await page.evaluate(GOOGLE_NO_RESULTS_SCRIPT)) as boolean;
+        if (!noResults) {
+          throw new ResearchError(
+            'GOOGLE_SERP_PARSE_ERROR',
+            'Organic SERP extraction returned zero rows while the page is not a zero-result page; the selector may be broken.',
+          );
+        }
+      }
     } catch (error) {
       const { code, message } = toComponentError(error, 'GOOGLE_SERP_PARSE_ERROR');
       errors.push({ code, message });

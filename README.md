@@ -92,15 +92,18 @@ Configuration via environment variables (all optional):
 | `TOP_N` | `10` | Max organic results per keyword (1–30) |
 | `SURFER_WIDGET_SELECTOR` | `.surfer-main-keyword-widget` | Surfer widget selector (parser debug hook) |
 
-Each run writes an immutable run directory:
+Each run writes immutable output under `runs/<run-id>/`, with parser-failure evidence under `debug/<run-id>/`:
 
 ```text
 runs/<run-id>/
-├── manifest.json   # config snapshot, parser versions, timestamps
-├── keywords.json   # per-keyword record (status, Surfer volume/CPC, geo)
-├── serp.json       # organic SERP rows with provenance
-└── debug/          # page.html / page.png / parser-context.json on parser failures
+├── manifest.json   # config snapshot, parser versions, timestamps, progress
+├── keywords.json   # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers)
+└── serp.json       # organic SERP rows with provenance
+
+debug/<run-id>/     # page.html / page.png / parser-context.json on parser failures
 ```
+
+A parser failure never silently marks a keyword as completed: an unexpected empty organic SERP (page is not a genuine zero-result page) is reported as `GOOGLE_SERP_PARSE_ERROR` with debug evidence.
 
 Exit codes: `0` success (including `completed_with_errors`), `1` internal error, `2` invalid input/config, `3` preflight failure.
 

@@ -4,6 +4,7 @@ import {
   buildOrganicResults,
   detectGoogleLocationFromText,
   geoMatchesMarket,
+  isNoResultsPageText,
 } from './serp.js';
 
 test('buildOrganicResults builds organic rows in order', () => {
@@ -105,4 +106,14 @@ test('geoMatchesMarket detects US mismatch', () => {
 test('geoMatchesMarket handles generic market labels', () => {
   assert.equal(geoMatchesMarket('Germany', 'Berlin, Germany'), true);
   assert.equal(geoMatchesMarket('Germany', 'Moscow, Russia'), false);
+});
+
+test('isNoResultsPageText detects genuine zero-result pages', () => {
+  assert.equal(
+    isNoResultsPageText('Your search - xyz - did not match any documents. Suggestions: ...'),
+    true,
+  );
+  assert.equal(isNoResultsPageText('No results found for "xyz".'), true);
+  assert.equal(isNoResultsPageText('compare lists - Google Search\n49,500 results in 0.4s'), false);
+  assert.equal(isNoResultsPageText(''), false);
 });
