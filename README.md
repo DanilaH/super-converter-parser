@@ -67,6 +67,45 @@ npm run research -- --microsoft input/microsoft.csv --json-status
 
 Exact flag names may be adjusted during implementation if consistency improves, but the capabilities are required.
 
+## Implemented CLI (foundation)
+
+Currently implemented commands:
+
+```bash
+# Single-query spike (proven integration, kept for reference)
+npm run probe -- "compare lists"
+
+# Batch research from a seeds CSV (keyword column required)
+npm run research -- --seeds input/seeds.csv
+```
+
+Configuration via environment variables (all optional):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CDP_URL` | `http://127.0.0.1:9222` | Research Chrome DevTools endpoint |
+| `SURFER_WAIT_MS` | `30000` | Wait for the Keyword Surfer widget to mount |
+| `NAVIGATION_TIMEOUT_MS` | `60000` | Per-navigation timeout |
+| `RESEARCH_MARKET` | `US` | Expected Surfer market label |
+| `GOOGLE_HL` | `en` | Google interface language |
+| `GOOGLE_GL` | `us` | Google geolocation parameter |
+| `TOP_N` | `10` | Max organic results per keyword (1–30) |
+| `SURFER_WIDGET_SELECTOR` | `.surfer-main-keyword-widget` | Surfer widget selector (parser debug hook) |
+
+Each run writes an immutable run directory:
+
+```text
+runs/<run-id>/
+├── manifest.json   # config snapshot, parser versions, timestamps
+├── keywords.json   # per-keyword record (status, Surfer volume/CPC, geo)
+├── serp.json       # organic SERP rows with provenance
+└── debug/          # page.html / page.png / parser-context.json on parser failures
+```
+
+Exit codes: `0` success (including `completed_with_errors`), `1` internal error, `2` invalid input/config, `3` preflight failure.
+
+A preflight runs before any keyword work and verifies: Research Chrome reachable, Google reachable, Keyword Surfer present, run directory writable. A CAPTCHA pauses the run and asks for manual intervention instead of retrying blindly.
+
 ## Primary outputs
 
 Each execution creates an immutable historical run:

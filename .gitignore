@@ -1,5 +1,6 @@
 node_modules/
 debug/
+runs/
 output/
 .research-profile/
 playwright-report/

@@ -1,0 +1,19 @@
+export type ResearchErrorCode =
+  | 'BROWSER_CONNECTION_ERROR'
+  | 'SURFER_NOT_DETECTED'
+  | 'SURFER_PARSE_ERROR'
+  | 'GOOGLE_SERP_PARSE_ERROR'
+  | 'GOOGLE_UNAVAILABLE'
+  | 'CAPTCHA_REQUIRED'
+  | 'INPUT_SCHEMA_ERROR'
+  | 'OUTPUT_WRITE_ERROR';
+
+export class ResearchError extends Error {
+  readonly code: ResearchErrorCode;
+
+  constructor(code: ResearchErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ResearchError';
+    this.code = code;
+  }
+}
