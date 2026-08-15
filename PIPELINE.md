@@ -1,0 +1,615 @@
+# PIPELINE.md
+
+## Pipeline overview
+
+```text
+INPUT
+  ├── Microsoft export
+  └── raw seeds
+        ↓
+validate + normalize + dedupe
+        ↓
+keyword queue
+        ↓
+Google + Keyword Surfer
+  ├── volume
+  ├── CPC
+  ├── related ideas
+  └── organic SERP
+        ↓
+optional Surfer expansion
+        ↓
+normalize SERP domains
+        ↓
+dedupe domains globally
+        ↓
+Ahrefs DR
+        ↓
+aggregate keyword-level SERP metrics
+        ↓
+deterministic scoring
+        ↓
+CSV + Markdown + JSON outputs
+```
+
+## Stage 1 — Input
+
+### Raw seeds
+
+Expected minimal file:
+
+```csv
+keyword
+compare csv files
+zip code county lookup
+filter csv by column
+```
+
+### Microsoft export
+
+The runner must support a Microsoft Keyword Planner CSV adapter.
+
+Because Microsoft exports may change column names/order, parsing logic should:
+
+1. identify required columns by known header aliases;
+2. preserve unknown source columns where practical;
+3. fail with a useful schema error if the export cannot be recognized;
+4. normalize rows into the internal keyword model.
+
+Microsoft volume is a discovery/prioritization signal, not the final truth.
+
+Do not apply a strict kill threshold based solely on Microsoft volume bucket.
+
+## Stage 2 — Keyword dedupe
+
+Normalize safely:
+
+- trim surrounding whitespace;
+- collapse accidental repeated whitespace;
+- preserve semantic punctuation;
+- case-insensitive dedupe for identical queries;
+- retain original source provenance.
+
+If the same keyword appears from seeds, Microsoft, and Surfer expansion, it must become one canonical keyword with multiple sources.
+
+## Stage 3 — Google + Keyword Surfer
+
+For each canonical keyword collect:
+
+```ts
+{
+  keyword,
+  volume,
+  cpc,
+  googleUrl,
+  surferMarket,
+  googleHl,
+  googleGl,
+  detectedGoogleLocation,
+  status
+}
+```
+
+The browser collector must also collect organic results.
+
+### Organic result rules
+
+Collect up to configured `topN` (default 10).
+
+Do not count:
+
+- ads;
+- sponsored results;
+- People Also Ask;
+- related searches;
+- shopping widgets;
+- local/map packs;
+- knowledge panels;
+- Keyword Surfer-injected links;
+- navigation links.
+
+Store result type explicitly when uncertain.
+
+If only 9 valid organic results exist on the rendered page, `9` is correct. Never fabricate a 10th result.
+
+## Stage 4 — Surfer related-keyword expansion
+
+The spike proved the sidebar can expose:
+
+```text
+keyword
+overlap
+volume
+```
+
+Support optional expansion:
+
+```bash
+--expand-surfer
+```
+
+Configurable limits:
+
+- max related keywords per seed;
+- minimum volume;
+- minimum/maximum overlap if desired;
+- maximum expansion depth.
+
+v1 default depth must be `1`.
+
+Do not recursively explode related keywords indefinitely.
+
+Every expanded keyword must preserve parent/source metadata.
+
+## Stage 5 — Domain normalization
+
+For every organic URL derive:
+
+```text
+hostname
+registrable domain (eTLD+1)
+```
+
+Use a Public Suffix List-aware library.
+
+Examples:
+
+```text
+www.example.com       → example.com
+blog.example.com      → example.com
+foo.example.co.uk     → example.co.uk
+```
+
+Do not implement this with a naive split on dots.
+
+## Stage 6 — Ahrefs DR
+
+Collect DR once per unique registrable domain, subject to cache TTL.
+
+One domain may occur in dozens of keyword SERPs. It must not trigger dozens of API calls.
+
+## Stage 7 — Aggregation
+
+Compute keyword-level observable metrics such as:
+
+```text
+organic_result_count
+unique_domains
+min_dr
+max_dr
+median_dr
+top3_median_dr
+top5_median_dr
+very_weak_domains_count
+weak_domains_count
+strong_domains_count
+very_strong_domains_count
+missing_dr_count
+niche_domain_count
+exact_match_domain_count
+serp_diversity
+```
+
+Thresholds belong in configuration, not scattered through code.
+
+Initial defaults may be:
+
+```text
+very weak: DR < 10
+weak:      DR < 30
+strong:    DR >= 60
+very strong: DR >= 75
+```
+
+These are research heuristics, not SEO laws.
+
+## Stage 8 — Candidate scoring
+
+See `SCORING.md`.
+
+## Stage 9 — Output
+
+Write all run artifacts even if some keywords failed.
+
+A partial run must be inspectable.
+
+Generate:
+
+```text
+manifest.json
+keywords.csv
+related-keywords.csv
+serp.csv
+domains.csv
+candidates.csv
+report.md
+status.json
+```
+
+Errors must not disappear from output.
+
+---
+
+## CLI and progress UX
+
+The CLI is the user interface of the product. Progress visibility is required.
+
+## Preflight
+
+Before a large run:
+
+```text
+Utility Research Runner
+
+[preflight]
+✓ Research Chrome connected
+✓ Keyword Surfer detected
+✓ Surfer market: United States
+✓ Google reachable
+✓ Ahrefs API key valid
+✓ Cache writable
+✓ Runs directory writable
+
+Input: 217 rows
+Unique keywords: 184
+Ready.
+```
+
+If any required dependency is broken, stop before processing hundreds of keywords.
+
+## Stage progress
+
+Example:
+
+```text
+[1/6] Loading input
+✓ 217 rows loaded
+✓ 184 unique keywords
+
+[2/6] Google + Keyword Surfer
+[47/184] json diff
+✓ volume: 8,100
+✓ cpc: $10.55
+✓ organic results: 10
+✓ related ideas: 20
+
+Keywords 47/184 | Cache 61% | Errors 2 | ETA ~14m
+
+[3/6] Normalizing domains
+✓ 932 unique domains
+
+[4/6] Ahrefs DR
+[381/932] example.com → DR 17
+Domains 381/932 | Cache 74% | API requests 99 | ETA ~3m
+
+[5/6] Aggregating
+✓ metrics calculated
+
+[6/6] Writing outputs
+✓ candidates.csv
+✓ report.md
+✓ status.json
+
+Done in 21m 42s
+```
+
+## Waiting/retry states
+
+```text
+[74/184] randomize list
+⚠ Surfer data missing
+retry 1/3 in 4s
+```
+
+## CAPTCHA
+
+```text
+⚠ Google CAPTCHA detected.
+
+Run paused safely.
+Solve the CAPTCHA in Research Chrome.
+
+Press Enter to continue
+or Ctrl+C to save checkpoint and exit.
+```
+
+No CAPTCHA bypass.
+
+## Geo warning
+
+If target market and detected Google location disagree:
+
+```text
+⚠ SERP GEO WARNING
+Target: United States
+Google detected location: Chelyabinsk Oblast, Russia
+
+Keyword Surfer metrics use the configured US market,
+but organic rankings may still be influenced by physical location.
+```
+
+This warning should be visible once prominently and recorded per run.
+
+## Logging modes
+
+```text
+default
+--verbose
+--debug
+```
+
+Default:
+- stage progress;
+- current keyword/domain;
+- retries;
+- warnings;
+- final summary.
+
+Verbose:
+- cache hits/misses;
+- API status;
+- timing;
+- parser decisions.
+
+Debug:
+- selectors;
+- parser internals;
+- diagnostic artifact paths;
+- browser/frame details.
+
+## Agent-friendly mode
+
+```bash
+npm run research -- ... --json-status
+```
+
+The final stdout line must be valid machine-readable JSON, for example:
+
+```json
+{
+  "status": "completed_with_errors",
+  "runId": "2026-08-14_231500",
+  "keywords": 184,
+  "processedKeywords": 184,
+  "errors": 3,
+  "candidateReport": "runs/2026-08-14_231500/candidates.csv",
+  "report": "runs/2026-08-14_231500/report.md"
+}
+```
+
+## Exit codes
+
+Define stable exit behavior, e.g.:
+
+```text
+0 success
+1 completed with fatal internal error
+2 invalid input/config
+3 environment/preflight failure
+4 manual intervention required and run not resumed
+```
+
+Exact numeric mapping may change, but it must be documented and stable.
+
+---
+
+## Scoring
+
+## Purpose
+
+Scoring is a sorting heuristic, not a final business verdict.
+
+The system must expose the raw features used so the score never becomes an opaque magic number.
+
+## Observable inputs
+
+Possible v1 inputs:
+
+```text
+Surfer volume
+Surfer CPC
+Microsoft bucket/value
+organic result count
+min DR
+median DR
+top3 median DR
+top5 median DR
+weak-domain count
+very-weak-domain count
+strong-domain count
+very-strong-domain count
+SERP domain diversity
+exact-match/niche-domain count
+missing-DR ratio
+```
+
+## Important methodological constraints
+
+### Do not sum synonym volumes automatically
+
+Queries such as:
+
+```text
+compare lists
+list comparison
+compare two lists
+```
+
+may heavily overlap.
+
+Each keyword should retain its own demand signal. Cluster-level volume is not a simple sum.
+
+### Microsoft is not truth
+
+Microsoft data is useful for broad discovery. A low Microsoft bucket must not automatically kill a keyword.
+
+### DR is not truth
+
+DR alone does not determine accessibility.
+
+A low-DR spam domain with zero traffic is not proof of opportunity.
+
+The runner only has DR in v1, so scoring should use it as a coarse filter, while final validation still requires manual Ahrefs traffic/backlink inspection.
+
+## Suggested score structure
+
+Keep weights in config.
+
+Example:
+
+```text
+Demand                  0–30
+SERP accessibility      0–40
+Commercial proxy        0–10
+SERP diversity          0–10
+Data completeness       0–10
+```
+
+Do not include subjective implementation complexity unless it is supplied manually.
+
+## Candidate tiers
+
+The report may expose neutral tiers:
+
+```text
+A — inspect first
+B — inspect if time
+C — weak/uncertain
+D — probably saturated/low-demand
+```
+
+Avoid calling these automatically `BUILD` or `KILL`.
+
+## Explainability
+
+For each candidate provide a short machine-generated rationale using raw facts, e.g.:
+
+```text
+Score 84
+- volume 27,100
+- 4/9 ranking domains have DR < 30
+- min DR 3
+- top3 median DR 19
+- CPC $2.40
+```
+
+Do not generate speculative prose.
+
+---
+
+## Output contracts
+
+## keywords.csv
+
+Suggested columns:
+
+```text
+keyword
+sources
+microsoft_volume
+microsoft_bucket
+surfer_volume
+surfer_cpc
+surfer_market
+google_hl
+google_gl
+detected_google_location
+geo_warning
+organic_result_count
+status
+error_code
+```
+
+## related-keywords.csv
+
+```text
+parent_keyword
+keyword
+overlap
+volume
+selected_for_expansion
+```
+
+## serp.csv
+
+```text
+keyword
+position
+title
+url
+hostname
+registrable_domain
+result_type
+dr
+```
+
+## domains.csv
+
+```text
+domain
+dr
+ahrefs_status
+first_seen_in_run
+cache_hit
+fetched_at
+```
+
+## candidates.csv
+
+```text
+keyword
+surfer_volume
+surfer_cpc
+microsoft_volume
+organic_result_count
+unique_domains
+min_dr
+median_dr
+top3_median_dr
+top5_median_dr
+very_weak_domains
+weak_domains
+strong_domains
+very_strong_domains
+exact_match_domains
+niche_domains
+score
+tier
+status
+```
+
+Exact-match and niche-domain classification must be documented if implemented.
+
+## report.md
+
+Human-readable summary:
+
+```text
+Run overview
+Input summary
+Environment/geo warnings
+Top candidates
+Failed/incomplete keywords
+Cache statistics
+Ahrefs statistics
+Parser health
+Next manual checks
+```
+
+Do not hide errors.
+
+## status.json
+
+Machine-readable final status.
+
+## Historical behavior
+
+Never overwrite a completed run.
+
+A convenience pointer such as:
+
+```text
+runs/latest
+```
+
+may be maintained, but historical directories must remain immutable unless the user explicitly deletes them.
