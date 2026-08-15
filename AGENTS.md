@@ -126,6 +126,8 @@ Do not declare v1 complete until the end-to-end acceptance in `IMPLEMENTATION_PL
 
 ## Implementation plan and acceptance
 
+The phase descriptions below define capability requirements. `IMPLEMENTATION_PLAN.md` defines the current PR delivery order and takes precedence when sequencing differs.
+
 The browser integration spike is already successful.
 
 Do not repeat the original spike as a separate project.
