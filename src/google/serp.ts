@@ -125,6 +125,6 @@ export function buildSearchUrl(
 }
 
 export const PREFLIGHT_SURFER_MARKER_SCRIPT = String.raw`(() => {
-  const html = document.head ? document.head.innerHTML : '';
-  return html.indexOf('.keyword-surfer') !== -1;
+  const root = document.documentElement || document;
+  return root.innerHTML.indexOf('.keyword-surfer') !== -1;
 })()`;
