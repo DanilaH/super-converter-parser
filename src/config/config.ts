@@ -1,4 +1,5 @@
 import { ResearchError } from '../shared/errors.js';
+import { SURFER_MARKERS } from '../surfer/selectors.js';
 
 export type ResearchConfig = {
   research: {
@@ -26,7 +27,7 @@ const DEFAULTS: ResearchConfig = {
     cdpUrl: 'http://127.0.0.1:9222',
     navigationTimeoutMs: 60_000,
     surferWaitTimeoutMs: 30_000,
-    surferWidgetSelector: '.surfer-main-keyword-widget',
+    surferWidgetSelector: SURFER_MARKERS.mainWidget,
   },
 };
 

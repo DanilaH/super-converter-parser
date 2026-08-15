@@ -51,13 +51,13 @@ export type KeywordRecord = {
 };
 
 export function createRunId(date: Date = new Date()): string {
-  return date
+  const base = date
     .toISOString()
     .replace(/\.\d{3}Z$/, 'Z')
     .replace(/[-:T]/g, '')
-    .replace(/Z$/, '')
-    .slice(0, 13)
-    .replace(/^(\d{8})(\d{6})$/, '$1_$2');
+    .replace(/Z$/, '');
+  const suffix = Math.random().toString(36).slice(2, 5);
+  return `${base}_${suffix}`;
 }
 
 export function keywordSlug(keyword: string): string {

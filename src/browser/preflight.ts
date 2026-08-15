@@ -1,12 +1,19 @@
 import type { BrowserContext, Page } from 'playwright-core';
 import type { ResearchConfig } from '../config/config.js';
 import { ResearchError } from '../shared/errors.js';
-import { buildSearchUrl, PREFLIGHT_SURFER_MARKER_SCRIPT } from '../google/serp.js';
+import { buildSearchUrl } from '../google/serp.js';
 import { SURFER_MARKERS } from '../surfer/selectors.js';
 import { pauseForManualCaptcha, waitForManualCaptcha } from './captcha.js';
 
 const PREFLIGHT_QUERY = 'preflight probe';
 const PREFLIGHT_SETTLE_MS = 2_000;
+
+// Keyword Surfer injects its marker CSS as a direct child of <html>, so the
+// check scans the whole document. Selector comes from SURFER_MARKERS.
+const PREFLIGHT_SURFER_MARKER_SCRIPT = String.raw`(() => {
+  const root = document.documentElement || document;
+  return root.innerHTML.indexOf(${JSON.stringify(SURFER_MARKERS.cssMarker)}) !== -1;
+})()`;
 
 export async function preflightGoogleAndSurfer(
   context: BrowserContext,
@@ -36,7 +43,7 @@ export async function preflightGoogleAndSurfer(
     if (!surferInjected) {
       throw new ResearchError(
         'SURFER_NOT_DETECTED',
-        `Keyword Surfer extension is not injecting into Google pages (expected "${SURFER_MARKERS.cssMarker}" marker in <head>).`,
+        `Keyword Surfer extension is not injecting into Google pages (expected "${SURFER_MARKERS.cssMarker}" marker in the page document).`,
       );
     }
   } catch (error) {

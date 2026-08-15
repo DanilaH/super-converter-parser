@@ -108,12 +108,12 @@ test('geoMatchesMarket handles generic market labels', () => {
   assert.equal(geoMatchesMarket('Germany', 'Moscow, Russia'), false);
 });
 
-test('isNoResultsPageText detects genuine zero-result pages', () => {
+test('isNoResultsPageText detects genuine zero-result pages only', () => {
   assert.equal(
     isNoResultsPageText('Your search - xyz - did not match any documents. Suggestions: ...'),
     true,
   );
-  assert.equal(isNoResultsPageText('No results found for "xyz".'), true);
   assert.equal(isNoResultsPageText('compare lists - Google Search\n49,500 results in 0.4s'), false);
+  assert.equal(isNoResultsPageText('No results found for "xyz".'), false);
   assert.equal(isNoResultsPageText(''), false);
 });

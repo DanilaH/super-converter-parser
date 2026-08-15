@@ -122,9 +122,10 @@ runs/<run-id>/
 ├── domains.csv
 ├── candidates.csv
 ├── report.md
-├── status.json
-└── debug/
+└── status.json
 ```
+
+Parser-failure evidence is written outside the run directory, under `debug/<run-id>/` (the currently implemented contract; see the Implemented CLI section).
 
 Persistent reusable cache lives outside run directories:
 

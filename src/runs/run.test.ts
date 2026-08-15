@@ -36,8 +36,13 @@ test('keywordSlug produces stable artifact names', () => {
   assert.equal(keywordSlug(''), 'keyword');
 });
 
-test('createRunId is compact and sortable', () => {
+test('createRunId is compact, sortable and unique across close runs', () => {
   const id = createRunId(new Date('2026-08-15T17:30:00.000Z'));
-  assert.equal(id, '2026081517300');
-  assert.match(id, /^\d{13}$/);
+  assert.match(id, /^\d{14}_[a-z0-9]{3}$/);
+
+  const sameSecond = createRunId(new Date('2026-08-15T17:30:00.000Z'));
+  assert.notEqual(id, sameSecond);
+
+  const oneSecondApart = createRunId(new Date('2026-08-15T17:30:01.000Z'));
+  assert.ok(id < oneSecondApart);
 });

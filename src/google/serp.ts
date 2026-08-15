@@ -1,10 +1,11 @@
 import type { ResearchConfig } from '../config/config.js';
 
-export const GOOGLE_PARSER_VERSION = '1.1.0';
+export const GOOGLE_PARSER_VERSION = '1.2.0';
 
 export const GOOGLE_SELECTORS = {
   organicResults: '#search a[href^="http"]:has(h3)',
   detectedLocation: 'span.AhYzQb',
+  noResultsContainers: ['#search', '#topstuff', '#rso'],
 };
 
 export type RawOrganicLink = {
@@ -24,8 +25,9 @@ export type SerpResult = {
 // Browser-side code must stay a string: tsx/esbuild injects its __name helper
 // into transpiled callbacks, which Playwright serializes without the helper
 // and Chrome then fails on with "ReferenceError: __name is not defined".
+// Selectors are interpolated from GOOGLE_SELECTORS at build time.
 export const ORGANIC_EXTRACT_SCRIPT = String.raw`(() => {
-  const links = Array.from(document.querySelectorAll('#search a[href^="http"]:has(h3)'));
+  const links = Array.from(document.querySelectorAll(${JSON.stringify(GOOGLE_SELECTORS.organicResults)}));
   const seen = new Set();
   const out = [];
   for (const a of links) {
@@ -40,18 +42,24 @@ export const ORGANIC_EXTRACT_SCRIPT = String.raw`(() => {
   return out;
 })()`;
 
+// A genuine zero-result Google page shows "did not match any documents" inside
+// Google's own containers. Extension-widget text must not be able to trigger
+// this, so we never scan document.body as a whole.
 export function isNoResultsPageText(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    lower.indexOf('did not match any documents') !== -1 ||
-    lower.indexOf('no results found') !== -1
-  );
+  return text.toLowerCase().indexOf('did not match any documents') !== -1;
 }
 
-// Self-contained browser copy of isNoResultsPageText; keep both in sync.
+// Self-contained browser copy of isNoResultsPageText scoped to Google's
+// containers; keep both in sync.
 export const GOOGLE_NO_RESULTS_SCRIPT = String.raw`(() => {
-  const text = ((document.body && document.body.innerText) || '').toLowerCase();
-  return text.indexOf('did not match any documents') !== -1 || text.indexOf('no results found') !== -1;
+  const selectors = ${JSON.stringify(GOOGLE_SELECTORS.noResultsContainers)};
+  for (let i = 0; i < selectors.length; i += 1) {
+    const node = document.querySelector(selectors[i]);
+    if (!node) continue;
+    const text = (node.innerText || '').toLowerCase();
+    if (text.indexOf('did not match any documents') !== -1) return true;
+  }
+  return false;
 })()`;
 
 export function buildOrganicResults(
@@ -91,7 +99,7 @@ export function buildOrganicResults(
 }
 
 export const LOCATION_EXTRACT_SCRIPT = String.raw`(() => {
-  const el = document.querySelector('span.AhYzQb');
+  const el = document.querySelector(${JSON.stringify(GOOGLE_SELECTORS.detectedLocation)});
   if (el) {
     const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
     if (text) return text;
@@ -137,8 +145,3 @@ export function buildSearchUrl(
     googleHl,
   )}&gl=${encodeURIComponent(googleGl)}`;
 }
-
-export const PREFLIGHT_SURFER_MARKER_SCRIPT = String.raw`(() => {
-  const root = document.documentElement || document;
-  return root.innerHTML.indexOf('.keyword-surfer') !== -1;
-})()`;
