@@ -82,7 +82,7 @@ export async function runKeywordBatch(
     }
 
     manifest.progress.completedKeywords = records.filter(
-      (item) => item.status === 'completed' || item.status === 'partial',
+      (item) => item.status === 'completed' || item.status === 'partial' || item.status === 'failed',
     ).length;
     manifest.progress.errors = records.filter(
       (item) => item.status === 'failed' || item.status === 'partial',

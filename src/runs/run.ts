@@ -1,4 +1,5 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
@@ -50,13 +51,11 @@ export type KeywordRecord = {
   error: { code: ResearchErrorCode; message: string } | null;
 };
 
+// Millisecond precision plus a randomUUID fragment make collisions
+// effectively impossible even for two runs started in the same instant.
 export function createRunId(date: Date = new Date()): string {
-  const base = date
-    .toISOString()
-    .replace(/\.\d{3}Z$/, 'Z')
-    .replace(/[-:T]/g, '')
-    .replace(/Z$/, '');
-  const suffix = Math.random().toString(36).slice(2, 5);
+  const base = date.toISOString().replace(/[-:T.]/g, '').replace(/Z$/, '');
+  const suffix = randomUUID().replace(/-/g, '').slice(0, 8);
   return `${base}_${suffix}`;
 }
 

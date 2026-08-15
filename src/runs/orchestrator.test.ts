@@ -162,7 +162,7 @@ test('orchestration: failed and partial are counted as errors and progress never
   const finalManifest = await readManifest(directory);
   assert.equal(finalManifest.progress.totalKeywords, 2);
   assert.equal(finalManifest.progress.errors, 2);
-  assert.equal(finalManifest.progress.completedKeywords, 1);
+  assert.equal(finalManifest.progress.completedKeywords, 2);
   assert.equal(finalManifest.state, 'completed_with_errors');
   assert.ok(finalManifest.progress.completedKeywords <= finalManifest.progress.totalKeywords);
   assert.ok(finalManifest.progress.errors <= finalManifest.progress.totalKeywords);
