@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
@@ -7,7 +7,31 @@ import type { SeedKeyword } from '../input/seeds/normalize.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 
-export type RunState = 'created' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
+export type RunState =
+  | 'created'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'failed'
+  | 'cancelled';
+
+export type KeywordStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
+
+export const TERMINAL_KEYWORD_STATUSES: ReadonlySet<KeywordStatus> = new Set([
+  'completed',
+  'partial',
+  'failed',
+]);
+
+export const TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set([
+  'completed',
+  'completed_with_errors',
+  'failed',
+  'cancelled',
+]);
+
+export const RESUMABLE_RUN_STATES: ReadonlySet<RunState> = new Set(['created', 'running', 'paused']);
 
 export type RunManifest = {
   runId: string;
@@ -23,10 +47,14 @@ export type RunManifest = {
     surfer: string;
     google: string;
   };
+  pauseReason: string | null;
   progress: {
     totalKeywords: number;
     completedKeywords: number;
+    partialKeywords: number;
+    failedKeywords: number;
     errors: number;
+    lookups: number;
   };
 };
 
@@ -48,7 +76,7 @@ export type KeywordRecord = {
     detectedLocation: string | null;
     geoWarning: boolean;
   } | null;
-  status: 'pending' | 'running' | 'completed' | 'partial' | 'failed';
+  status: KeywordStatus;
   error: { code: ResearchErrorCode; message: string } | null;
 };
 
@@ -130,17 +158,21 @@ function isAlreadyExistsError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST';
 }
 
-export async function writeJsonFile(
+export async function writeJsonAtomic(
   path: string,
   data: unknown,
   description: string,
 ): Promise<void> {
+  const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
-    await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    const serialized = `${JSON.stringify(data, null, 2)}\n`;
+    await writeFile(tempPath, serialized, 'utf8');
+    await rename(tempPath, path);
   } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Failed to write ${description} to "${path}".`,
+      `Failed to atomically write ${description} to "${path}".`,
       { cause: error },
     );
   }

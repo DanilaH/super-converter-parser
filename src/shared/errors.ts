@@ -6,7 +6,11 @@ export type ResearchErrorCode =
   | 'GOOGLE_UNAVAILABLE'
   | 'CAPTCHA_REQUIRED'
   | 'INPUT_SCHEMA_ERROR'
-  | 'OUTPUT_WRITE_ERROR';
+  | 'OUTPUT_WRITE_ERROR'
+  | 'DB_ERROR'
+  | 'RESUME_NOT_FOUND'
+  | 'RESUME_TERMINAL_RUN'
+  | 'RESUME_PARSER_MISMATCH';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

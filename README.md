@@ -67,7 +67,7 @@ npm run research -- --microsoft input/microsoft.csv --json-status
 
 Exact flag names may be adjusted during implementation if consistency improves, but the capabilities are required.
 
-## Implemented CLI (foundation)
+## Implemented CLI
 
 Currently implemented commands:
 
@@ -77,6 +77,9 @@ npm run probe -- "compare lists"
 
 # Batch research from a seeds CSV (keyword column required)
 npm run research -- --seeds input/seeds.csv
+
+# Continue a paused or interrupted run (original input file not required)
+npm run research -- --resume <run-id>
 ```
 
 Configuration via environment variables (all optional):
@@ -91,21 +94,54 @@ Configuration via environment variables (all optional):
 | `GOOGLE_GL` | `us` | Google geolocation parameter |
 | `TOP_N` | `10` | Max organic results per keyword (1–30) |
 | `SURFER_WIDGET_SELECTOR` | `.surfer-main-keyword-widget` | Surfer widget selector (parser debug hook) |
+| `RETRY_MAX_ATTEMPTS` | `3` | Max collection attempts per keyword |
+| `RETRY_BASE_DELAY_MS` | `1000` | Initial retry backoff |
+| `RETRY_MAX_DELAY_MS` | `15000` | Retry backoff cap |
+| `BREAKER_SURFER_WINDOW` | `15` | Surfer failure window |
+| `BREAKER_SURFER_FAILURES` | `12` | Surfer failures in window that pause the run |
+| `BREAKER_GOOGLE_CONSECUTIVE` | `10` | Consecutive Google SERP parse failures that pause the run |
 
-Each run writes immutable output under `runs/<run-id>/`, with parser-failure evidence under `debug/<run-id>/`:
+### Durable run state, checkpoints, and resume
+
+State is committed to SQLite (`runs/<run-id>/run.sqlite`, versioned schema, WAL) after
+every keyword, so an interrupted run is never lost. On resume:
+
+- `--seeds` and `--resume` are mutually exclusive; `--resume` reads the persisted queue
+  and does not need the original input file;
+- `completed`/`partial`/`failed` keywords are never collected again;
+- keywords stuck in `running` (crash mid-collection) are reset to `pending`;
+- runs in terminal states (`completed*`, `failed`, `cancelled`) refuse resume and are
+  never modified;
+- a parser version mismatch between the stored run and the current code refuses resume
+  (parser versions must not be mixed inside one run);
+- the persisted config snapshot supplies the semantic research settings; operational
+  settings (connection, timeouts, retries, breaker) come from the current environment.
+
+Transient errors (`GOOGLE_UNAVAILABLE`) are retried with exponential backoff and
+half-jitter up to `RETRY_MAX_ATTEMPTS`. Parser failures are never retried. A circuit
+breaker pauses the run with a clear reason when Keyword Surfer parsing fails
+(`BREAKER_SURFER_FAILURES` of the last `BREAKER_SURFER_WINDOW`) or when Google SERP
+parsing fails `BREAKER_GOOGLE_CONSECUTIVE` times in a row; the run prints its resume
+command and exits.
+
+The first Ctrl+C (SIGINT) stops scheduling, lets the active keyword settle, checkpoints,
+and marks the run `paused`; a second Ctrl+C force-quits. Exit codes: `0` success
+(including `completed_with_errors`), `1` internal error, `2` invalid input/config,
+`3` preflight failure, `130` gracefully paused.
+
+Each run writes snapshots under `runs/<run-id>/`, with parser-failure evidence under `debug/<run-id>/`:
 
 ```text
 runs/<run-id>/
-├── manifest.json   # config snapshot, parser versions, timestamps, progress
-├── keywords.json   # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers)
-└── serp.json       # organic SERP rows with provenance
+├── run.sqlite     # durable source of truth (WAL, versioned schema)
+├── manifest.json  # config snapshot, parser versions, timestamps, progress, pause reason
+├── keywords.json  # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers)
+└── serp.json      # organic SERP rows with provenance
 
 debug/<run-id>/     # page.html / page.png / parser-context.json on parser failures
 ```
 
 A parser failure never silently marks a keyword as completed: an unexpected empty organic SERP (page is not a genuine zero-result page) is reported as `GOOGLE_SERP_PARSE_ERROR` with debug evidence.
-
-Exit codes: `0` success (including `completed_with_errors`), `1` internal error, `2` invalid input/config, `3` preflight failure.
 
 A preflight runs before any keyword work and verifies: Research Chrome reachable, Google reachable, Keyword Surfer present, run directory writable. A CAPTCHA pauses the run and asks for manual intervention instead of retrying blindly.
 

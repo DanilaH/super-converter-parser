@@ -7,17 +7,19 @@
   "scripts": {
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
-    "test": "tsx --test src/config/config.test.ts src/input/seeds/normalize.test.ts src/surfer/parser.test.ts src/google/serp.test.ts src/runs/run.test.ts src/runs/orchestrator.test.ts",
+    "test": "tsx --test src/config/config.test.ts src/input/seeds/normalize.test.ts src/surfer/parser.test.ts src/google/serp.test.ts src/runs/run.test.ts src/db/store.test.ts src/runs/policies.test.ts src/runs/engine.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "csv-parse": "^7.0.2",
     "playwright-core": "^1.62.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.2.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
