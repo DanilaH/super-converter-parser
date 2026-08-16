@@ -2,17 +2,20 @@
   "name": "super-converter-parser",
   "version": "0.0.1",
   "private": true,
-  "description": "Exploratory Playwright spike for Keyword Surfer data in Google SERP",
+  "description": "Utility Research Runner - local SEO research CLI",
   "type": "module",
   "scripts": {
     "probe": "tsx src/spike.ts",
+    "research": "tsx src/cli/research.ts",
+    "test": "tsx --test src/config/config.test.ts src/input/seeds/normalize.test.ts src/surfer/parser.test.ts src/google/serp.test.ts src/runs/run.test.ts src/runs/orchestrator.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "playwright-core": "^1.54.2"
+    "csv-parse": "^7.0.2",
+    "playwright-core": "^1.62.1"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",

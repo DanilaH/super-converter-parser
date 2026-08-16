@@ -1,6 +1,7 @@
 node_modules/
-debug/
-output/
+/debug/
+/runs/
+/output/
 .research-profile/
 playwright-report/
 test-results/
