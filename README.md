@@ -87,7 +87,8 @@ Configuration via environment variables (all optional):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CDP_URL` | `http://127.0.0.1:9222` | Research Chrome DevTools endpoint |
-| `SURFER_WAIT_MS` | `30000` | Wait for the Keyword Surfer widget to mount |
+| `SURFER_WAIT_MS` | `60000` | Wait for the Keyword Surfer widget to mount |
+| `SURFER_PREFLIGHT_TIMEOUT_MS` | `60000` | Max wait for Keyword Surfer injection during preflight |
 | `NAVIGATION_TIMEOUT_MS` | `60000` | Per-navigation timeout |
 | `RESEARCH_MARKET` | `US` | Expected Surfer market label |
 | `GOOGLE_HL` | `en` | Google interface language |
@@ -98,7 +99,7 @@ Configuration via environment variables (all optional):
 | `RETRY_BASE_DELAY_MS` | `1000` | Initial retry backoff |
 | `RETRY_MAX_DELAY_MS` | `15000` | Retry backoff cap |
 | `BREAKER_SURFER_WINDOW` | `15` | Surfer failure window |
-| `BREAKER_SURFER_FAILURES` | `12` | Surfer failures in window that pause the run |
+| `BREAKER_SURFER_FAILURES` | `12` | Surfer failures in window that pause the run (at most `BREAKER_SURFER_WINDOW`) |
 | `BREAKER_GOOGLE_CONSECUTIVE` | `10` | Consecutive Google SERP parse failures that pause the run |
 
 ### Durable run state, checkpoints, and resume

@@ -266,6 +266,36 @@ test('resume does not re-collect terminal keywords', async () => {
   store.close();
 });
 
+test('SIGINT during the active keyword checkpoints it, then pauses before the next', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-sigint-mid-'));
+  let pause = false;
+  const outcome = await executeRun(
+    baseOptions(store, runId, runDirectory, {
+      collect: async (keyword) => {
+        pause = true;
+        return okResult(keyword);
+      },
+      hooks: makeHooks({ pauseRequested: () => pause }),
+    }),
+  );
+  assert.equal(outcome.kind, 'paused');
+  assert.equal(store.loadRun(runId)?.state, 'paused');
+  assert.deepEqual(
+    store.loadKeywords(runId).map((k) => k.status),
+    ['completed', 'pending', 'pending', 'pending'],
+  );
+  assert.equal(store.loadRun(runId)?.lookups, 1);
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as { state: string; progress: { completedKeywords: number; totalKeywords: number } };
+  assert.equal(manifest.state, 'paused');
+  assert.equal(manifest.progress.completedKeywords, 1);
+  assert.equal(manifest.progress.totalKeywords, 4);
+  store.close();
+});
+
 test('each keyword is committed before the next one starts', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();

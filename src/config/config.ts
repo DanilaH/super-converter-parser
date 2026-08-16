@@ -12,6 +12,7 @@ export type ResearchConfig = {
     cdpUrl: string;
     navigationTimeoutMs: number;
     surferWaitTimeoutMs: number;
+    surferPreflightTimeoutMs: number;
     surferWidgetSelector: string;
   };
   retry: {
@@ -37,6 +38,7 @@ const DEFAULTS: ResearchConfig = {
     cdpUrl: 'http://127.0.0.1:9222',
     navigationTimeoutMs: 60_000,
     surferWaitTimeoutMs: 60_000,
+    surferPreflightTimeoutMs: 60_000,
     surferWidgetSelector: SURFER_MARKERS.mainWidget,
   },
   retry: {
@@ -103,6 +105,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     ),
   };
 
+  if (circuitBreaker.surferFailureThreshold > circuitBreaker.surferWindow) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Invalid BREAKER_SURFER_FAILURES: expected at most BREAKER_SURFER_WINDOW (${circuitBreaker.surferWindow}), got ${circuitBreaker.surferFailureThreshold}.`,
+    );
+  }
+
   const config: ResearchConfig = {
     research: {
       market: (env.RESEARCH_MARKET ?? DEFAULTS.research.market).trim(),
@@ -121,6 +130,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
         'SURFER_WAIT_MS',
         env.SURFER_WAIT_MS,
         DEFAULTS.browser.surferWaitTimeoutMs,
+      ),
+      surferPreflightTimeoutMs: readPositiveNumber(
+        'SURFER_PREFLIGHT_TIMEOUT_MS',
+        env.SURFER_PREFLIGHT_TIMEOUT_MS,
+        DEFAULTS.browser.surferPreflightTimeoutMs,
       ),
       surferWidgetSelector: (
         env.SURFER_WIDGET_SELECTOR ?? DEFAULTS.browser.surferWidgetSelector

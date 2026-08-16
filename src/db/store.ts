@@ -292,6 +292,48 @@ export class RunStore {
     write();
   }
 
+  // Persists a collected keyword and its SERP rows in a single SQLite
+  // transaction so a checkpoint can never split keyword data from its rows.
+  commitKeyword(runId: string, keyword: StoredKeyword, serpRows: SerpResult[]): void {
+    const updateKeyword = this.db.prepare(
+      `UPDATE keywords
+       SET status = ?, surfer = ?, google = ?, error = ?, collected_at = ?
+       WHERE run_id = ? AND idx = ?`,
+    );
+    const deleteRows = this.db.prepare(
+      'DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?',
+    );
+    const insertRow = this.db.prepare(
+      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, result_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const write = this.db.transaction(() => {
+      updateKeyword.run(
+        keyword.status,
+        keyword.surfer === null ? null : JSON.stringify(keyword.surfer),
+        keyword.google === null ? null : JSON.stringify(keyword.google),
+        keyword.error === null ? null : JSON.stringify(keyword.error),
+        keyword.collectedAt,
+        runId,
+        keyword.idx,
+      );
+      deleteRows.run(runId, keyword.idx);
+      for (const row of serpRows) {
+        insertRow.run(
+          runId,
+          keyword.idx,
+          row.position,
+          row.keyword,
+          row.title,
+          row.url,
+          row.hostname,
+          row.resultType,
+        );
+      }
+    });
+    write();
+  }
+
   setRunState(
     runId: string,
     state: RunState,

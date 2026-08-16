@@ -7,7 +7,6 @@ import { pauseForManualCaptcha, waitForManualCaptcha } from './captcha.js';
 
 const PREFLIGHT_QUERY = 'preflight probe';
 const PREFLIGHT_POLL_INTERVAL_MS = 2_000;
-const PREFLIGHT_MARKER_TIMEOUT_MS = 60_000;
 
 // Keyword Surfer injects its marker CSS as a direct child of <html>, so the
 // check scans the whole document. Selector comes from SURFER_MARKERS.
@@ -40,7 +39,7 @@ export async function preflightGoogleAndSurfer(
 
     await page.waitForTimeout(PREFLIGHT_POLL_INTERVAL_MS);
 
-    const markerDeadline = Date.now() + PREFLIGHT_MARKER_TIMEOUT_MS;
+    const markerDeadline = Date.now() + config.browser.surferPreflightTimeoutMs;
     let surferInjected = false;
     while (Date.now() <= markerDeadline) {
       surferInjected = (await page.evaluate(PREFLIGHT_SURFER_MARKER_SCRIPT)) as boolean;

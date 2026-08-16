@@ -101,6 +101,38 @@ test('replaceSerpRows overwrites previous rows for the keyword', () => {
   store.close();
 });
 
+test('commitKeyword persists keyword and SERP rows in one write and replaces rows', () => {
+  const { store, runId } = makeStore();
+  const before = store.loadKeyword(runId, 0) as NonNullable<
+    ReturnType<RunStore['loadKeyword']>
+  >;
+  const rows = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      keyword: 'compare lists',
+      position: index + 1,
+      title: `t${index + 1}`,
+      url: `https://example.com/${index + 1}`,
+      hostname: 'example.com',
+      resultType: 'organic' as const,
+    }));
+
+  store.commitKeyword(runId, { ...before, status: 'completed', collectedAt: '2026-01-01T00:00:00.000Z' }, rows(3));
+  const after = store.loadKeyword(runId, 0) as NonNullable<
+    ReturnType<RunStore['loadKeyword']>
+  >;
+  assert.equal(after.status, 'completed');
+  assert.equal(after.collectedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(store.loadSerpRows(runId).length, 3);
+
+  store.commitKeyword(runId, { ...after, status: 'partial' }, rows(1));
+  const afterReplace = store.loadKeyword(runId, 0) as NonNullable<
+    ReturnType<RunStore['loadKeyword']>
+  >;
+  assert.equal(afterReplace.status, 'partial');
+  assert.equal(store.loadSerpRows(runId).length, 1);
+  store.close();
+});
+
 test('markStaleRunningAsPending resets only running keywords', () => {
   const { store, runId } = makeStore();
   const running = store.loadKeyword(runId, 1) as NonNullable<

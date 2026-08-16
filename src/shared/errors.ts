@@ -10,7 +10,8 @@ export type ResearchErrorCode =
   | 'DB_ERROR'
   | 'RESUME_NOT_FOUND'
   | 'RESUME_TERMINAL_RUN'
-  | 'RESUME_PARSER_MISMATCH';
+  | 'RESUME_PARSER_MISMATCH'
+  | 'RESUME_CONFIG_MISMATCH';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

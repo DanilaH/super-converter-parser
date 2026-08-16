@@ -14,11 +14,10 @@ import {
 import {
   RESUMABLE_RUN_STATES,
   TERMINAL_RUN_STATES,
-  writeJsonAtomic,
   type KeywordRecord,
-  type RunManifest,
   type RunState,
 } from './run.js';
+import { countProgress, writeSnapshots } from './snapshots.js';
 import {
   CircuitBreaker,
   isTransientErrorCode,
@@ -31,6 +30,13 @@ export type CollectKeywordFn = (
   keyword: KeywordRecord,
   debugRoot: string,
 ) => Promise<CollectionResult>;
+
+export type SnapshotsPublisher = (
+  store: RunStore,
+  runId: string,
+  runDirectory: string,
+  state: RunState,
+) => Promise<void>;
 
 export type EngineHooks = {
   sleep: (ms: number) => Promise<void>;
@@ -55,6 +61,7 @@ export type ExecuteRunOptions = {
   debugRoot: string;
   collect: CollectKeywordFn;
   hooks: EngineHooks;
+  publishSnapshots?: SnapshotsPublisher;
 };
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
@@ -92,6 +99,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   const { store, runId, mode, keywords, config, input, runDirectory, debugRoot, collect, hooks } =
     options;
   const { logger } = hooks;
+  const publish = options.publishSnapshots ?? writeSnapshots;
 
   let run: StoredRun;
   if (mode === 'fresh') {
@@ -195,8 +203,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       error: record.error,
       collectedAt,
     };
-    store.updateKeyword(runId, committed);
-    store.replaceSerpRows(runId, idx, result?.serpRows ?? []);
+    store.commitKeyword(runId, committed, result?.serpRows ?? []);
     breaker.record(record.status, record.error?.code ?? null);
     samples.push(hooks.now() - startAt);
 
@@ -216,7 +223,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
     }
 
-    await writeSnapshots(store, runId, runDirectory, 'running');
+    await publish(store, runId, runDirectory, 'running');
     logger(
       progressLine(
         total,
@@ -231,12 +238,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     const progress = countProgress(store.loadKeywords(runId));
     const state: 'completed' | 'completed_with_errors' =
       progress.errors > 0 ? 'completed_with_errors' : 'completed';
+    // Publish the final snapshots while the run is still resumable: a failed
+    // JSON write must never leave a terminal run without published artifacts.
+    // If publication fails, the run stays "running" and resume republishes.
+    await publish(store, runId, runDirectory, state);
     store.setRunState(runId, state);
-    await writeSnapshots(store, runId, runDirectory, state);
     outcome = { kind: 'finished', state };
   } else {
     store.setRunState(runId, 'paused', { pauseReason: outcome.reason });
-    await writeSnapshots(store, runId, runDirectory, 'paused');
+    await publish(store, runId, runDirectory, 'paused');
     logger('');
     logger(`Run paused: ${outcome.reason}`);
     logger('Resume with:');
@@ -244,18 +254,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   }
 
   return outcome;
-}
-
-function countProgress(keywords: StoredKeyword[]): {
-  completed: number;
-  partial: number;
-  failed: number;
-  errors: number;
-} {
-  const completed = keywords.filter((item) => item.status === 'completed').length;
-  const partial = keywords.filter((item) => item.status === 'partial').length;
-  const failed = keywords.filter((item) => item.status === 'failed').length;
-  return { completed, partial, failed, errors: partial + failed };
 }
 
 function progressLine(
@@ -283,45 +281,6 @@ function formatDuration(ms: number): string {
 function formatVolume(volume: number | null): string {
   if (volume === null) return 'n/a';
   return volume.toLocaleString('en-US');
-}
-
-export async function writeSnapshots(
-  store: RunStore,
-  runId: string,
-  runDirectory: string,
-  state: RunState,
-): Promise<void> {
-  const run = store.loadRun(runId) as StoredRun;
-  const keywords = store.loadKeywords(runId);
-  const serpRows = store.loadSerpRows(runId);
-  const progress = countProgress(keywords);
-
-  const manifest: RunManifest = {
-    runId,
-    createdAt: run.createdAt,
-    updatedAt: new Date().toISOString(),
-    state,
-    input: run.input,
-    configSnapshot: run.configSnapshot,
-    parserVersions: run.parserVersions,
-    pauseReason: run.pauseReason,
-    progress: {
-      totalKeywords: keywords.length,
-      completedKeywords: progress.completed,
-      partialKeywords: progress.partial,
-      failedKeywords: progress.failed,
-      errors: progress.errors,
-      lookups: run.lookups,
-    },
-  };
-
-  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
-  await writeJsonAtomic(
-    `${runDirectory}/keywords.json`,
-    keywords.map(storedKeywordToRecord),
-    'keywords output',
-  );
-  await writeJsonAtomic(`${runDirectory}/serp.json`, serpRows, 'SERP output');
 }
 
 export type { RetrySettings, BreakerSettings };
