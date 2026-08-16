@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildKeywordRecords, createRunId, keywordSlug } from './run.js';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug } from './run.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
+import { ResearchError } from '../shared/errors.js';
 
 test('buildKeywordRecords persists seed provenance in output records', () => {
   const keywords = buildSeedKeywords([
@@ -36,13 +40,39 @@ test('keywordSlug produces stable artifact names', () => {
   assert.equal(keywordSlug(''), 'keyword');
 });
 
-test('createRunId is compact, sortable and unique across close runs', () => {
-  const id = createRunId(new Date('2026-08-15T17:30:00.000Z'));
-  assert.match(id, /^\d{17}_[0-9a-f]{8}$/);
+test('createRunId includes milliseconds and the complete injected UUID', () => {
+  const uuid = '123e4567-e89b-12d3-a456-426614174000';
+  const uuidFactory = () => uuid;
+  const id = createRunId(new Date('2026-08-15T17:30:00.000Z'), uuidFactory);
 
-  const sameMoment = createRunId(new Date('2026-08-15T17:30:00.000Z'));
-  assert.notEqual(id, sameMoment);
+  assert.equal(id, `20260815173000000_${uuid}`);
+  assert.match(
+    id,
+    /^\d{17}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
 
-  const oneMillisecondLater = createRunId(new Date('2026-08-15T17:30:00.001Z'));
+  const oneMillisecondLater = createRunId(
+    new Date('2026-08-15T17:30:00.001Z'),
+    uuidFactory,
+  );
   assert.ok(id < oneMillisecondLater);
+});
+
+test('createRunDirectory refuses to reuse an existing run without modifying it', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'urr-run-dir-'));
+  const runDirectory = join(parent, 'existing-run');
+  const markerPath = join(runDirectory, 'manifest.json');
+  const marker = '{"state":"completed"}\n';
+
+  await mkdir(runDirectory);
+  await writeFile(markerPath, marker, 'utf8');
+
+  await assert.rejects(
+    createRunDirectory(runDirectory),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'OUTPUT_WRITE_ERROR' &&
+      error.message.includes('refusing to overwrite'),
+  );
+  assert.equal(await readFile(markerPath, 'utf8'), marker);
 });

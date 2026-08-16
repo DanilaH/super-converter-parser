@@ -1,5 +1,6 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
@@ -51,12 +52,16 @@ export type KeywordRecord = {
   error: { code: ResearchErrorCode; message: string } | null;
 };
 
-// Millisecond precision plus a randomUUID fragment make collisions
-// effectively impossible even for two runs started in the same instant.
-export function createRunId(date: Date = new Date()): string {
+export type UuidFactory = () => string;
+
+// Keep the complete UUID so uniqueness does not depend on a shortened entropy
+// fragment. The factory parameter makes the format deterministic in tests.
+export function createRunId(
+  date: Date = new Date(),
+  uuidFactory: UuidFactory = randomUUID,
+): string {
   const base = date.toISOString().replace(/[-:T.]/g, '').replace(/Z$/, '');
-  const suffix = randomUUID().replace(/-/g, '').slice(0, 8);
-  return `${base}_${suffix}`;
+  return `${base}_${uuidFactory()}`;
 }
 
 export function keywordSlug(keyword: string): string {
@@ -94,6 +99,35 @@ export async function ensureWritableDirectory(directory: string): Promise<void> 
       { cause: error },
     );
   }
+}
+
+export async function createRunDirectory(directory: string): Promise<void> {
+  try {
+    await mkdir(dirname(directory), { recursive: true });
+    await mkdir(directory);
+
+    const probePath = `${directory}/.write-probe`;
+    await writeFile(probePath, 'ok', 'utf8');
+    await rm(probePath, { force: true });
+  } catch (error) {
+    if (isAlreadyExistsError(error)) {
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Run directory "${directory}" already exists; refusing to overwrite an existing run.`,
+        { cause: error },
+      );
+    }
+
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to create writable run directory "${directory}".`,
+      { cause: error },
+    );
+  }
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EEXIST';
 }
 
 export async function writeJsonFile(

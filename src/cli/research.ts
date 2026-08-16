@@ -7,7 +7,7 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { collectKeyword } from '../browser/collect.js';
 import { runKeywordBatch } from '../runs/orchestrator.js';
-import { createRunId, ensureWritableDirectory } from '../runs/run.js';
+import { createRunDirectory, createRunId, ensureWritableDirectory } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 
 const EXIT_OK = 0;
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
   console.log('');
 
   console.log('[preflight]');
-  await ensureWritableDirectory(runDirectory);
+  await createRunDirectory(runDirectory);
   console.log(`  ✓ runs/${runId} writable`);
   await ensureWritableDirectory(debugRoot);
   console.log(`  ✓ debug/${runId} writable`);
