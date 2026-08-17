@@ -604,7 +604,10 @@ test('progress lines include ETA once three samples exist', async () => {
   assert.equal(outcome.kind, 'finished');
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
   assert.equal(progressLines.length, 4);
-  assert.match(progressLines[0] as string, /Keywords 1\/4 \| completed 1 \| partial 0 \| failed 0/);
+  assert.match(
+    progressLines[0] as string,
+    /Keywords 1\/4 \| Cache 0% \(0 hit \/ 0 miss\) \| Browser lookups 1 \| Errors 0/,
+  );
   assert.ok(!(progressLines[0] as string).includes('ETA'));
   assert.ok(!(progressLines[1] as string).includes('ETA'));
   assert.match(progressLines[2] as string, /Keywords 3\/4 .*ETA ~/);

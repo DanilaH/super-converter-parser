@@ -6,12 +6,15 @@ import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
 import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
-import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
+import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { collectKeyword, type CollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
+import { CacheStore } from '../cache/store.js';
+import { keywordCacheIdentity } from '../cache/keys.js';
+import { resolveKeywordAccess } from '../cache/resolve.js';
 
 export const EXIT_OK = 0;
 export const EXIT_INTERNAL = 1;
@@ -23,6 +26,8 @@ export const EXIT_PAUSED = 130;
 type CliOptions = {
   seedsPath: string | null;
   resumeRunId: string | null;
+  forceRefresh: boolean;
+  refreshKeywords: string[];
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -45,12 +50,35 @@ export const DEFAULT_CLI_DEPS: CliDeps = {
 };
 
 function parseArgs(argv: string[]): CliOptions {
-  const seedsIndex = argv.indexOf('--seeds');
-  const resumeIndex = argv.indexOf('--resume');
-  return {
-    seedsPath: seedsIndex >= 0 ? argv[seedsIndex + 1] ?? null : null,
-    resumeRunId: resumeIndex >= 0 ? argv[resumeIndex + 1] ?? null : null,
+  const options: CliOptions = {
+    seedsPath: null,
+    resumeRunId: null,
+    forceRefresh: false,
+    refreshKeywords: [],
   };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] as string;
+    if (arg === '--seeds') {
+      options.seedsPath = argv[index + 1] ?? null;
+      index += 1;
+    } else if (arg === '--resume') {
+      options.resumeRunId = argv[index + 1] ?? null;
+      index += 1;
+    } else if (arg === '--force-refresh') {
+      options.forceRefresh = true;
+    } else if (arg === '--refresh-keyword') {
+      const value = argv[index + 1];
+      if (value === undefined) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          '--refresh-keyword requires a keyword argument, e.g. --refresh-keyword "json diff".',
+        );
+      }
+      options.refreshKeywords.push(value);
+      index += 1;
+    }
+  }
+  return options;
 }
 
 function printUsage(): void {
@@ -58,11 +86,15 @@ function printUsage(): void {
   console.log('');
   console.log('Usage:');
   console.log('  npm run research -- --seeds <path>');
+  console.log('  npm run research -- --seeds <path> --force-refresh');
+  console.log('  npm run research -- --seeds <path> --refresh-keyword "json diff"');
   console.log('  npm run research -- --resume <run-id>');
   console.log('');
   console.log('Options:');
-  console.log('  --seeds <path>    Path to a CSV file with a required "keyword" column.');
-  console.log('  --resume <run-id> Continue a paused or interrupted run (--seeds is not required).');
+  console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
+  console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
+  console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
+  console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
   console.log('Environment:');
   console.log('  CDP_URL                      Research Chrome debugging endpoint (default http://127.0.0.1:9222)');
@@ -80,6 +112,14 @@ function printUsage(): void {
   console.log('  BREAKER_SURFER_WINDOW        Surfer failure window (default 15)');
   console.log('  BREAKER_SURFER_FAILURES      Surfer failures that pause the run (default 12, at most BREAKER_SURFER_WINDOW)');
   console.log('  BREAKER_GOOGLE_CONSECUTIVE   Consecutive Google SERP parse failures that pause (default 10)');
+  console.log('  CACHE_DB_PATH                Persistent cache database (default data/cache/cache.sqlite)');
+  console.log('  CACHE_TTL_COMPLETED_MS       Cache TTL for completed keywords in ms (default 7d)');
+  console.log('  CACHE_TTL_PARTIAL_MS         Cache TTL for partial keywords in ms (default 6h)');
+  console.log('  CACHE_TTL_FAILED_MS          Cache TTL for failed keywords in ms (default 1h)');
+  console.log('  CACHE_TTL_RELATED_MS         Cache TTL for related keywords in ms (default 7d)');
+  console.log('  CACHE_TTL_DOMAIN_OK_MS       Cache TTL for successful DR lookups in ms (default 30d)');
+  console.log('  CACHE_TTL_DOMAIN_NOT_FOUND_MS Cache TTL for not-found DR lookups in ms (default 30d)');
+  console.log('  CACHE_TTL_DOMAIN_ERROR_MS    Cache TTL for failed DR lookups in ms (default 1h)');
   console.log('');
   console.log('Exit codes: 0 ok (incl. completed_with_errors), 1 internal, 2 invalid input/config,');
   console.log('3 preflight/environment, 130 gracefully paused (resume with --resume).');
@@ -103,8 +143,23 @@ export function effectiveConfigForResume(
   return { ...current, research: persisted.research };
 }
 
-function exitCodeForError(error: ResearchError): number {
-  switch (error.code) {
+// Refresh flags name real run keywords (normalized exactly like the queue
+// itself); an unknown keyword is an input error, not a silent no-op.
+function validateRefreshKeywords(rawKeywords: string[], knownKeywords: string[]): string[] {
+  const known = new Set(knownKeywords);
+  return rawKeywords.map((raw) => {
+    const normalized = normalizeKeyword(raw);
+    if (!known.has(normalized)) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `--refresh-keyword "${raw}" (normalized to "${normalized}") is not among the run keywords.`,
+      );
+    }
+    return normalized;
+  });
+}
+
+function exitCodeForError(error: ResearchError): number {  switch (error.code) {
     case 'INPUT_SCHEMA_ERROR':
     case 'RESUME_NOT_FOUND':
     case 'RESUME_TERMINAL_RUN':
@@ -116,6 +171,7 @@ function exitCodeForError(error: ResearchError): number {
     case 'GOOGLE_UNAVAILABLE':
     case 'CAPTCHA_REQUIRED':
     case 'OUTPUT_WRITE_ERROR':
+    case 'CACHE_DB_ERROR':
       return EXIT_PREFLIGHT;
     default:
       return EXIT_INTERNAL;
@@ -127,7 +183,16 @@ export async function runCli(
   deps: CliDeps = DEFAULT_CLI_DEPS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  const options = parseArgs(argv);
+  let options: CliOptions;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    if (error instanceof ResearchError) {
+      console.error(`Run failed:\n  ${error.code}: ${error.message}`);
+      return exitCodeForError(error);
+    }
+    throw error;
+  }
 
   if (options.seedsPath && options.resumeRunId) {
     console.error('--seeds and --resume are mutually exclusive.');
@@ -157,6 +222,7 @@ export async function runCli(
 
   let browser: Browser | null = null;
   let store: RunStore | null = null;
+  let cacheStore: CacheStore | null = null;
   try {
     const config = loadConfig(env);
 
@@ -166,6 +232,7 @@ export async function runCli(
     let mode: 'fresh' | 'resume';
     let keywords: SeedKeyword[] = [];
     let input: { kind: 'seeds'; path: string };
+    let refreshKeywords: string[] = [];
     let runConfig = config;
 
     if (options.resumeRunId) {
@@ -211,11 +278,49 @@ export async function runCli(
       console.log(`  ✓ runs/${runId}/run.sqlite initialized (schema v${store.version})`);
     }
 
-    // A resume with nothing left to collect must not touch the browser: the
-    // run finalizes from the store alone.
+    if (mode === 'fresh') {
+      const rows = await loadSeedRows(options.seedsPath as string);
+      keywords = buildSeedKeywords(rows);
+      console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
+      refreshKeywords = validateRefreshKeywords(
+        options.refreshKeywords,
+        keywords.map((item) => item.normalizedKeyword),
+      );
+    } else {
+      refreshKeywords = validateRefreshKeywords(
+        options.refreshKeywords,
+        store.loadKeywords(runId).map((item) => item.normalizedKeyword),
+      );
+    }
+
+    cacheStore = CacheStore.open(runConfig.cache.path);
+    console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
+    console.log('');
+
+    // A fresh run's keywords exist only in the seeds (executeRun inserts them
+    // into the store); a resume's pending keywords live in the run store.
+    const pendingNormalized =
+      mode === 'fresh'
+        ? keywords.map((item) => item.normalizedKeyword)
+        : store
+            .loadKeywords(runId)
+            .filter((item) => !isTerminalKeywordStatus(item.status))
+            .map((item) => item.normalizedKeyword);
+    const identity = keywordCacheIdentity(runConfig);
+    const refreshSet = new Set(refreshKeywords);
+    // A keyword needs the browser unless it will be served as a fresh cache
+    // hit; an all-hit run must not require Chrome to be running at all.
     const needsBrowser =
-      mode === 'fresh' ||
-      store.loadKeywords(runId).filter((k) => !isTerminalKeywordStatus(k.status)).length > 0;
+      pendingNormalized.length > 0 &&
+      pendingNormalized.some(
+        (normalizedKeyword) =>
+          resolveKeywordAccess(
+            normalizedKeyword,
+            { identity, forceRefresh: options.forceRefresh, refreshKeywords: refreshSet },
+            cacheStore,
+            Date.now(),
+          ).kind !== 'hit',
+      );
 
     let context: BrowserContext | null = null;
     if (needsBrowser) {
@@ -225,15 +330,10 @@ export async function runCli(
       await deps.preflight(context, runConfig);
       console.log('  ✓ Google reachable');
       console.log(`  ✓ Keyword Surfer injection detected; configured market: ${runConfig.research.market}`);
-    } else {
+    } else if (pendingNormalized.length === 0) {
       console.log('  ✓ no keywords remain; finalizing without browser work');
-    }
-
-    if (mode === 'fresh') {
-      const rows = await loadSeedRows(options.seedsPath as string);
-      keywords = buildSeedKeywords(rows);
-      console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
-      console.log('');
+    } else {
+      console.log('  ✓ all pending keywords served from cache; no browser work needed');
     }
 
     const hooks: EngineHooks = {
@@ -258,6 +358,11 @@ export async function runCli(
       collect: (record, debugRootForKeyword) =>
         deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
       hooks,
+      cache: {
+        store: cacheStore,
+        forceRefresh: options.forceRefresh,
+        refreshKeywords: refreshSet,
+      },
     });
 
     if (outcome.kind === 'paused') {
@@ -282,6 +387,7 @@ export async function runCli(
     return EXIT_INTERNAL;
   } finally {
     store?.close();
+    cacheStore?.close();
     // close() on a connectOverCDP browser only closes the CDP connection (the
     // operator's Chrome process survives); leaving it open would keep the
     // event loop alive and hang the CLI after it has returned its exit code.

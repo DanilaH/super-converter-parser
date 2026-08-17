@@ -10,7 +10,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -56,6 +56,11 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, keyword_idx, position)
   );
   `,
+  `
+  ALTER TABLE runs ADD COLUMN force_refresh INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE runs ADD COLUMN refresh_keywords TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE keywords ADD COLUMN cache_status TEXT;
+  `,
 ];
 
 export type StoredRun = {
@@ -68,7 +73,11 @@ export type StoredRun = {
   parserVersions: { surfer: string; google: string };
   lookups: number;
   pauseReason: string | null;
+  forceRefresh: boolean;
+  refreshKeywords: string[];
 };
+
+export type CacheStatus = 'hit' | 'miss' | 'expired' | 'refreshed';
 
 export type StoredKeyword = {
   idx: number;
@@ -81,6 +90,7 @@ export type StoredKeyword = {
   google: KeywordRecord['google'];
   error: { code: ResearchErrorCode; message: string } | null;
   collectedAt: string | null;
+  cacheStatus: CacheStatus | null;
 };
 
 type RunRow = {
@@ -94,6 +104,8 @@ type RunRow = {
   parser_versions: string;
   lookups: number;
   pause_reason: string | null;
+  force_refresh: number;
+  refresh_keywords: string;
 };
 
 type KeywordRow = {
@@ -108,6 +120,7 @@ type KeywordRow = {
   google: string | null;
   error: string | null;
   collected_at: string | null;
+  cache_status: string | null;
 };
 
 export class RunStore {
@@ -165,10 +178,12 @@ export class RunStore {
     parserVersions: { surfer: string; google: string };
     input: { kind: 'seeds'; path: string };
     keywords: SeedKeyword[];
+    forceRefresh?: boolean;
+    refreshKeywords?: string[];
   }): void {
     const insertRun = this.db.prepare(
-      `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
-       VALUES (?, 'created', ?, ?, ?, ?, ?, ?, 0, NULL)`,
+      `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason, force_refresh, refresh_keywords)
+       VALUES (?, 'created', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
     );
     const insertKeyword = this.db.prepare(
       `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
@@ -185,6 +200,8 @@ export class RunStore {
         input.input.path,
         JSON.stringify(input.configSnapshot),
         JSON.stringify(input.parserVersions),
+        input.forceRefresh === true ? 1 : 0,
+        JSON.stringify(input.refreshKeywords ?? []),
       );
       input.keywords.forEach((seed, index) => {
         insertKeyword.run(
@@ -215,6 +232,8 @@ export class RunStore {
       parserVersions: JSON.parse(row.parser_versions) as { surfer: string; google: string },
       lookups: row.lookups,
       pauseReason: row.pause_reason,
+      forceRefresh: row.force_refresh === 1,
+      refreshKeywords: JSON.parse(row.refresh_keywords) as string[],
     };
   }
 
@@ -294,10 +313,15 @@ export class RunStore {
 
   // Persists a collected keyword and its SERP rows in a single SQLite
   // transaction so a checkpoint can never split keyword data from its rows.
-  commitKeyword(runId: string, keyword: StoredKeyword, serpRows: SerpResult[]): void {
+  commitKeyword(
+    runId: string,
+    keyword: StoredKeyword,
+    serpRows: SerpResult[],
+    cacheStatus: StoredKeyword['cacheStatus'] = null,
+  ): void {
     const updateKeyword = this.db.prepare(
       `UPDATE keywords
-       SET status = ?, surfer = ?, google = ?, error = ?, collected_at = ?
+       SET status = ?, surfer = ?, google = ?, error = ?, collected_at = ?, cache_status = ?
        WHERE run_id = ? AND idx = ?`,
     );
     const deleteRows = this.db.prepare(
@@ -314,6 +338,7 @@ export class RunStore {
         keyword.google === null ? null : JSON.stringify(keyword.google),
         keyword.error === null ? null : JSON.stringify(keyword.error),
         keyword.collectedAt,
+        cacheStatus,
         runId,
         keyword.idx,
       );
@@ -362,6 +387,14 @@ export class RunStore {
       .run(runId);
     return result.changes;
   }
+
+  // Persists the run's cache-refresh semantics so a paused forced-refresh run
+  // resumes with the same semantics even without the original flags.
+  setRunCacheRefresh(runId: string, forceRefresh: boolean, refreshKeywords: string[]): void {
+    this.db
+      .prepare('UPDATE runs SET force_refresh = ?, refresh_keywords = ? WHERE run_id = ?')
+      .run(forceRefresh ? 1 : 0, JSON.stringify(refreshKeywords), runId);
+  }
 }
 
 function mapKeywordRow(row: KeywordRow): StoredKeyword {
@@ -376,6 +409,7 @@ function mapKeywordRow(row: KeywordRow): StoredKeyword {
     google: row.google === null ? null : JSON.parse(row.google),
     error: row.error === null ? null : JSON.parse(row.error),
     collectedAt: row.collected_at,
+    cacheStatus: row.cache_status === null ? null : (row.cache_status as StoredKeyword['cacheStatus']),
   };
 }
 

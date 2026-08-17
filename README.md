@@ -78,6 +78,12 @@ npm run probe -- "compare lists"
 # Batch research from a seeds CSV (keyword column required)
 npm run research -- --seeds input/seeds.csv
 
+# Ignore the persistent cache for every keyword of this run
+npm run research -- --seeds input/seeds.csv --force-refresh
+
+# Re-collect specific keywords even if cached (repeatable)
+npm run research -- --seeds input/seeds.csv --refresh-keyword "json diff"
+
 # Continue a paused or interrupted run (original input file not required)
 npm run research -- --resume <run-id>
 ```
@@ -101,6 +107,14 @@ Configuration via environment variables (all optional):
 | `BREAKER_SURFER_WINDOW` | `15` | Surfer failure window |
 | `BREAKER_SURFER_FAILURES` | `12` | Surfer failures in window that pause the run (at most `BREAKER_SURFER_WINDOW`) |
 | `BREAKER_GOOGLE_CONSECUTIVE` | `10` | Consecutive Google SERP parse failures that pause the run |
+| `CACHE_DB_PATH` | `data/cache/cache.sqlite` | Persistent cache database (created on first run) |
+| `CACHE_TTL_COMPLETED_MS` | `7d` | Cache TTL for completed keywords |
+| `CACHE_TTL_PARTIAL_MS` | `6h` | Cache TTL for partial keywords |
+| `CACHE_TTL_FAILED_MS` | `1h` | Cache TTL for failed keywords |
+| `CACHE_TTL_RELATED_MS` | `7d` | Cache TTL for related keywords |
+| `CACHE_TTL_DOMAIN_OK_MS` | `30d` | Cache TTL for successful domain DR lookups |
+| `CACHE_TTL_DOMAIN_NOT_FOUND_MS` | `30d` | Cache TTL for not-found domain DR lookups |
+| `CACHE_TTL_DOMAIN_ERROR_MS` | `1h` | Cache TTL for failed domain DR lookups |
 
 ### Durable run state, checkpoints, and resume
 
@@ -143,6 +157,36 @@ debug/<run-id>/     # page.html / page.png / parser-context.json on parser failu
 ```
 
 A parser failure never silently marks a keyword as completed: an unexpected empty organic SERP (page is not a genuine zero-result page) is reported as `GOOGLE_SERP_PARSE_ERROR` with debug evidence.
+
+### Persistent cross-run cache
+
+Successful browser/API work is cached in `data/cache/cache.sqlite` (SQLite, versioned
+schema, WAL) so an identical follow-up run avoids fresh browser work. The per-run
+`run.sqlite` remains the source of truth: a cache hit is copied into the run
+checkpoint, so a run never depends on the cache row after it is committed.
+
+- a keyword entry is keyed by normalized keyword + market + `hl`/`gl` + `topN` +
+  Surfer parser version + Google parser version; any change makes it a miss;
+- entries expire per status (`CACHE_TTL_*`): completed 7d, partial 6h, failed 1h.
+  An expired entry is a miss but stays stored until the opportunistic cleanup on
+  cache open;
+- a valid hit is committed to the run without browser lookups, does not touch the
+  circuit-breaker window, and keeps the original collection timestamp;
+- fresh results are written to the cache only after the run checkpoint succeeded;
+  a cache write failure is reported but never corrupts the run;
+- `--force-refresh` bypasses the cache for every keyword of the run;
+  `--refresh-keyword "<query>"` (repeatable, normalized like the queue, must be one
+  of the run keywords) bypasses it for that keyword only;
+- refresh semantics are persisted in the run, so a paused forced-refresh run
+  resumes forced even without the flags;
+- `--refresh-keyword` is also supported with `--resume`;
+- when every pending keyword resolves to a cache hit, the run completes without
+  connecting to Chrome at all;
+- per-keyword `cache_status` (`hit`/`miss`/`expired`/`refreshed`) is stored in the
+  run DB and rolled up into `manifest.json` progress plus the live progress line,
+  e.g. `Keywords 4/4 | Cache 100% (4 hit / 0 miss) | Browser lookups 0 | Errors 0`;
+- if the cache DB cannot be opened, the CLI fails loudly with `CACHE_DB_ERROR`
+  (exit 3) instead of silently running uncached.
 
 A preflight runs before any keyword work and verifies: Research Chrome reachable, Google reachable, Keyword Surfer present, run directory writable. A CAPTCHA pauses the run and asks for manual intervention instead of retrying blindly.
 

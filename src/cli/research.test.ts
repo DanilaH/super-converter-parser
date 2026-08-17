@@ -185,3 +185,153 @@ test('runCli rejects --seeds and --resume together', async () => {
   );
   assert.equal(code, EXIT_INVALID_INPUT);
 });
+
+test('--refresh-keyword without a value exits 2', async () => {
+  const code = await runCli(['--seeds', 'a.csv', '--refresh-keyword'], DEFAULT_CLI_DEPS, {} as NodeJS.ProcessEnv);
+  assert.equal(code, EXIT_INVALID_INPUT);
+});
+
+test('--refresh-keyword for an unknown keyword exits 2', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-refresh-unknown-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--refresh-keyword', 'not a keyword'],
+      DEFAULT_CLI_DEPS,
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_INVALID_INPUT);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test('a warm cache lets a second run finish without any browser work', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-cache-warm-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  let connectCalls = 0;
+  const deps: CliDeps = {
+    connect: async () => {
+      connectCalls += 1;
+      return {
+        contexts: () => [{}],
+        close: async () => undefined,
+      } as unknown as Browser;
+    },
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => okResult(record),
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const first = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(first, EXIT_OK);
+    assert.equal(connectCalls, 1);
+
+    const runsDir = join(directory, 'runs');
+    const firstRunId = (await readdir(runsDir))[0] as string;
+    const firstStore = RunStore.open(join(runsDir, firstRunId, 'run.sqlite'));
+    assert.equal(firstStore.loadRun(firstRunId)?.lookups, 1);
+    firstStore.close();
+
+    const second = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(second, EXIT_OK);
+    assert.equal(connectCalls, 1, 'an all-hit run must not connect to Chrome');
+
+    const runIds = (await readdir(runsDir)).sort();
+    const secondRunId = runIds[runIds.length - 1] as string;
+    const secondStore = RunStore.open(join(runsDir, secondRunId, 'run.sqlite'));
+    assert.equal(secondStore.loadRun(secondRunId)?.lookups, 0);
+    assert.equal(secondStore.loadKeyword(secondRunId, 0)?.cacheStatus, 'hit');
+    secondStore.close();
+
+    const manifest = JSON.parse(
+      await readFile(join(runsDir, secondRunId, 'manifest.json'), 'utf8'),
+    ) as { progress: { cache: { hits: number }; lookups: number } };
+    assert.equal(manifest.progress.cache.hits, 1);
+    assert.equal(manifest.progress.lookups, 0);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test('--force-refresh re-collects keywords despite a warm cache', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-force-refresh-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  let connectCalls = 0;
+  const deps: CliDeps = {
+    connect: async () => {
+      connectCalls += 1;
+      return {
+        contexts: () => [{}],
+        close: async () => undefined,
+      } as unknown as Browser;
+    },
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => okResult(record),
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const first = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(first, EXIT_OK);
+
+    const second = await runCli(['--seeds', 'input/seeds.csv', '--force-refresh'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(second, EXIT_OK);
+    assert.equal(connectCalls, 2);
+
+    const runsDir = join(directory, 'runs');
+    const runIds = (await readdir(runsDir)).sort();
+    const secondRunId = runIds[runIds.length - 1] as string;
+    const store = RunStore.open(join(runsDir, secondRunId, 'run.sqlite'));
+    assert.equal(store.loadRun(secondRunId)?.lookups, 1);
+    assert.equal(store.loadKeyword(secondRunId, 0)?.cacheStatus, 'refreshed');
+    assert.equal(store.loadRun(secondRunId)?.forceRefresh, true);
+    store.close();
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test('--refresh-keyword for an unknown keyword on resume exits 2', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-refresh-resume-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\nk2', 'utf8');
+
+  const deps: CliDeps = {
+    connect: async () =>
+      ({
+        contexts: () => [{}],
+        close: async () => undefined,
+      }) as unknown as Browser,
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => okResult(record),
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const first = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(first, EXIT_OK);
+    const runId = (await readdir(join(directory, 'runs')))[0] as string;
+
+    const code = await runCli(
+      ['--resume', runId, '--refresh-keyword', 'missing keyword'],
+      deps,
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_INVALID_INPUT);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});

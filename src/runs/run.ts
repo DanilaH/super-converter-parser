@@ -55,6 +55,12 @@ export type RunManifest = {
     failedKeywords: number;
     errors: number;
     lookups: number;
+    cache: {
+      hits: number;
+      misses: number;
+      expired: number;
+      refreshed: number;
+    };
   };
 };
 

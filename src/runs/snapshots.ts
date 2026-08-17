@@ -13,6 +13,22 @@ export function countProgress(keywords: StoredKeyword[]): {
   return { completed, partial, failed, errors: partial + failed };
 }
 
+export function countCacheStats(keywords: StoredKeyword[]): {
+  hits: number;
+  misses: number;
+  expired: number;
+  refreshed: number;
+} {
+  const stats = { hits: 0, misses: 0, expired: 0, refreshed: 0 };
+  for (const item of keywords) {
+    if (item.cacheStatus === 'hit') stats.hits += 1;
+    else if (item.cacheStatus === 'miss') stats.misses += 1;
+    else if (item.cacheStatus === 'expired') stats.expired += 1;
+    else if (item.cacheStatus === 'refreshed') stats.refreshed += 1;
+  }
+  return stats;
+}
+
 export async function writeSnapshots(
   store: RunStore,
   runId: string,
@@ -40,6 +56,7 @@ export async function writeSnapshots(
       failedKeywords: progress.failed,
       errors: progress.errors,
       lookups: run.lookups,
+      cache: countCacheStats(keywords),
     },
   };
 

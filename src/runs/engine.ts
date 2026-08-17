@@ -8,6 +8,7 @@ import {
   RunStore,
   isTerminalKeywordStatus,
   storedKeywordToRecord,
+  type CacheStatus,
   type StoredKeyword,
   type StoredRun,
 } from '../db/store.js';
@@ -17,7 +18,7 @@ import {
   type KeywordRecord,
   type RunState,
 } from './run.js';
-import { countProgress, writeSnapshots } from './snapshots.js';
+import { countProgress, countCacheStats, writeSnapshots } from './snapshots.js';
 import {
   CircuitBreaker,
   isTransientErrorCode,
@@ -25,6 +26,9 @@ import {
   type BreakerSettings,
   type RetrySettings,
 } from './policies.js';
+import { keywordCacheIdentity, buildKeywordCacheKey } from '../cache/keys.js';
+import { resolveKeywordAccess } from '../cache/resolve.js';
+import { ttlMsForKeywordStatus, type KeywordCache } from '../cache/store.js';
 
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
@@ -46,6 +50,12 @@ export type EngineHooks = {
   pauseRequested: () => boolean;
 };
 
+export type EngineCacheOptions = {
+  store: KeywordCache;
+  forceRefresh: boolean;
+  refreshKeywords: ReadonlySet<string>;
+};
+
 export type RunOutcome =
   | { kind: 'finished'; state: 'completed' | 'completed_with_errors' }
   | { kind: 'paused'; reason: string };
@@ -62,6 +72,7 @@ export type ExecuteRunOptions = {
   collect: CollectKeywordFn;
   hooks: EngineHooks;
   publishSnapshots?: SnapshotsPublisher;
+  cache?: EngineCacheOptions;
 };
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
@@ -101,6 +112,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   const { logger } = hooks;
   const publish = options.publishSnapshots ?? writeSnapshots;
 
+  const identity = keywordCacheIdentity(config);
+  let forceRefresh = options.cache?.forceRefresh ?? false;
+  let refreshKeywords = new Set(options.cache?.refreshKeywords ?? []);
+
   let run: StoredRun;
   if (mode === 'fresh') {
     store.createRun({
@@ -109,6 +124,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       parserVersions: { surfer: SURFER_PARSER_VERSION, google: GOOGLE_PARSER_VERSION },
       input,
       keywords,
+      forceRefresh,
+      refreshKeywords: [...refreshKeywords],
     });
     store.setRunState(runId, 'running');
     run = store.loadRun(runId) as StoredRun;
@@ -118,6 +135,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     if (stale > 0) {
       logger(`  ✓ ${stale} stale running keyword(s) reset to pending`);
     }
+    // Refresh semantics persist across pause/resume: merging with the stored
+    // values keeps a forced-refresh run forced even if resumed without flags.
+    const mergedForce = run.forceRefresh || forceRefresh;
+    const mergedRefresh = new Set([...run.refreshKeywords, ...refreshKeywords]);
+    if (mergedForce !== run.forceRefresh || mergedRefresh.size !== run.refreshKeywords.length) {
+      store.setRunCacheRefresh(runId, mergedForce, [...mergedRefresh]);
+    }
+    forceRefresh = mergedForce;
+    refreshKeywords = mergedRefresh;
     store.setRunState(runId, 'running');
   }
 
@@ -160,67 +186,122 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     processedCount += 1;
     logger(`[${processedCount}/${total}] ${stored.normalizedKeyword}`);
 
-    const startAt = hooks.now();
-    let result: CollectionResult | null = null;
+    const resolution = resolveKeywordAccess(
+      stored.normalizedKeyword,
+      { identity, forceRefresh, refreshKeywords },
+      options.cache?.store ?? null,
+      hooks.now(),
+    );
 
-    for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
-      store.incrementLookups(runId);
-      result = await collect(storedKeywordToRecord(stored), debugRoot);
-      const record = result.record;
-      if (!isTerminalKeywordStatus(record.status)) {
-        throw new ResearchError(
-          'DB_ERROR',
-          `Collector returned non-terminal status "${record.status}" for "${record.normalizedKeyword}".`,
-        );
-      }
-
-      const retryable =
-        record.status === 'failed' &&
-        record.error !== null &&
-        isTransientErrorCode(record.error.code) &&
-        attempt < config.retry.maxAttempts;
-
-      if (retryable) {
-        const delay = retryDelayMs(attempt, config.retry, hooks.random);
-        logger(`  ⚠ ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
-        await hooks.sleep(delay);
-        continue;
-      }
-      break;
-    }
-
-    const record = result?.record as KeywordRecord;
-    const collectedAt = new Date(hooks.now()).toISOString();
-    const committed: StoredKeyword = {
-      idx,
-      id: record.id,
-      keyword: record.keyword,
-      normalizedKeyword: record.normalizedKeyword,
-      sources: record.sources,
-      status: record.status,
-      surfer: record.surfer,
-      google: record.google,
-      error: record.error,
-      collectedAt,
-    };
-    store.commitKeyword(runId, committed, result?.serpRows ?? []);
-    breaker.record(record.status, record.error?.code ?? null);
-    samples.push(hooks.now() - startAt);
-
-    if (record.surfer) {
-      const volume = formatVolume(record.surfer.volume);
-      const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
-      logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${result?.serpRows.length}`);
+    if (resolution.kind === 'hit') {
+      const entry = resolution.entry;
+      const committed: StoredKeyword = {
+        ...stored,
+        status: entry.record.status,
+        surfer: entry.record.surfer,
+        google: entry.record.google,
+        error: entry.record.error,
+        collectedAt: entry.collectedAt,
+      };
+      store.commitKeyword(runId, committed, entry.serpRows, 'hit');
+      logger(
+        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
+      );
     } else {
-      logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
-    }
+      const startAt = hooks.now();
+      let result: CollectionResult | null = null;
 
-    if (record.google?.geoWarning) {
-      logger(`  ⚠ SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
-    }
+      for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
+        store.incrementLookups(runId);
+        result = await collect(storedKeywordToRecord(stored), debugRoot);
+        const record = result.record;
+        if (!isTerminalKeywordStatus(record.status)) {
+          throw new ResearchError(
+            'DB_ERROR',
+            `Collector returned non-terminal status "${record.status}" for "${record.normalizedKeyword}".`,
+          );
+        }
 
-    if (result?.debugArtifactPath) {
-      logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
+        const retryable =
+          record.status === 'failed' &&
+          record.error !== null &&
+          isTransientErrorCode(record.error.code) &&
+          attempt < config.retry.maxAttempts;
+
+        if (retryable) {
+          const delay = retryDelayMs(attempt, config.retry, hooks.random);
+          logger(`  ⚠ ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
+          await hooks.sleep(delay);
+          continue;
+        }
+        break;
+      }
+
+      const record = result?.record as KeywordRecord;
+      const collectedAt = new Date(hooks.now()).toISOString();
+      const committed: StoredKeyword = {
+        idx,
+        id: record.id,
+        keyword: record.keyword,
+        normalizedKeyword: record.normalizedKeyword,
+        sources: record.sources,
+        status: record.status,
+        surfer: record.surfer,
+        google: record.google,
+        error: record.error,
+        collectedAt,
+        cacheStatus: null,
+      };
+      const cacheStatus: CacheStatus | null = options.cache
+        ? resolution.kind === 'forced'
+          ? 'refreshed'
+          : resolution.kind === 'expired'
+            ? 'expired'
+            : 'miss'
+        : null;
+      store.commitKeyword(runId, committed, result?.serpRows ?? [], cacheStatus);
+      breaker.record(record.status, record.error?.code ?? null);
+      samples.push(hooks.now() - startAt);
+
+      if (record.surfer) {
+        const volume = formatVolume(record.surfer.volume);
+        const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
+        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${result?.serpRows.length}`);
+      } else {
+        logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
+      }
+
+      if (record.google?.geoWarning) {
+        logger(`  ⚠ SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
+      }
+
+      if (result?.debugArtifactPath) {
+        logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
+      }
+
+      if (options.cache) {
+        // Fresh results are cached only after the run checkpoint succeeded;
+        // a cache write failure is visible but never corrupts the run.
+        try {
+          options.cache.store.putKeyword({
+            cacheKey: buildKeywordCacheKey(record.normalizedKeyword, identity),
+            keyword: record.keyword,
+            normalizedKeyword: record.normalizedKeyword,
+            identity,
+            record,
+            serpRows: result?.serpRows ?? [],
+            collectedAt,
+            storedAt: collectedAt,
+            expiresAt: new Date(
+              Date.parse(collectedAt) + ttlMsForKeywordStatus(record.status, config.cache.ttl),
+            ).toISOString(),
+          });
+        } catch (error) {
+          logger(
+            `  ⚠ cache write failed for "${record.normalizedKeyword}": ${error instanceof ResearchError ? error.code : 'CACHE_DB_ERROR'} (run continues)`,
+          );
+        }
+      }
     }
 
     await publish(store, runId, runDirectory, 'running');
@@ -228,6 +309,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       progressLine(
         total,
         countProgress(store.loadKeywords(runId)),
+        countCacheStats(store.loadKeywords(runId)),
+        store.loadRun(runId)?.lookups ?? 0,
         pending.length - loopIndex - 1,
         samples,
       ),
@@ -267,16 +350,19 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 function progressLine(
   total: number,
   progress: { completed: number; partial: number; failed: number; errors: number },
+  cache: { hits: number; misses: number; expired: number; refreshed: number },
+  lookups: number,
   remaining: number,
   samples: number[],
 ): string {
   const processed = progress.completed + progress.partial + progress.failed;
+  const hitRate = processed > 0 ? Math.round((cache.hits / processed) * 100) : 0;
   let eta = '';
   if (samples.length >= 3 && remaining > 0) {
     const averageMs = samples.reduce((sum, value) => sum + value, 0) / samples.length;
     eta = ` | ETA ~${formatDuration(Math.round(averageMs * remaining))}`;
   }
-  return `Keywords ${processed}/${total} | completed ${progress.completed} | partial ${progress.partial} | failed ${progress.failed} | errors ${progress.errors}${eta}`;
+  return `Keywords ${processed}/${total} | Cache ${hitRate}% (${cache.hits} hit / ${cache.misses + cache.expired} miss) | Browser lookups ${lookups} | Errors ${progress.errors}${eta}`;
 }
 
 function formatDuration(ms: number): string {

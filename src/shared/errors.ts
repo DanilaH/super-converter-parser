@@ -8,6 +8,7 @@ export type ResearchErrorCode =
   | 'INPUT_SCHEMA_ERROR'
   | 'OUTPUT_WRITE_ERROR'
   | 'DB_ERROR'
+  | 'CACHE_DB_ERROR'
   | 'RESUME_NOT_FOUND'
   | 'RESUME_TERMINAL_RUN'
   | 'RESUME_PARSER_MISMATCH'
