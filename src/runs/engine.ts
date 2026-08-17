@@ -366,13 +366,17 @@ function progressLine(
   samples: number[],
 ): string {
   const processed = progress.completed + progress.partial + progress.failed;
+  // Hit rate is the share of processed keywords served from the cache; a
+  // forced refresh is a deliberate bypass (browser work was done), so it is
+  // not a hit. Every bucket is shown so hits/misses/expired/refreshed always
+  // add up to the processed count (expired is a sub-bucket of misses).
   const hitRate = processed > 0 ? Math.round((cache.hits / processed) * 100) : 0;
   let eta = '';
   if (samples.length >= 3 && remaining > 0) {
     const averageMs = samples.reduce((sum, value) => sum + value, 0) / samples.length;
     eta = ` | ETA ~${formatDuration(Math.round(averageMs * remaining))}`;
   }
-  return `Keywords ${processed}/${total} | Cache ${hitRate}% (${cache.hits} hit / ${cache.misses} miss) | Browser lookups ${lookups} | Errors ${progress.errors}${eta}`;
+  return `Keywords ${processed}/${total} | Cache ${hitRate}% (${cache.hits} hit / ${cache.misses} miss / ${cache.expired} expired / ${cache.refreshed} refreshed) | Browser lookups ${lookups} | Errors ${progress.errors}${eta}`;
 }
 
 function formatDuration(ms: number): string {

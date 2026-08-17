@@ -133,6 +133,11 @@ every keyword, so an interrupted run is never lost. On resume:
 - the persisted config snapshot supplies the semantic research settings; operational
   settings (connection, timeouts, retries, breaker) come from the current environment.
 
+Run-store schema changes are handled like the cache's: each migration is one atomic
+transaction (a failure rolls back and is reported as `DB_ERROR`, leaving the old
+version fully usable), and a run store from a newer schema version is refused instead
+of opened silently.
+
 Transient errors (`GOOGLE_UNAVAILABLE`) are retried with exponential backoff and
 half-jitter up to `RETRY_MAX_ATTEMPTS`. Parser failures are never retried. A circuit
 breaker pauses the run with a clear reason when Keyword Surfer parsing fails
@@ -169,8 +174,10 @@ checkpoint, so a run never depends on the cache row after it is committed.
 - a keyword entry is keyed by normalized keyword + market + `hl`/`gl` + `topN` +
   Surfer parser version + Google parser version; any change makes it a miss;
 - entries expire per status (`CACHE_TTL_*`): completed 7d, partial 6h, failed 1h.
-  An expired entry is a miss but stays stored until the opportunistic cleanup on
-  cache open;
+  An expired entry is a miss but stays stored: a reopen must not purge it before
+  the next run can classify it, so open-time cleanup only deletes rows that died
+  longer ago than the 30-day grace window (ancient data), and a refresh
+  overwrites the expired row it consumed;
 - a valid hit is committed to the run without browser lookups, does not touch the
   circuit-breaker window, and keeps the original collection timestamp;
 - fresh results are written to the cache only after the run checkpoint succeeded;
@@ -189,8 +196,11 @@ checkpoint, so a run never depends on the cache row after it is committed.
   connecting to Chrome at all;
 - per-keyword `cache_status` (`hit`/`miss`/`expired`/`refreshed`) is stored in the
   run DB, written into `keywords.json`, and rolled up into `manifest.json`
-  progress plus the live progress line, e.g.
-  `Keywords 4/4 | Cache 100% (4 hit / 0 miss) | Browser lookups 0 | Errors 0`;
+  progress plus the live progress line. The line shows every bucket so the
+  accounting is always complete, e.g.
+  `Keywords 4/4 | Cache 75% (3 hit / 1 miss / 1 expired / 0 refreshed) | Browser lookups 1 | Errors 0`;
+  the hit rate is the share of processed keywords served from the cache
+  (a forced refresh is a deliberate bypass, so it is not a hit);
 - related-keyword entries live in the same cache under `related` keys scoped by
   the parent keyword and the same identity (market/hl/gl/topN/parser versions),
   with the expiry derived by the store from `storedAt + ttlMs`. Every entry is
@@ -201,12 +211,17 @@ checkpoint, so a run never depends on the cache row after it is committed.
 - cache accounting is consistent everywhere: an expired entry counts as a miss
   in the live progress line, the manifest rollup (`misses` includes `expired`,
   which is reported separately), and the hit-rate math; `refreshed` is a
-  deliberate bypass and never a miss;
+  deliberate bypass and never a miss. Expired entries are reported even after
+  a reopen, because cleanup never deletes rows inside the grace window before
+  they were observed;
 - schema changes are safe: an existing database is copied to
   `cache.sqlite.pre-vN.bak` before the first migration, each migration is a
   single atomic transaction (a failure leaves the old version fully intact and
   raises `CACHE_DB_ERROR`), and a database from a newer schema version is
-  refused instead of opened silently;
+  refused instead of opened silently. The v3 migration invalidates legacy
+  related rows (drops them in the same transaction) because their
+  `ok`/`empty`/`error` status is unknowable from the v2 schema; pretending
+  they were all `ok` would fabricate provenance, so they are simply refetched;
 - every cache-store operation surfaces driver failures as `CACHE_DB_ERROR`
   (exit 3) with the original cause attached; nothing leaks as a raw SQLite
   error into exit code 1;

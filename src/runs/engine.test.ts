@@ -606,7 +606,7 @@ test('progress lines include ETA once three samples exist', async () => {
   assert.equal(progressLines.length, 4);
   assert.match(
     progressLines[0] as string,
-    /Keywords 1\/4 \| Cache 0% \(0 hit \/ 0 miss\) \| Browser lookups 1 \| Errors 0/,
+    /Keywords 1\/4 \| Cache 0% \(0 hit \/ 0 miss \/ 0 expired \/ 0 refreshed\) \| Browser lookups 1 \| Errors 0/,
   );
   assert.ok(!(progressLines[0] as string).includes('ETA'));
   assert.ok(!(progressLines[1] as string).includes('ETA'));

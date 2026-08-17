@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import {
   CacheStore,
   CACHE_SCHEMA_VERSION,
+  EXPIRED_ENTRY_GRACE_MS,
   ttlMsForKeywordStatus,
   ttlMsForDomainStatus,
   ttlMsForRelatedStatus,
@@ -448,6 +449,11 @@ test('a failed migration rolls back atomically and leaves the old version intact
        (cache_key, keyword, normalized_keyword, identity, status, surfer, google, error, collected_at, stored_at, expires_at)
      VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
   ).run('k1', 'x', 'x', '{}', 'pending', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-08T00:00:00.000Z');
+  // A legacy related row that must survive the failed migration.
+  v1.prepare(
+    `INSERT INTO related_cache (cache_key, position, related_keyword, overlap, volume, keyword, stored_at, expires_at)
+     VALUES (?, 0, 'x', NULL, NULL, 'compare lists', ?, ?)`,
+  ).run('related-legacy', '2026-01-01T00:00:00.000Z', '2026-01-08T00:00:00.000Z');
   v1.close();
 
   assert.throws(
@@ -461,6 +467,198 @@ test('a failed migration rolls back atomically and leaves the old version intact
   assert.equal((raw.prepare('SELECT COUNT(*) AS c FROM keyword_cache').get() as { c: number }).c, 1);
   const columns = raw.prepare('PRAGMA table_info(related_cache)').all() as Array<{ name: string }>;
   assert.ok(!columns.some((column) => column.name === 'identity'));
+  // The legacy related row is still readable under the v1 contract.
+  assert.equal(
+    (raw.prepare('SELECT COUNT(*) AS c FROM related_cache WHERE cache_key = ?').get('related-legacy') as { c: number }).c,
+    1,
+  );
+  raw.close();
+});
+
+test('a v2 cache database migrates to v3 and invalidates legacy related rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-v2-'));
+  const path = join(directory, 'cache.sqlite');
+  const v2 = new Database(path);
+  v2.pragma('user_version = 2');
+  v2.exec(`
+    CREATE TABLE keyword_cache (
+      cache_key TEXT PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      normalized_keyword TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      surfer TEXT,
+      google TEXT,
+      error TEXT,
+      collected_at TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE serp_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      keyword TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      hostname TEXT NOT NULL,
+      result_type TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE related_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      related_keyword TEXT NOT NULL,
+      overlap INTEGER,
+      volume INTEGER,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE domain_cache (
+      domain TEXT PRIMARY KEY,
+      dr REAL,
+      status TEXT NOT NULL,
+      error TEXT,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    ALTER TABLE related_cache ADD COLUMN keyword TEXT NOT NULL DEFAULT '';
+    ALTER TABLE related_cache ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+  `);
+  // A keyword entry that must survive the migration.
+  v2.prepare(
+    `INSERT INTO keyword_cache
+       (cache_key, keyword, normalized_keyword, identity, status, surfer, google, error, collected_at, stored_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
+  ).run(
+    'k1',
+    'compare lists',
+    'compare lists',
+    JSON.stringify(IDENTITY),
+    'completed',
+    JSON.stringify({ volume: 49500 }),
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    '2026-12-08T00:00:00.000Z',
+  );
+  // A legacy v2 related entry whose true status is unknowable.
+  v2.prepare(
+    `INSERT INTO related_cache (cache_key, position, related_keyword, overlap, volume, keyword, identity, stored_at, expires_at)
+     VALUES (?, 0, 'x', NULL, NULL, 'compare lists', ?, ?, ?)`,
+  ).run(
+    'related-legacy',
+    JSON.stringify(IDENTITY),
+    '2026-01-01T00:00:00.000Z',
+    '2026-12-08T00:00:00.000Z',
+  );
+  v2.close();
+
+  const migrated = CacheStore.open(path);
+  assert.equal(migrated.version, 3);
+  // Legacy rows were invalidated, never silently pretended to be 'ok'.
+  assert.equal(migrated.getRelated('related-legacy'), null);
+  // Everything else survived the structural changes.
+  assert.equal(migrated.getKeyword('k1')?.record.surfer?.volume, 49500);
+  migrated.close();
+  const raw = new Database(path);
+  assert.equal(
+    (raw.prepare('SELECT COUNT(*) AS c FROM related_cache').get() as { c: number }).c,
+    0,
+  );
+  raw.close();
+  // The pre-migration copy predates the invalidation.
+  const backupPath = `${path}.pre-v2.bak`;
+  assert.ok(existsSync(backupPath));
+  const backup = new Database(backupPath);
+  assert.equal(backup.pragma('user_version', { simple: true }), 2);
+  assert.equal(
+    (backup.prepare('SELECT COUNT(*) AS c FROM related_cache').get() as { c: number }).c,
+    1,
+  );
+  backup.close();
+});
+
+test('a failed v3 migration rolls back atomically and keeps the legacy related rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-v3-rollback-'));
+  const path = join(directory, 'cache.sqlite');
+  const v2 = new Database(path);
+  v2.pragma('user_version = 2');
+  v2.exec(`
+    CREATE TABLE keyword_cache (
+      cache_key TEXT PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      normalized_keyword TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      surfer TEXT,
+      google TEXT,
+      error TEXT,
+      collected_at TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE serp_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      keyword TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      hostname TEXT NOT NULL,
+      result_type TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE related_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      related_keyword TEXT NOT NULL,
+      overlap INTEGER,
+      volume INTEGER,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE domain_cache (
+      domain TEXT PRIMARY KEY,
+      dr REAL,
+      status TEXT NOT NULL,
+      error TEXT,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    ALTER TABLE related_cache ADD COLUMN keyword TEXT NOT NULL DEFAULT '';
+    ALTER TABLE related_cache ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+    ALTER TABLE related_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'ok';
+  `);
+  // A legacy related row that must survive the failed migration.
+  v2.prepare(
+    `INSERT INTO related_cache (cache_key, position, related_keyword, overlap, volume, keyword, identity, stored_at, expires_at)
+     VALUES (?, 0, 'x', NULL, NULL, 'compare lists', ?, ?, ?)`,
+  ).run(
+    'related-legacy',
+    JSON.stringify(IDENTITY),
+    '2026-01-01T00:00:00.000Z',
+    '2026-12-08T00:00:00.000Z',
+  );
+  v2.close();
+
+  assert.throws(
+    () => CacheStore.open(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'CACHE_DB_ERROR' &&
+      error.message.includes('migration v3 failed'),
+  );
+
+  // The failed migration left the file fully usable at v2 with its data; the
+  // second v3 ALTER never ran and the invalidation never happened.
+  const raw = new Database(path);
+  assert.equal(raw.pragma('user_version', { simple: true }), 2);
+  assert.equal(
+    (raw.prepare('SELECT COUNT(*) AS c FROM related_cache').get() as { c: number }).c,
+    1,
+  );
+  const columns = raw.prepare('PRAGMA table_info(related_cache)').all() as Array<{ name: string }>;
+  assert.ok(!columns.some((column) => column.name === 'error'));
   raw.close();
 });
 
@@ -549,6 +747,43 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
   store.close();
 });
 
+test('recently expired entries survive a reopen so the next run classifies them as expired', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-grace-'));
+  const path = join(directory, 'cache.sqlite');
+  const now = Date.now();
+  const store = CacheStore.open(path);
+  // Live entry: served as a hit.
+  store.putKeyword(entry({ cacheKey: 'live', expiresAt: new Date(now + 60_000).toISOString() }));
+  // Expired moments ago (within the grace window): must survive open and be
+  // classifiable as expired by the next run instead of a provenance-less miss.
+  const expiredRecently = new Date(now - 60_000).toISOString();
+  store.putKeyword(entry({ cacheKey: 'recently-expired', expiresAt: expiredRecently }));
+  store.putRelated(
+    {
+      cacheKey: 'recently-expired-related',
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
+    },
+    expiredRecently,
+    1,
+  );
+  // Dead long ago (beyond the grace window): purged at open.
+  store.putKeyword(entry({ cacheKey: 'ancient', expiresAt: '2020-01-01T00:00:00.000Z' }));
+  store.close();
+
+  const reopened = CacheStore.open(path);
+  assert.equal(reopened.getKeyword('live')?.cacheKey, 'live');
+  const expired = reopened.getKeyword('recently-expired') as CachedKeywordEntry;
+  assert.equal(expired?.cacheKey, 'recently-expired');
+  assert.ok(Date.parse(expired.expiresAt) <= Date.now());
+  assert.equal(reopened.getRelated('recently-expired-related')?.status, 'ok');
+  assert.equal(reopened.getKeyword('ancient'), null);
+  reopened.close();
+});
+
 test('open of a cache path inside an existing file raises CACHE_DB_ERROR', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cache-open-'));
   const file = join(directory, 'blocker');
@@ -581,6 +816,7 @@ test('open of a corrupt database raises CACHE_DB_ERROR', async () => {
 });
 
 test('TTL defaults match the documented cache semantics', () => {
+  assert.equal(EXPIRED_ENTRY_GRACE_MS, 30 * 24 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.completedMs, 7 * 24 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.partialMs, 6 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.failedMs, 60 * 60 * 1000);

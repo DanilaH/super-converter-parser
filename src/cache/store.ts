@@ -8,6 +8,13 @@ import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 
 export const CACHE_SCHEMA_VERSION = 3;
 
+// Rows that expired less than this long ago survive an open-time cleanup so
+// the next run can still classify them as expired (real expired accounting
+// across reopen). Only rows that have been dead for longer are purged; every
+// expired row that a run actually observes is consumed by the refresh that
+// overwrites it.
+export const EXPIRED_ENTRY_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
 const MIGRATIONS: string[] = [
@@ -65,10 +72,15 @@ const MIGRATIONS: string[] = [
   `,
   // v3: related entries are explicitly cached as ok/empty/error so a failed
   // or genuinely empty expansion is distinguishable from "never fetched".
-  // Existing ok rows keep their implied status via the default.
+  // The status of legacy v2 rows is unknowable (v2 could not distinguish an
+  // empty expansion from a failure), so pretending they are all 'ok' would
+  // fabricate provenance. They are invalidated instead: dropped inside the
+  // same transaction so the next expansion is refetched under the new
+  // contract. Freshly created databases reach v3 with an empty table.
   `
   ALTER TABLE related_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'ok';
   ALTER TABLE related_cache ADD COLUMN error TEXT;
+  DELETE FROM related_cache;
   `,
 ];
 
@@ -299,15 +311,17 @@ export class CacheStore implements KeywordCache {
     }
   }
 
-  // Removes expired rows (and orphaned SERP rows whose keyword entry is
-  // gone). Called on open; the correctness of the cache never depends on it.
+  // Removes rows that have been dead for longer than EXPIRED_ENTRY_GRACE_MS
+  // (and orphaned SERP rows whose keyword entry is gone). Rows that expired
+  // more recently survive so the next run can still classify them as expired
+  // at resolution time instead of reporting a provenance-less plain miss.
+  // Called on open; the correctness of the cache never depends on it.
   cleanup(now: number): number {
     return this.wrap('cleanup', () => {
-      const iso = new Date(now).toISOString();
-      const expireWhere = 'expires_at <= ?';
+      const cutoff = new Date(now - EXPIRED_ENTRY_GRACE_MS).toISOString();
       let deleted = 0;
       const purge = this.db.transaction(() => {
-        const keywordResult = this.db.prepare(`DELETE FROM keyword_cache WHERE ${expireWhere}`).run(iso);
+        const keywordResult = this.db.prepare('DELETE FROM keyword_cache WHERE expires_at <= ?').run(cutoff);
         deleted += keywordResult.changes;
         const orphanSerp = this.db
           .prepare(
@@ -315,9 +329,9 @@ export class CacheStore implements KeywordCache {
           )
           .run();
         deleted += orphanSerp.changes;
-        const relatedResult = this.db.prepare(`DELETE FROM related_cache WHERE ${expireWhere}`).run(iso);
+        const relatedResult = this.db.prepare('DELETE FROM related_cache WHERE expires_at <= ?').run(cutoff);
         deleted += relatedResult.changes;
-        const domainResult = this.db.prepare(`DELETE FROM domain_cache WHERE ${expireWhere}`).run(iso);
+        const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
       });
       purge();

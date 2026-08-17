@@ -56,8 +56,10 @@ export function planRunCache(
 }
 
 // Decides how a pending keyword is served. Forced refresh bypasses the cache
-// entirely; an entry is a hit only while not past its stored expiry (expired
-// counts as a miss but the row is left for opportunistic cleanup).
+// entirely; an entry is a hit only while not past its stored expiry. Expired
+// entries count as misses and are reported with their own bucket; the row
+// stays until a refresh overwrites it (open-time cleanup only purges rows
+// that died longer ago than the grace window).
 export function resolveKeywordAccess(
   normalizedKeyword: string,
   options: KeywordAccessOptions,

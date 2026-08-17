@@ -213,7 +213,7 @@ test('expired entries are misses that refresh the cache with a new expiry', asyn
   // Expired entries count as misses everywhere: the live line, the manifest
   // rollup, and the run keywords agree on the same numbers.
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss\)/);
+  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
   ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
@@ -438,9 +438,9 @@ test('cache hit rate appears in progress lines', async () => {
   );
   assert.equal(outcome.kind, 'finished');
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[0] as string, /Cache 100% \(1 hit \/ 0 miss\)/);
-  assert.match(progressLines[1] as string, /Cache 50% \(1 hit \/ 1 miss\)/);
-  assert.match(progressLines[3] as string, /Cache 25% \(1 hit \/ 3 miss\) \| Browser lookups 3 \| Errors 0/);
+  assert.match(progressLines[0] as string, /Cache 100% \(1 hit \/ 0 miss \/ 0 expired \/ 0 refreshed\)/);
+  assert.match(progressLines[1] as string, /Cache 50% \(1 hit \/ 1 miss \/ 0 expired \/ 0 refreshed\)/);
+  assert.match(progressLines[3] as string, /Cache 25% \(1 hit \/ 3 miss \/ 0 expired \/ 0 refreshed\) \| Browser lookups 3 \| Errors 0/);
   store.close();
   cache.close();
 });
@@ -464,7 +464,7 @@ test('expired entries are accounted as misses in the live line and the manifest'
   );
   assert.equal(outcome.kind, 'finished');
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[3] as string, /Cache 75% \(3 hit \/ 1 miss\)/);
+  assert.match(progressLines[3] as string, /Cache 75% \(3 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
   ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
@@ -472,6 +472,45 @@ test('expired entries are accounted as misses in the live line and the manifest'
   assert.deepEqual(manifest.progress.cache, { hits: 3, misses: 1, expired: 1, refreshed: 0 });
   store.close();
   cache.close();
+});
+
+test('expired entries survive a cache reopen and are accounted as expired', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-reopen-expired-'));
+  const cachePath = join(directory, 'cache.sqlite');
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'cache-reopen-run-'));
+
+  // Session 1: a previous process stored an entry whose TTL has since passed.
+  const first = CacheStore.open(cachePath);
+  primeCache(first, 'compare lists', 'completed', 1, new Date(Date.now() - 60_000).toISOString());
+  first.close();
+
+  // Session 2: the reopen must not purge the entry before it can be
+  // classified; the run reports it as an expired miss, not a plain miss.
+  const reopened = CacheStore.open(cachePath);
+  const logs: string[] = [];
+  const outcome = await executeRun(
+    baseOptions(store, runId, runDirectory, reopened, {
+      keywords: KEYWORDS.slice(0, 1),
+      hooks: makeHooks({ logger: (line) => logs.push(line) }),
+    }),
+  );
+  assert.equal(outcome.kind, 'finished');
+  assert.equal(store.loadKeyword(runId, 0)?.cacheStatus, 'expired');
+  assert.equal(store.loadRun(runId)?.lookups, 1);
+  const progressLines = logs.filter((line) => line.startsWith('Keywords '));
+  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
+  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 1, expired: 1, refreshed: 0 });
+  // The refresh overwrote the stale row with a live one.
+  const refreshed = reopened.getKeyword(buildKeywordCacheKey('compare lists', IDENTITY)) as CachedKeywordEntry;
+  assert.ok(refreshed !== null);
+  assert.ok(Date.parse(refreshed.expiresAt) > Date.now());
+  reopened.close();
+  store.close();
 });
 
 function testConfig(overrides: Partial<ResearchConfig>): ResearchConfig {

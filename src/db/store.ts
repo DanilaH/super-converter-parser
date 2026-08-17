@@ -139,6 +139,10 @@ export class RunStore {
       store.migrate();
       return store;
     } catch (error) {
+      // Internal failures already carry the specific message (e.g. a refused
+      // future schema version); keep them as-is instead of double-wrapping
+      // them into the generic open error.
+      if (error instanceof ResearchError && error.code === 'DB_ERROR') throw error;
       throw new ResearchError(
         'DB_ERROR',
         `Failed to open run store at "${path}".`,
@@ -155,12 +159,27 @@ export class RunStore {
 
   private migrate(): void {
     const current = this.db.pragma('user_version', { simple: true }) as number;
+    if (current > MIGRATIONS.length) {
+      throw new ResearchError(
+        'DB_ERROR',
+        `Run store is at schema version ${current}, newer than this build supports (${MIGRATIONS.length}). Refusing to open it.`,
+      );
+    }
+    if (current === MIGRATIONS.length) return;
     for (let version = current; version < MIGRATIONS.length; version += 1) {
-      const apply = this.db.transaction(() => {
-        this.db.exec(MIGRATIONS[version] as string);
-        this.db.pragma(`user_version = ${version + 1}`);
-      });
-      apply();
+      try {
+        const apply = this.db.transaction(() => {
+          this.db.exec(MIGRATIONS[version] as string);
+          this.db.pragma(`user_version = ${version + 1}`);
+        });
+        apply();
+      } catch (error) {
+        throw new ResearchError(
+          'DB_ERROR',
+          `Run store schema migration v${version + 1} failed; the database was left at v${current}.`,
+          { cause: error },
+        );
+      }
     }
   }
 
