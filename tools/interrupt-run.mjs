@@ -41,12 +41,15 @@ child.on('exit', (code, signal) => {
 });
 
 function ctrlC() {
+  // Base64-encoded PowerShell avoids all cmd quote-mangling (the C# member
+  // definition must keep its double quotes around "kernel32.dll").
   const script = [
     "Add-Type -Namespace W -Name C -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern bool GenerateConsoleCtrlEvent(uint e, uint g);'",
     '[W.C]::GenerateConsoleCtrlEvent(0, 0) | Out-Null',
   ].join('; ');
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
   try {
-    execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'inherit' });
+    execSync(`powershell -NoProfile -EncodedCommand ${encoded}`, { stdio: 'inherit' });
   } catch {
     // The shared console may already be tearing down; the child decides.
   }
