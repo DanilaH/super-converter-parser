@@ -39,6 +39,16 @@ export function buildKeywordCacheKey(
   return cacheKey('keyword', { normalizedKeyword, ...identity });
 }
 
+// Related keywords are cached per parent keyword under the same identity that
+// governs the parent's own entry, so a different market or parser version can
+// never read another variant's related data.
+export function buildRelatedCacheKey(
+  normalizedKeyword: string,
+  identity: CacheIdentity,
+): string {
+  return cacheKey('related', { normalizedKeyword, ...identity });
+}
+
 export function normalizeDomain(domain: string): string {
   return domain.trim().toLowerCase();
 }

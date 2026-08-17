@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +11,9 @@ import {
   ttlMsForDomainStatus,
   type CacheTtlSettings,
   type CachedKeywordEntry,
+  type CachedRelatedEntry,
 } from './store.js';
-import { buildKeywordCacheKey, keywordCacheIdentity, type CacheIdentity } from './keys.js';
+import { buildKeywordCacheKey, buildRelatedCacheKey, keywordCacheIdentity, type CacheIdentity } from './keys.js';
 import { loadConfig } from '../config/config.js';
 import { ResearchError } from '../shared/errors.js';
 import type { SerpResult } from '../google/serp.js';
@@ -127,23 +129,153 @@ test('failed entries keep their error and short TTL mapping', () => {
   assert.equal(ttlMsForDomainStatus('error', ttl), 60 * 60 * 1000);
 });
 
-test('related cache roundtrip', () => {
+test('related cache roundtrip preserves parent keyword, identity and TTL-derived expiry', () => {
   const store = CacheStore.openInMemory();
-  const key = 'related-key';
-  store.putRelated({
-    cacheKey: key,
-    rows: [
-      { relatedKeyword: 'compare lists online', overlap: 80, volume: 1200 },
-      { relatedKeyword: 'compare two lists', overlap: 60, volume: 800 },
-    ],
-    storedAt: '2026-01-01T00:00:00.000Z',
-    expiresAt: '2026-01-08T00:00:00.000Z',
-  });
-  const loaded = store.getRelated(key);
+  const key = buildRelatedCacheKey('compare lists', IDENTITY);
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  const ttlMs = 7 * 24 * 60 * 60 * 1000;
+  store.putRelated(
+    {
+      cacheKey: key,
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [
+        { relatedKeyword: 'compare lists online', overlap: 80, volume: 1200 },
+        { relatedKeyword: 'compare two lists', overlap: 60, volume: 800 },
+      ],
+    },
+    storedAt,
+    ttlMs,
+  );
+  const loaded = store.getRelated(key) as CachedRelatedEntry;
   assert.equal(loaded?.rows.length, 2);
   assert.equal(loaded?.rows[0]?.relatedKeyword, 'compare lists online');
+  assert.equal(loaded?.rows[1]?.overlap, 60);
+  // The store derives the expiry from storedAt + ttlMs, never from the caller.
+  assert.equal(loaded.expiresAt, '2026-01-08T00:00:00.000Z');
+  assert.equal(loaded.normalizedKeyword, 'compare lists');
+  assert.deepEqual(loaded.identity, IDENTITY);
   assert.equal(store.getRelated('other'), null);
   store.close();
+});
+
+test('related entries are scoped by identity: a different market cannot read them', () => {
+  const store = CacheStore.openInMemory();
+  store.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', IDENTITY),
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
+    },
+    '2026-01-01T00:00:00.000Z',
+    7 * 24 * 60 * 60 * 1000,
+  );
+  const otherIdentity = { ...IDENTITY, gl: 'de' };
+  assert.equal(store.getRelated(buildRelatedCacheKey('compare lists', otherIdentity)), null);
+  // Same identity, different parent keyword: also a miss.
+  assert.equal(store.getRelated(buildRelatedCacheKey('other keyword', IDENTITY)), null);
+  store.close();
+});
+
+test('putRelated replaces an existing entry and derives a fresh expiry', () => {
+  const store = CacheStore.openInMemory();
+  const key = buildRelatedCacheKey('compare lists', IDENTITY);
+  store.putRelated(
+    {
+      cacheKey: key,
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [{ relatedKeyword: 'old', overlap: 1, volume: 1 }],
+    },
+    '2026-01-01T00:00:00.000Z',
+    7 * 24 * 60 * 60 * 1000,
+  );
+  const ttlMs = 7 * 24 * 60 * 60 * 1000;
+  const storedAt = '2026-02-01T00:00:00.000Z';
+  store.putRelated(
+    {
+      cacheKey: key,
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [{ relatedKeyword: 'new', overlap: 2, volume: 2 }],
+    },
+    storedAt,
+    ttlMs,
+  );
+  const loaded = store.getRelated(key) as CachedRelatedEntry;
+  assert.equal(loaded?.rows.length, 1);
+  assert.equal(loaded?.rows[0]?.relatedKeyword, 'new');
+  assert.equal(loaded.expiresAt, '2026-02-08T00:00:00.000Z');
+  store.close();
+});
+
+test('a v1 cache database migrates to v2 with default parent keyword fields', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-v1-'));
+  const path = join(directory, 'cache.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(`
+    CREATE TABLE keyword_cache (
+      cache_key TEXT PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      normalized_keyword TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      surfer TEXT,
+      google TEXT,
+      error TEXT,
+      collected_at TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE serp_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      keyword TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      hostname TEXT NOT NULL,
+      result_type TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE related_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      related_keyword TEXT NOT NULL,
+      overlap INTEGER,
+      volume INTEGER,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE domain_cache (
+      domain TEXT PRIMARY KEY,
+      dr REAL,
+      status TEXT NOT NULL,
+      error TEXT,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+  `);
+  v1.close();
+
+  const migrated = CacheStore.open(path);
+  assert.equal(migrated.version, CACHE_SCHEMA_VERSION);
+  assert.equal(migrated.version, 2);
+  // v2 columns exist and are writable through the new contract.
+  migrated.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', IDENTITY),
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [{ relatedKeyword: 'x', overlap: 1, volume: 1 }],
+    },
+    '2026-01-01T00:00:00.000Z',
+    7 * 24 * 60 * 60 * 1000,
+  );
+  assert.equal(migrated.getRelated(buildRelatedCacheKey('compare lists', IDENTITY))?.rows.length, 1);
+  migrated.close();
 });
 
 test('domain cache roundtrip with explicit TTL', () => {
@@ -175,12 +307,16 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
   store.putKeyword(entry({ cacheKey: 'valid', expiresAt: '2026-02-01T00:00:00.000Z' }));
   store.putKeyword(entry({ cacheKey: 'expired', expiresAt: '2020-01-01T00:00:00.000Z' }));
   store.putKeyword(entry({ cacheKey: 'expired2', expiresAt: '2020-01-01T00:00:00.000Z' }));
-  store.putRelated({
-    cacheKey: 'related-expired',
-    rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
-    storedAt: '2020-01-01T00:00:00.000Z',
-    expiresAt: '2020-01-02T00:00:00.000Z',
-  });
+  store.putRelated(
+    {
+      cacheKey: 'related-expired',
+      normalizedKeyword: 'compare lists',
+      identity: IDENTITY,
+      rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
+    },
+    '2020-01-01T00:00:00.000Z',
+    1000,
+  );
   store.putDomain('old.com', { dr: null, status: 'error', error: 'x' }, '2020-01-01T00:00:00.000Z', 1000);
 
   const deleted = store.cleanup(Date.parse('2026-01-01T00:00:00.000Z'));

@@ -150,7 +150,7 @@ Each run writes snapshots under `runs/<run-id>/`, with parser-failure evidence u
 runs/<run-id>/
 ├── run.sqlite     # durable source of truth (WAL, versioned schema)
 ├── manifest.json  # config snapshot, parser versions, timestamps, progress, pause reason
-├── keywords.json  # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers)
+├── keywords.json  # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers, cacheStatus)
 └── serp.json      # organic SERP rows with provenance
 
 debug/<run-id>/     # page.html / page.png / parser-context.json on parser failures
@@ -178,13 +178,21 @@ checkpoint, so a run never depends on the cache row after it is committed.
   `--refresh-keyword "<query>"` (repeatable, normalized like the queue, must be one
   of the run keywords) bypasses it for that keyword only;
 - refresh semantics are persisted in the run, so a paused forced-refresh run
-  resumes forced even without the flags;
+  resumes forced even without the flags, and a resume with `--refresh-keyword`
+  keeps re-collecting that keyword on later resumes;
+- the browser decision is made from a single per-keyword cache resolution
+  computed up front; the engine executes exactly that decision, so the plan and
+  execution can never disagree about the same cache state;
 - `--refresh-keyword` is also supported with `--resume`;
 - when every pending keyword resolves to a cache hit, the run completes without
   connecting to Chrome at all;
 - per-keyword `cache_status` (`hit`/`miss`/`expired`/`refreshed`) is stored in the
-  run DB and rolled up into `manifest.json` progress plus the live progress line,
-  e.g. `Keywords 4/4 | Cache 100% (4 hit / 0 miss) | Browser lookups 0 | Errors 0`;
+  run DB, written into `keywords.json`, and rolled up into `manifest.json`
+  progress plus the live progress line, e.g.
+  `Keywords 4/4 | Cache 100% (4 hit / 0 miss) | Browser lookups 0 | Errors 0`;
+- related-keyword entries live in the same cache under `related` keys scoped by
+  the parent keyword and the same identity (market/hl/gl/topN/parser versions),
+  with the `CACHE_TTL_RELATED_MS` expiry derived by the store from `storedAt`;
 - if the cache DB cannot be opened, the CLI fails loudly with `CACHE_DB_ERROR`
   (exit 3) instead of silently running uncached.
 

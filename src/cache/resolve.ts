@@ -14,6 +14,47 @@ export type KeywordAccessOptions = {
   refreshKeywords: ReadonlySet<string>;
 };
 
+// Refresh semantics that were active when a run was (inter)rupted are
+// persisted in the run store. Merging them with whatever flags the operator
+// supplies now keeps a forced-refresh run forced across pause/resume, while
+// still letting a resume add new refresh keywords. The result is the single
+// source of truth for both planning (needs browser?) and execution.
+export function mergedCacheRefresh(
+  provided: { forceRefresh: boolean; refreshKeywords: ReadonlySet<string> },
+  persisted: { forceRefresh: boolean; refreshKeywords: readonly string[] },
+): { forceRefresh: boolean; refreshKeywords: string[] } {
+  return {
+    forceRefresh: provided.forceRefresh || persisted.forceRefresh,
+    refreshKeywords: Array.from(
+      new Set([...persisted.refreshKeywords, ...provided.refreshKeywords]),
+    ),
+  };
+}
+
+export type RunCachePlan = {
+  needsBrowser: boolean;
+  // One resolution per pending keyword, decided exactly once per run and
+  // reused by the engine, so the browser decision and execution can never
+  // disagree about the same cache state (no read-then-use window).
+  resolutions: Map<string, CacheResolution>;
+};
+
+export function planRunCache(
+  normalizedKeywords: readonly string[],
+  options: KeywordAccessOptions,
+  cache: KeywordCache | null,
+  now: number,
+): RunCachePlan {
+  const resolutions = new Map<string, CacheResolution>();
+  let needsBrowser = false;
+  for (const normalizedKeyword of normalizedKeywords) {
+    const resolution = resolveKeywordAccess(normalizedKeyword, options, cache, now);
+    resolutions.set(normalizedKeyword, resolution);
+    if (resolution.kind !== 'hit') needsBrowser = true;
+  }
+  return { needsBrowser, resolutions };
+}
+
 // Decides how a pending keyword is served. Forced refresh bypasses the cache
 // entirely; an entry is a hit only while not past its stored expiry (expired
 // counts as a miss but the row is left for opportunistic cleanup).

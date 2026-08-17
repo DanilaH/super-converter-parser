@@ -61,9 +61,11 @@ export async function writeSnapshots(
   };
 
   await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
+  // keywords.json carries the per-keyword cache decision alongside the raw
+  // data, so downstream consumers can always tell cached from fresh rows.
   await writeJsonAtomic(
     `${runDirectory}/keywords.json`,
-    keywords.map(storedKeywordToRecord),
+    keywords.map((keyword) => ({ ...storedKeywordToRecord(keyword), cacheStatus: keyword.cacheStatus })),
     'keywords output',
   );
   await writeJsonAtomic(`${runDirectory}/serp.json`, serpRows, 'SERP output');

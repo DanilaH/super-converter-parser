@@ -6,7 +6,7 @@ import type { CacheIdentity } from './keys.js';
 import type { SerpResult } from '../google/serp.js';
 import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 
-export const CACHE_SCHEMA_VERSION = 1;
+export const CACHE_SCHEMA_VERSION = 2;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -57,6 +57,12 @@ const MIGRATIONS: string[] = [
     expires_at TEXT NOT NULL
   );
   `,
+  // v2: related rows carry their parent keyword and identity so entries are
+  // self-describing and verifiable against the key that produced them.
+  `
+  ALTER TABLE related_cache ADD COLUMN keyword TEXT NOT NULL DEFAULT '';
+  ALTER TABLE related_cache ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export type CachedKeywordEntry = {
@@ -73,6 +79,10 @@ export type CachedKeywordEntry = {
 
 export type CachedRelatedEntry = {
   cacheKey: string;
+  // The parent keyword this list belongs to, and the identity that scopes it;
+  // both are persisted so the entry is verifiable against its cache key.
+  normalizedKeyword: string;
+  identity: CacheIdentity;
   rows: Array<{ relatedKeyword: string; overlap: number | null; volume: number | null }>;
   storedAt: string;
   expiresAt: string;
@@ -318,12 +328,16 @@ export class CacheStore implements KeywordCache {
       related_keyword: string;
       overlap: number | null;
       volume: number | null;
+      keyword: string;
+      identity: string;
       stored_at: string;
       expires_at: string;
     }>;
     if (rows.length === 0) return null;
     return {
       cacheKey,
+      normalizedKeyword: rows[0]?.keyword as string,
+      identity: JSON.parse(rows[0]?.identity as string) as CacheIdentity,
       rows: rows.map((row) => ({
         relatedKeyword: row.related_keyword,
         overlap: row.overlap,
@@ -334,16 +348,35 @@ export class CacheStore implements KeywordCache {
     };
   }
 
-  putRelated(entry: CachedRelatedEntry): void {
+  // Mirrors putDomain: the caller supplies data, storedAt and a TTL; the store
+  // derives the expiry so callers can never store mismatched timestamps.
+  putRelated(
+    entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void {
+    const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
     const deleteRows = this.db.prepare('DELETE FROM related_cache WHERE cache_key = ?');
     const insertRow = this.db.prepare(
-      `INSERT INTO related_cache (cache_key, position, related_keyword, overlap, volume, stored_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO related_cache
+         (cache_key, position, related_keyword, overlap, volume, keyword, identity, stored_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const identity = JSON.stringify(entry.identity);
     const write = this.db.transaction(() => {
       deleteRows.run(entry.cacheKey);
       entry.rows.forEach((row, index) => {
-        insertRow.run(entry.cacheKey, index, row.relatedKeyword, row.overlap, row.volume, entry.storedAt, entry.expiresAt);
+        insertRow.run(
+          entry.cacheKey,
+          index,
+          row.relatedKeyword,
+          row.overlap,
+          row.volume,
+          entry.normalizedKeyword,
+          identity,
+          storedAt,
+          expiresAt,
+        );
       });
     });
     write();

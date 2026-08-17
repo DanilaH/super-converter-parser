@@ -4,8 +4,9 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunStore } from '../db/store.js';
-import { CacheStore, type KeywordCache } from '../cache/store.js';
+import { CacheStore, type CachedKeywordEntry, type KeywordCache } from '../cache/store.js';
 import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
+import type { CacheResolution } from '../cache/resolve.js';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { executeRun, type EngineHooks, type ExecuteRunOptions } from './engine.js';
@@ -72,18 +73,17 @@ function okResult(keyword: KeywordRecord, serpCount = 2): CollectionResult {
   };
 }
 
-// Primes a cache entry for one keyword, mirroring what the engine writes.
-// Defaults are relative to "now" so entries are live, not expired.
-function primeCache(
-  cache: CacheStore,
+// Builds one cached entry exactly as the engine writes it. Defaults are
+// relative to "now" so entries are live, not expired.
+function cachedEntryFor(
   normalizedKeyword: string,
   status: KeywordRecord['status'],
   ttlMs: number,
   collectedAt = new Date(Date.now() - 60_000).toISOString(),
   volume = 49500,
-): void {
+): CachedKeywordEntry {
   const keyword = KEYWORDS.find((item) => item.normalizedKeyword === normalizedKeyword) as SeedKeyword;
-  cache.putKeyword({
+  return {
     cacheKey: buildKeywordCacheKey(normalizedKeyword, IDENTITY),
     keyword: keyword.keyword,
     normalizedKeyword,
@@ -108,7 +108,19 @@ function primeCache(
     collectedAt,
     storedAt: collectedAt,
     expiresAt: new Date(Date.parse(collectedAt) + ttlMs).toISOString(),
-  });
+  };
+}
+
+// Primes a cache entry for one keyword, mirroring what the engine writes.
+function primeCache(
+  cache: CacheStore,
+  normalizedKeyword: string,
+  status: KeywordRecord['status'],
+  ttlMs: number,
+  collectedAt = new Date(Date.now() - 60_000).toISOString(),
+  volume = 49500,
+): void {
+  cache.putKeyword(cachedEntryFor(normalizedKeyword, status, ttlMs, collectedAt, volume));
 }
 
 function baseOptions(
@@ -424,3 +436,112 @@ test('cache hit rate appears in progress lines', async () => {
 function testConfig(overrides: Partial<ResearchConfig>): ResearchConfig {
   return { ...BASE_CONFIG, ...overrides };
 }
+
+test('a different research identity invalidates every cached entry', async () => {
+  const store = RunStore.openInMemory();
+  const cache = CacheStore.openInMemory();
+  const runId = createRunId();
+  const ttl = BASE_CONFIG.cache.ttl.completedMs;
+  for (const keyword of KEYWORDS) {
+    primeCache(cache, keyword.normalizedKeyword, 'completed', ttl);
+  }
+  const deConfig = testConfig({ research: { ...BASE_CONFIG.research, googleGl: 'de' } });
+
+  let collectCalls = 0;
+  const outcome = await executeRun(
+    baseOptions(store, runId, await mkdtemp(join(tmpdir(), 'cache-identity-')), cache, {
+      config: deConfig,
+      collect: async (keyword) => {
+        collectCalls += 1;
+        return okResult(keyword);
+      },
+    }),
+  );
+  assert.equal(outcome.kind, 'finished');
+  assert.equal(collectCalls, 4);
+  assert.equal(store.loadRun(runId)?.lookups, 4);
+  assert.deepEqual(
+    store.loadKeywords(runId).map((item) => item.cacheStatus),
+    ['miss', 'miss', 'miss', 'miss'],
+  );
+  // Fresh data was cached under the de identity; the us entries are untouched.
+  const deIdentity = keywordCacheIdentity(deConfig);
+  assert.equal(cache.getKeyword(buildKeywordCacheKey('compare lists', deIdentity))?.record.surfer?.volume, 100);
+  assert.equal(cache.getKeyword(buildKeywordCacheKey('compare lists', IDENTITY))?.record.surfer?.volume, 49500);
+  store.close();
+  cache.close();
+});
+
+test('precomputed resolutions are authoritative: the engine never re-reads the cache', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'cache-single-read-'));
+  const ttl = BASE_CONFIG.cache.ttl.completedMs;
+  const resolutions = new Map<string, CacheResolution>();
+  for (const keyword of KEYWORDS) {
+    resolutions.set(keyword.normalizedKeyword, {
+      kind: 'hit',
+      entry: cachedEntryFor(keyword.normalizedKeyword, 'completed', ttl),
+    });
+  }
+  // Any cache read would be a second, inconsistent look at the state the plan
+  // was built from; a probe store makes such a read observable.
+  let cacheReads = 0;
+  let collectCalls = 0;
+  const inert: KeywordCache = {
+    getKeyword: () => {
+      cacheReads += 1;
+      return null;
+    },
+    putKeyword: () => undefined,
+  };
+  const outcome = await executeRun(
+    baseOptions(store, runId, runDirectory, inert, {
+      cache: {
+        store: inert,
+        forceRefresh: false,
+        refreshKeywords: new Set(),
+        resolutions,
+      },
+      collect: async (keyword) => {
+        collectCalls += 1;
+        return okResult(keyword);
+      },
+    }),
+  );
+  assert.equal(outcome.kind, 'finished');
+  assert.equal(outcome.state, 'completed');
+  assert.equal(collectCalls, 0);
+  assert.equal(cacheReads, 0, 'the plan is authoritative: zero cache reads during execution');
+  assert.deepEqual(
+    store.loadKeywords(runId).map((item) => item.cacheStatus),
+    ['hit', 'hit', 'hit', 'hit'],
+  );
+  const plannedEntry = (resolutions.get('compare lists') as { kind: 'hit'; entry: CachedKeywordEntry }).entry;
+  assert.equal(store.loadKeyword(runId, 0)?.collectedAt, plannedEntry.collectedAt);
+  store.close();
+});
+
+test('keywords.json reports the per-keyword cache status', async () => {
+  const store = RunStore.openInMemory();
+  const cache = CacheStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'cache-keywords-json-'));
+  const ttl = BASE_CONFIG.cache.ttl.completedMs;
+  primeCache(cache, 'compare lists', 'completed', ttl);
+
+  const outcome = await executeRun(baseOptions(store, runId, runDirectory, cache, {}));
+  assert.equal(outcome.kind, 'finished');
+  const records = JSON.parse(await readFile(join(runDirectory, 'keywords.json'), 'utf8')) as Array<{
+    normalizedKeyword: string;
+    cacheStatus: 'hit' | 'miss' | 'expired' | 'refreshed' | null;
+  }>;
+  assert.equal(records.length, 4);
+  assert.deepEqual(
+    records.map((record) => record.cacheStatus),
+    ['hit', 'miss', 'miss', 'miss'],
+  );
+  assert.equal(records[0]?.normalizedKeyword, 'compare lists');
+  store.close();
+  cache.close();
+});

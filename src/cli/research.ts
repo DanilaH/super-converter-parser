@@ -14,7 +14,7 @@ import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordR
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity } from '../cache/keys.js';
-import { resolveKeywordAccess } from '../cache/resolve.js';
+import { mergedCacheRefresh, planRunCache } from '../cache/resolve.js';
 
 export const EXIT_OK = 0;
 export const EXIT_INTERNAL = 1;
@@ -307,20 +307,31 @@ export async function runCli(
             .filter((item) => !isTerminalKeywordStatus(item.status))
             .map((item) => item.normalizedKeyword);
     const identity = keywordCacheIdentity(runConfig);
-    const refreshSet = new Set(refreshKeywords);
-    // A keyword needs the browser unless it will be served as a fresh cache
-    // hit; an all-hit run must not require Chrome to be running at all.
-    const needsBrowser =
-      pendingNormalized.length > 0 &&
-      pendingNormalized.some(
-        (normalizedKeyword) =>
-          resolveKeywordAccess(
-            normalizedKeyword,
-            { identity, forceRefresh: options.forceRefresh, refreshKeywords: refreshSet },
-            cacheStore,
-            Date.now(),
-          ).kind !== 'hit',
-      );
+
+    // Refresh semantics persisted by an earlier (interrupted) invocation still
+    // apply, so a forced-refresh run resumed without flags stays forced and
+    // never silently serves pending keywords from the cache.
+    const persisted =
+      mode === 'resume'
+        ? (store.loadRun(runId) ?? { forceRefresh: false, refreshKeywords: [] })
+        : { forceRefresh: false, refreshKeywords: [] };
+    const effective = mergedCacheRefresh(
+      { forceRefresh: options.forceRefresh, refreshKeywords: new Set(refreshKeywords) },
+      persisted,
+    );
+    const refreshSet = new Set(effective.refreshKeywords);
+
+    // The browser is needed unless every pending keyword will be served as a
+    // fresh cache hit. The plan also fixes one resolution per keyword so the
+    // engine executes exactly the decision made here (no TOCTOU window
+    // between the "do we need Chrome?" read and the actual cache reads).
+    const plan = planRunCache(
+      pendingNormalized,
+      { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
+      cacheStore,
+      Date.now(),
+    );
+    const needsBrowser = plan.needsBrowser;
 
     let context: BrowserContext | null = null;
     if (needsBrowser) {
@@ -360,8 +371,9 @@ export async function runCli(
       hooks,
       cache: {
         store: cacheStore,
-        forceRefresh: options.forceRefresh,
+        forceRefresh: effective.forceRefresh,
         refreshKeywords: refreshSet,
+        resolutions: plan.resolutions,
       },
     });
 

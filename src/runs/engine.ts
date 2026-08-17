@@ -27,7 +27,7 @@ import {
   type RetrySettings,
 } from './policies.js';
 import { keywordCacheIdentity, buildKeywordCacheKey } from '../cache/keys.js';
-import { resolveKeywordAccess } from '../cache/resolve.js';
+import { mergedCacheRefresh, resolveKeywordAccess, type CacheResolution } from '../cache/resolve.js';
 import { ttlMsForKeywordStatus, type KeywordCache } from '../cache/store.js';
 
 export type CollectKeywordFn = (
@@ -54,6 +54,9 @@ export type EngineCacheOptions = {
   store: KeywordCache;
   forceRefresh: boolean;
   refreshKeywords: ReadonlySet<string>;
+  // Precomputed per-keyword decisions (one read per keyword, made before the
+  // browser decision); when present the engine must not re-read the cache.
+  resolutions?: Map<string, CacheResolution>;
 };
 
 export type RunOutcome =
@@ -137,13 +140,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     }
     // Refresh semantics persist across pause/resume: merging with the stored
     // values keeps a forced-refresh run forced even if resumed without flags.
-    const mergedForce = run.forceRefresh || forceRefresh;
-    const mergedRefresh = new Set([...run.refreshKeywords, ...refreshKeywords]);
-    if (mergedForce !== run.forceRefresh || mergedRefresh.size !== run.refreshKeywords.length) {
-      store.setRunCacheRefresh(runId, mergedForce, [...mergedRefresh]);
+    const merged = mergedCacheRefresh(
+      { forceRefresh, refreshKeywords },
+      { forceRefresh: run.forceRefresh, refreshKeywords: run.refreshKeywords },
+    );
+    if (merged.forceRefresh !== run.forceRefresh || merged.refreshKeywords.length !== run.refreshKeywords.length) {
+      store.setRunCacheRefresh(runId, merged.forceRefresh, merged.refreshKeywords);
     }
-    forceRefresh = mergedForce;
-    refreshKeywords = mergedRefresh;
+    forceRefresh = merged.forceRefresh;
+    refreshKeywords = new Set(merged.refreshKeywords);
     store.setRunState(runId, 'running');
   }
 
@@ -186,12 +191,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     processedCount += 1;
     logger(`[${processedCount}/${total}] ${stored.normalizedKeyword}`);
 
-    const resolution = resolveKeywordAccess(
-      stored.normalizedKeyword,
-      { identity, forceRefresh, refreshKeywords },
-      options.cache?.store ?? null,
-      hooks.now(),
-    );
+    // The resolution is decided exactly once per keyword; a precomputed plan
+    // (from the same read that drove the browser decision) is authoritative,
+    // so execution can never see a different cache state than planning did.
+    const resolution =
+      options.cache?.resolutions?.get(stored.normalizedKeyword) ??
+      resolveKeywordAccess(
+        stored.normalizedKeyword,
+        { identity, forceRefresh, refreshKeywords },
+        options.cache?.store ?? null,
+        hooks.now(),
+      );
 
     if (resolution.kind === 'hit') {
       const entry = resolution.entry;
