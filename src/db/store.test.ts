@@ -318,13 +318,50 @@ test('a v1 run store migrates to the current schema with its data intact', async
   assert.equal(run.lookups, 3);
   assert.equal(run.input.path, 'input/seeds.csv');
   const keyword = migrated.loadKeywords('run-1')[0] as NonNullable<ReturnType<RunStore['loadKeywords']>>[number];
-  // Pre-v2 rows have no cache provenance; null is the honest value.
-  assert.equal(keyword.cacheStatus, null);
+  // Terminal keywords of a pre-cache (v1) run were collected fresh, never
+  // from the cache: the migration marks them 'miss' so cache accounting
+  // stays complete; pending keywords keep null.
+  assert.equal(keyword.cacheStatus, 'miss');
   assert.equal(keyword.surfer?.volume, 49500);
   assert.equal(migrated.loadSerpRows('run-1').length, 1);
   // The v2 columns are writable through the new contract.
   migrated.setRunCacheRefresh('run-1', true, ['standing desk']);
   assert.equal(migrated.loadRun('run-1')?.forceRefresh, true);
+  migrated.close();
+});
+
+test('a v1 migration marks terminal keywords as miss and leaves pending as null', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-migrate-v1-status-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'paused', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 2, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.2.0' }),
+  );
+  const insertKeyword = v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertKeyword.run('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', '[]', 'completed');
+  insertKeyword.run('run-1', 1, 'kw-0002', 'best office chairs', 'best office chairs', '[]', 'partial');
+  insertKeyword.run('run-1', 2, 'kw-0003', 'standing desk', 'standing desk', '[]', 'failed');
+  insertKeyword.run('run-1', 3, 'kw-0004', 'ergonomic mouse', 'ergonomic mouse', '[]', 'pending');
+  insertKeyword.run('run-1', 4, 'kw-0005', 'broken keyword', 'broken keyword', '[]', 'running');
+  v1.close();
+
+  const migrated = RunStore.open(path);
+  assert.deepEqual(
+    migrated.loadKeywords('run-1').map((keyword) => keyword.cacheStatus),
+    ['miss', 'miss', 'miss', null, null],
+  );
   migrated.close();
 });
 

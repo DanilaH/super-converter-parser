@@ -56,10 +56,17 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, keyword_idx, position)
   );
   `,
+  // v2: cache-refresh semantics and per-keyword cache provenance. Terminal
+  // keywords of pre-cache (v1) runs were collected fresh, never from the
+  // cache: they are marked 'miss' inside the same transaction so cache
+  // accounting stays complete after the migration (the buckets sum to the
+  // processed count). Pending/running keywords stay NULL: they are resolved
+  // under the real cache contract when the run resumes.
   `
   ALTER TABLE runs ADD COLUMN force_refresh INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE runs ADD COLUMN refresh_keywords TEXT NOT NULL DEFAULT '[]';
   ALTER TABLE keywords ADD COLUMN cache_status TEXT;
+  UPDATE keywords SET cache_status = 'miss' WHERE status IN ('completed', 'partial', 'failed');
   `,
 ];
 

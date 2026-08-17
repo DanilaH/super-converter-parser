@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,8 @@ import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
 import type { CacheResolution } from '../cache/resolve.js';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
+import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { executeRun, type EngineHooks, type ExecuteRunOptions } from './engine.js';
 import { createRunId, type KeywordRecord } from './run.js';
 import { ResearchError } from '../shared/errors.js';
@@ -634,6 +637,139 @@ test('keywords.json reports the per-keyword cache status', async () => {
     ['hit', 'miss', 'miss', 'miss'],
   );
   assert.equal(records[0]?.normalizedKeyword, 'compare lists');
+  store.close();
+  cache.close();
+});
+
+// The pre-cache (v1) run-store schema, as written by versions of the runner
+// that had no cache support at all.
+const V1_RUN_SCHEMA = `
+  CREATE TABLE runs (
+    run_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    input_path TEXT NOT NULL,
+    config_snapshot TEXT NOT NULL,
+    parser_versions TEXT NOT NULL,
+    lookups INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT
+  );
+
+  CREATE TABLE keywords (
+    run_id TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    keyword TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    sources TEXT NOT NULL,
+    status TEXT NOT NULL,
+    surfer TEXT,
+    google TEXT,
+    error TEXT,
+    collected_at TEXT,
+    PRIMARY KEY (run_id, idx)
+  );
+
+  CREATE TABLE serp_rows (
+    run_id TEXT NOT NULL,
+    keyword_idx INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    hostname TEXT NOT NULL,
+    result_type TEXT NOT NULL,
+    PRIMARY KEY (run_id, keyword_idx, position)
+  );
+`;
+
+test('a paused v1 run migrates and resumes with complete cache accounting', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-v1-resume-cache-'));
+  const runPath = join(directory, 'run.sqlite');
+  const cache = CacheStore.openInMemory();
+  const ttl = BASE_CONFIG.cache.ttl.completedMs;
+  // The one pending keyword will be served from the cache after the resume.
+  primeCache(cache, 'standing desk', 'completed', ttl);
+
+  // A real pre-cache (v1) paused run: two terminal keywords collected fresh,
+  // one pending keyword left over.
+  const v1 = new Database(runPath);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_RUN_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES ('run-1', 'paused', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 2, NULL)`,
+  ).run(
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(BASE_CONFIG),
+    JSON.stringify({ surfer: SURFER_PARSER_VERSION, google: GOOGLE_PARSER_VERSION }),
+  );
+  const insertKeyword = v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+     VALUES ('run-1', ?, ?, ?, ?, ?, ?)`,
+  );
+  insertKeyword.run(0, 'kw-0001', 'compare lists', 'compare lists', '[]', 'completed');
+  insertKeyword.run(1, 'kw-0002', 'best office chairs', 'best office chairs', '[]', 'failed');
+  insertKeyword.run(2, 'kw-0003', 'standing desk', 'standing desk', '[]', 'pending');
+  v1.prepare(
+    `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, result_type)
+     VALUES ('run-1', 0, 1, 'compare lists', 'title', 'https://example.com/1', 'example.com', 'organic')`,
+  ).run();
+  v1.close();
+
+  // Opening the store migrates v1 -> v2: terminal keywords gain 'miss'
+  // provenance (they were collected fresh), the pending one stays null.
+  const store = RunStore.open(runPath);
+  assert.equal(store.version, 2);
+  assert.deepEqual(
+    store.loadKeywords('run-1').map((keyword) => keyword.cacheStatus),
+    ['miss', 'miss', null],
+  );
+
+  const runId = 'run-1';
+  const runDirectory = await mkdtemp(join(tmpdir(), 'run-v1-resume-out-'));
+  const outcome = await executeRun(
+    baseOptions(store, runId, runDirectory, cache, {
+      mode: 'resume',
+      keywords: [],
+    }),
+  );
+  assert.equal(outcome.kind, 'finished');
+  // The failed keyword stays terminal, so the run finishes with errors.
+  assert.equal(outcome.state, 'completed_with_errors');
+  assert.equal(store.loadRun(runId)?.lookups, 2, 'no fresh lookups: the pending keyword was a cache hit');
+  assert.deepEqual(
+    store.loadKeywords(runId).map((keyword) => keyword.cacheStatus),
+    ['miss', 'miss', 'hit'],
+  );
+
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as {
+    progress: {
+      totalKeywords: number;
+      completedKeywords: number;
+      partialKeywords: number;
+      failedKeywords: number;
+      cache: { hits: number; misses: number; expired: number; refreshed: number; hitRatePercent: number };
+    };
+  };
+  assert.deepEqual(manifest.progress.cache, { hits: 1, misses: 2, expired: 0, refreshed: 0, hitRatePercent: 33 });
+  // The buckets are disjoint and add up to the processed keyword count
+  // (completed + partial + failed): the two migrated terminals count as
+  // misses, the resumed keyword as a hit.
+  const cacheBuckets = manifest.progress.cache;
+  assert.equal(
+    cacheBuckets.hits + cacheBuckets.misses + cacheBuckets.expired + cacheBuckets.refreshed,
+    manifest.progress.completedKeywords + manifest.progress.partialKeywords + manifest.progress.failedKeywords,
+  );
+  assert.equal(
+    cacheBuckets.hits + cacheBuckets.misses + cacheBuckets.expired + cacheBuckets.refreshed,
+    manifest.progress.totalKeywords,
+  );
   store.close();
   cache.close();
 });
