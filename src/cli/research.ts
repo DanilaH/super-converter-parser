@@ -252,6 +252,9 @@ export async function runCli(
       console.log(`  npm run research -- --resume ${runId}`);
       return EXIT_PAUSED;
     }
+    console.log('');
+    console.log(`Run completed: ${outcome.state}`);
+    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json)`);
     return EXIT_OK;
   } catch (error) {
     console.error('');
