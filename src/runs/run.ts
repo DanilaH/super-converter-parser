@@ -60,6 +60,9 @@ export type RunManifest = {
       misses: number;
       expired: number;
       refreshed: number;
+      // Share of processed keywords served from the cache, same calculation
+      // as the live CLI progress line (rounded percent).
+      hitRatePercent: number;
     };
   };
 };

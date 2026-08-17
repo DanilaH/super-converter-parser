@@ -18,7 +18,7 @@ import {
   type KeywordRecord,
   type RunState,
 } from './run.js';
-import { countProgress, countCacheStats, writeSnapshots } from './snapshots.js';
+import { countProgress, countCacheStats, cacheHitRatePercent, writeSnapshots } from './snapshots.js';
 import {
   CircuitBreaker,
   isTransientErrorCode,
@@ -368,9 +368,9 @@ function progressLine(
   const processed = progress.completed + progress.partial + progress.failed;
   // Hit rate is the share of processed keywords served from the cache; a
   // forced refresh is a deliberate bypass (browser work was done), so it is
-  // not a hit. Every bucket is shown so hits/misses/expired/refreshed always
-  // add up to the processed count (expired is a sub-bucket of misses).
-  const hitRate = processed > 0 ? Math.round((cache.hits / processed) * 100) : 0;
+  // not a hit. The buckets are mutually exclusive and always add up to the
+  // processed count: hits + misses + expired + refreshed = processed.
+  const hitRate = cacheHitRatePercent(cache.hits, processed);
   let eta = '';
   if (samples.length >= 3 && remaining > 0) {
     const averageMs = samples.reduce((sum, value) => sum + value, 0) / samples.length;

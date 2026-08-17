@@ -203,6 +203,32 @@ export interface KeywordCache {
   putKeyword(entry: CachedKeywordEntry): void;
 }
 
+// Validates the related-entry contract enforced by putRelated: status, rows,
+// and error must form exactly one of the three legal combinations. Returns a
+// human-readable description of the violation, or null when the entry is valid.
+function describeInvalidRelatedEntry(
+  entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>,
+): string | null {
+  const hasRows = entry.rows.length > 0;
+  const hasError = entry.error !== null && entry.error.length > 0;
+  switch (entry.status) {
+    case 'ok':
+      if (!hasRows) return 'status "ok" must carry at least one row.';
+      if (entry.error !== null) return 'status "ok" must have error=null.';
+      return null;
+    case 'empty':
+      if (hasRows) return 'status "empty" must carry no rows.';
+      if (entry.error !== null) return 'status "empty" must have error=null.';
+      return null;
+    case 'error':
+      if (hasRows) return 'status "error" must carry no rows.';
+      if (!hasError) return 'status "error" must carry a non-empty error message.';
+      return null;
+    default:
+      return `unknown status "${entry.status}".`;
+  }
+}
+
 export class CacheStore implements KeywordCache {
   private readonly db: Database.Database;
   private readonly path: string | null;
@@ -299,10 +325,13 @@ export class CacheStore implements KeywordCache {
 
   // Any storage-level failure is reported as CACHE_DB_ERROR with the original
   // cause attached, never as a raw driver exception leaking into exit code 1.
+  // An existing CACHE_DB_ERROR (e.g. a related-entry validation failure) is
+  // preserved as-is instead of being re-wrapped into a generic message.
   private wrap<T>(operation: string, fn: () => T): T {
     try {
       return fn();
     } catch (error) {
+      if (error instanceof ResearchError && error.code === 'CACHE_DB_ERROR') throw error;
       throw new ResearchError(
         'CACHE_DB_ERROR',
         `Cache store "${operation}" failed.`,
@@ -464,15 +493,24 @@ export class CacheStore implements KeywordCache {
   }
 
   // Mirrors putDomain: the caller supplies data, storedAt and a TTL; the store
-  // derives the expiry so callers can never store mismatched timestamps. An
-  // 'ok' entry stores one row per related keyword; 'empty' and 'error' store a
-  // single placeholder row, so the state is cacheable and observable.
+  // derives the expiry so callers can never store mismatched timestamps. The
+  // status contract is enforced before anything is written: 'ok' must carry at
+  // least one row and error=null; 'empty' must carry no rows and error=null;
+  // 'error' must carry no rows and a non-empty message. Any other combination
+  // raises CACHE_DB_ERROR instead of being persisted as a placeholder that
+  // would look like a successful expansion. An 'ok' entry stores one row per
+  // related keyword; 'empty'/'error' store a single placeholder row carrying
+  // status and error, so the state is cacheable and observable.
   putRelated(
     entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>,
     storedAt: string,
     ttlMs: number,
   ): void {
     this.wrap('putRelated', () => {
+      const invalid = describeInvalidRelatedEntry(entry);
+      if (invalid !== null) {
+        throw new ResearchError('CACHE_DB_ERROR', `Invalid related cache entry: ${invalid}`);
+      }
       const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
       const deleteRows = this.db.prepare('DELETE FROM related_cache WHERE cache_key = ?');
       const insertRow = this.db.prepare(

@@ -108,6 +108,58 @@ test('putKeyword replaces an existing entry and its SERP rows', () => {
   store.close();
 });
 
+test('putKeyword is atomic: a SERP insert failure preserves the previous keyword and SERP rows', async () => {
+  // A real trigger-based fault injection: any INSERT into serp_cache aborts,
+  // so the whole putKeyword transaction must roll back, leaving the previous
+  // keyword row and its SERP rows exactly as they were.
+  const directory = await mkdtemp(join(tmpdir(), 'cache-atomic-'));
+  const path = join(directory, 'cache.sqlite');
+  const now = Date.now();
+  const liveEntry = entry({
+    collectedAt: new Date(now - 60_000).toISOString(),
+    storedAt: new Date(now - 60_000).toISOString(),
+    expiresAt: new Date(now + 60_000).toISOString(),
+  });
+  const first = CacheStore.open(path);
+  first.putKeyword(liveEntry);
+  first.close();
+
+  const raw = new Database(path);
+  raw.exec(`
+    CREATE TRIGGER inject_serp_failure
+    BEFORE INSERT ON serp_cache
+    BEGIN
+      SELECT RAISE(ABORT, 'injected serp insert failure');
+    END;
+  `);
+  raw.close();
+
+  const store = CacheStore.open(path);
+  const key = buildKeywordCacheKey('compare lists', IDENTITY);
+  const before = store.getKeyword(key) as CachedKeywordEntry;
+  assert.equal(before?.serpRows.length, 3);
+
+  assert.throws(
+    () =>
+      store.putKeyword({
+        ...liveEntry,
+        serpRows: serpRows(1),
+        expiresAt: new Date(now + 120_000).toISOString(),
+      }),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+  );
+
+  // The failed write changed nothing: the previous entry is fully intact.
+  const after = store.getKeyword(key) as CachedKeywordEntry;
+  assert.equal(after?.record.surfer?.volume, 49500);
+  assert.deepEqual(
+    after.serpRows.map((row) => row.position),
+    [1, 2, 3],
+  );
+  assert.equal(after.expiresAt, liveEntry.expiresAt);
+  store.close();
+});
+
 test('getKeyword returns null for unknown keys', () => {
   const store = CacheStore.openInMemory();
   assert.equal(store.getKeyword('nope'), null);
@@ -257,6 +309,40 @@ test('related entries cache empty and error states distinctly from never-fetched
 
   // A key that was never written is still a miss.
   assert.equal(store.getRelated('never-written'), null);
+  store.close();
+});
+
+test('putRelated rejects invalid ok/empty/error combinations with CACHE_DB_ERROR', () => {
+  const store = CacheStore.openInMemory();
+  const key = buildRelatedCacheKey('compare lists', IDENTITY);
+  const base = {
+    cacheKey: key,
+    normalizedKeyword: 'compare lists',
+    identity: IDENTITY,
+  };
+  const invalid: Array<{
+    label: string;
+    status: 'ok' | 'empty' | 'error';
+    error: string | null;
+    rows: CachedRelatedEntry['rows'];
+  }> = [
+    { label: 'ok without rows', status: 'ok', error: null, rows: [] },
+    { label: 'ok with an error message', status: 'ok', error: 'x', rows: [{ relatedKeyword: 'x', overlap: null, volume: null }] },
+    { label: 'empty with rows', status: 'empty', error: null, rows: [{ relatedKeyword: 'x', overlap: null, volume: null }] },
+    { label: 'empty with an error message', status: 'empty', error: 'x', rows: [] },
+    { label: 'error without a message', status: 'error', error: null, rows: [] },
+    { label: 'error with an empty message', status: 'error', error: '', rows: [] },
+    { label: 'error with rows', status: 'error', error: 'x', rows: [{ relatedKeyword: 'x', overlap: null, volume: null }] },
+  ];
+  for (const item of invalid) {
+    assert.throws(
+      () => store.putRelated({ ...base, status: item.status, error: item.error, rows: item.rows }, '2026-01-01T00:00:00.000Z', 7 * 24 * 60 * 60 * 1000),
+      (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+      item.label,
+    );
+  }
+  // Nothing was persisted as a placeholder pretending to be a result.
+  assert.equal(store.getRelated(key), null);
   store.close();
 });
 

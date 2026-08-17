@@ -181,14 +181,20 @@ test('a fully cached run serves every keyword without browser work or lookups', 
 
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
-  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number }; lookups: number } };
-  assert.deepEqual(manifest.progress.cache, { hits: 4, misses: 0, expired: 0, refreshed: 0 });
+  ) as { progress: { completedKeywords: number; cache: { hits: number; misses: number; expired: number; refreshed: number; hitRatePercent: number }; lookups: number } };
+  assert.deepEqual(manifest.progress.cache, { hits: 4, misses: 0, expired: 0, refreshed: 0, hitRatePercent: 100 });
+  // The buckets are disjoint and add up to the processed keyword count.
+  const cacheBuckets = manifest.progress.cache;
+  assert.equal(
+    cacheBuckets.hits + cacheBuckets.misses + cacheBuckets.expired + cacheBuckets.refreshed,
+    manifest.progress.completedKeywords,
+  );
   assert.equal(manifest.progress.lookups, 0);
   store.close();
   cache.close();
 });
 
-test('expired entries are misses that refresh the cache with a new expiry', async () => {
+test('expired entries refresh the cache with a new expiry and are their own bucket', async () => {
   const store = RunStore.openInMemory();
   const cache = CacheStore.openInMemory();
   const runId = createRunId();
@@ -210,14 +216,14 @@ test('expired entries are misses that refresh the cache with a new expiry', asyn
   assert.ok(Date.parse(refreshed.expiresAt) > Date.parse('2020-01-01T00:00:00.000Z'));
   assert.equal(refreshed.collectedAt, store.loadKeyword(runId, 0)?.collectedAt);
 
-  // Expired entries count as misses everywhere: the live line, the manifest
-  // rollup, and the run keywords agree on the same numbers.
+  // Expired entries are their own bucket everywhere: never double-counted as
+  // misses, so the buckets add up to the processed keyword count.
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
+  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 0 miss \/ 1 expired \/ 0 refreshed\)/);
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
-  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
-  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 1, expired: 1, refreshed: 0 });
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number; hitRatePercent: number } } };
+  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 0, expired: 1, refreshed: 0, hitRatePercent: 0 });
   store.close();
   cache.close();
 });
@@ -445,7 +451,7 @@ test('cache hit rate appears in progress lines', async () => {
   cache.close();
 });
 
-test('expired entries are accounted as misses in the live line and the manifest', async () => {
+test('expired entries are accounted in their own bucket in the live line and the manifest', async () => {
   const store = RunStore.openInMemory();
   const cache = CacheStore.openInMemory();
   const runId = createRunId();
@@ -464,12 +470,13 @@ test('expired entries are accounted as misses in the live line and the manifest'
   );
   assert.equal(outcome.kind, 'finished');
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[3] as string, /Cache 75% \(3 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
+  assert.match(progressLines[3] as string, /Cache 75% \(3 hit \/ 0 miss \/ 1 expired \/ 0 refreshed\)/);
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
-  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
-  // misses includes the expired entry; expired remains visible separately.
-  assert.deepEqual(manifest.progress.cache, { hits: 3, misses: 1, expired: 1, refreshed: 0 });
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number; hitRatePercent: number } } };
+  // expired is its own bucket, never double-counted inside misses: the four
+  // buckets add up to the processed keyword count (3 + 0 + 1 + 0 = 4).
+  assert.deepEqual(manifest.progress.cache, { hits: 3, misses: 0, expired: 1, refreshed: 0, hitRatePercent: 75 });
   store.close();
   cache.close();
 });
@@ -487,7 +494,7 @@ test('expired entries survive a cache reopen and are accounted as expired', asyn
   first.close();
 
   // Session 2: the reopen must not purge the entry before it can be
-  // classified; the run reports it as an expired miss, not a plain miss.
+  // classified; the run reports it as expired in its own bucket.
   const reopened = CacheStore.open(cachePath);
   const logs: string[] = [];
   const outcome = await executeRun(
@@ -500,11 +507,16 @@ test('expired entries survive a cache reopen and are accounted as expired', asyn
   assert.equal(store.loadKeyword(runId, 0)?.cacheStatus, 'expired');
   assert.equal(store.loadRun(runId)?.lookups, 1);
   const progressLines = logs.filter((line) => line.startsWith('Keywords '));
-  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss \/ 1 expired \/ 0 refreshed\)/);
+  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 0 miss \/ 1 expired \/ 0 refreshed\)/);
   const manifest = JSON.parse(
     await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
-  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
-  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 1, expired: 1, refreshed: 0 });
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number; hitRatePercent: number } } };
+  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 0, expired: 1, refreshed: 0, hitRatePercent: 0 });
+  assert.equal(
+    manifest.progress.cache.hits + manifest.progress.cache.misses + manifest.progress.cache.expired + manifest.progress.cache.refreshed,
+    1,
+    'the cache buckets add up to the processed keyword count',
+  );
   // The refresh overwrote the stale row with a live one.
   const refreshed = reopened.getKeyword(buildKeywordCacheKey('compare lists', IDENTITY)) as CachedKeywordEntry;
   assert.ok(refreshed !== null);

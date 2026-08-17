@@ -174,10 +174,10 @@ checkpoint, so a run never depends on the cache row after it is committed.
 - a keyword entry is keyed by normalized keyword + market + `hl`/`gl` + `topN` +
   Surfer parser version + Google parser version; any change makes it a miss;
 - entries expire per status (`CACHE_TTL_*`): completed 7d, partial 6h, failed 1h.
-  An expired entry is a miss but stays stored: a reopen must not purge it before
-  the next run can classify it, so open-time cleanup only deletes rows that died
-  longer ago than the 30-day grace window (ancient data), and a refresh
-  overwrites the expired row it consumed;
+  An expired entry is not a hit but stays stored: a reopen must not purge it
+  before the next run can classify it, so open-time cleanup only deletes rows
+  that died longer ago than the 30-day grace window (ancient data), and a
+  refresh overwrites the expired row it consumed;
 - a valid hit is committed to the run without browser lookups, does not touch the
   circuit-breaker window, and keeps the original collection timestamp;
 - fresh results are written to the cache only after the run checkpoint succeeded;
@@ -198,22 +198,30 @@ checkpoint, so a run never depends on the cache row after it is committed.
   run DB, written into `keywords.json`, and rolled up into `manifest.json`
   progress plus the live progress line. The line shows every bucket so the
   accounting is always complete, e.g.
-  `Keywords 4/4 | Cache 75% (3 hit / 1 miss / 1 expired / 0 refreshed) | Browser lookups 1 | Errors 0`;
+  `Keywords 4/4 | Cache 75% (3 hit / 0 miss / 1 expired / 0 refreshed) | Browser lookups 1 | Errors 0`;
   the hit rate is the share of processed keywords served from the cache
-  (a forced refresh is a deliberate bypass, so it is not a hit);
+  (a forced refresh is a deliberate bypass, so it is not a hit); `manifest.json`
+  also reports the same value explicitly as `progress.cache.hitRatePercent`;
 - related-keyword entries live in the same cache under `related` keys scoped by
   the parent keyword and the same identity (market/hl/gl/topN/parser versions),
   with the expiry derived by the store from `storedAt + ttlMs`. Every entry is
   explicitly `ok` (rows), `empty` (genuinely no related keywords, cached so it
   is not refetched), or `error` (failed expansion, message kept, short TTL via
   `CACHE_TTL_RELATED_ERROR_MS`); `empty`/`error` are distinguishable from
-  "never fetched";
-- cache accounting is consistent everywhere: an expired entry counts as a miss
-  in the live progress line, the manifest rollup (`misses` includes `expired`,
-  which is reported separately), and the hit-rate math; `refreshed` is a
-  deliberate bypass and never a miss. Expired entries are reported even after
-  a reopen, because cleanup never deletes rows inside the grace window before
-  they were observed;
+  "never fetched". The contract is enforced on write: `ok` must carry rows and
+  `error=null`, `empty` must carry no rows and `error=null`, `error` must
+  carry no rows and a non-empty message — any other combination raises
+  `CACHE_DB_ERROR` instead of storing a placeholder that would look like a
+  successful expansion;
+- cache accounting is consistent everywhere and never double-counts: `hit`,
+  `miss`, `expired`, and `refreshed` are mutually exclusive and their sum
+  equals the number of processed keywords. An expired entry is reported as
+  `expired` only — it is not also counted as a `miss` — and `refreshed` is a
+  deliberate bypass that is never a hit. The live progress line, the manifest
+  rollup (`progress.cache` + `hitRatePercent`), and `keywords.json` all use
+  this single definition. Expired entries are reported even after a reopen,
+  because cleanup never deletes rows inside the grace window before they were
+  observed;
 - schema changes are safe: an existing database is copied to
   `cache.sqlite.pre-vN.bak` before the first migration, each migration is a
   single atomic transaction (a failure leaves the old version fully intact and
@@ -227,6 +235,14 @@ checkpoint, so a run never depends on the cache row after it is committed.
   error into exit code 1;
 - if the cache DB cannot be opened, the CLI fails loudly with `CACHE_DB_ERROR`
   (exit 3) instead of silently running uncached.
+
+**Safe cache reset.** A full reset means: stop the runner (Ctrl+C; the run is
+checkpointed and resumable), then delete `data/cache/cache.sqlite` together
+with its WAL sidecars `cache.sqlite-wal` and `cache.sqlite-shm` (the three
+files form one database). The `cache.sqlite.pre-vN.bak` migration backups are
+historical evidence of prior schema versions and must not be deleted without
+an explicit decision — they are the only record of the cache content before a
+schema migration.
 
 A preflight runs before any keyword work and verifies: Research Chrome reachable, Google reachable, Keyword Surfer present, run directory writable. A CAPTCHA pauses the run and asks for manual intervention instead of retrying blindly.
 

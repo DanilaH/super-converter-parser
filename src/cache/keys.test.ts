@@ -7,6 +7,7 @@ import {
   normalizeDomain,
   type CacheIdentity,
 } from './keys.js';
+import { normalizeKeyword } from '../input/seeds/normalize.js';
 
 const IDENTITY: CacheIdentity = {
   market: 'US',
@@ -43,6 +44,16 @@ test('keyword cache keys differ when any identity field changes', () => {
   ];
   for (const [label, change] of cases) {
     assert.notEqual(buildKeywordCacheKey('compare lists', { ...IDENTITY, ...change }), base, label);
+  }
+});
+
+test('keywords that differ only in case or whitespace normalize to one cache key', () => {
+  const variants = ['Compare Lists', '  compare   lists  ', 'COMPARE LISTS', 'compare lists'];
+  const normalized = variants.map(normalizeKeyword);
+  assert.equal(new Set(normalized).size, 1);
+  const key = buildKeywordCacheKey('compare lists', IDENTITY);
+  for (const variant of variants) {
+    assert.equal(buildKeywordCacheKey(normalizeKeyword(variant), IDENTITY), key, variant);
   }
 });
 
