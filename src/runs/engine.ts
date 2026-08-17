@@ -232,6 +232,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         samples,
       ),
     );
+
+    // A SIGINT that arrived while this keyword was being collected must pause
+    // the run even when this was the last keyword. The keyword result is
+    // already committed and checkpointed above; the pause is recorded below.
+    if (hooks.pauseRequested()) {
+      outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.' };
+      break;
+    }
   }
 
   if (outcome === null) {

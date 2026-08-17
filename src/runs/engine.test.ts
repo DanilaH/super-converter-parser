@@ -296,6 +296,55 @@ test('SIGINT during the active keyword checkpoints it, then pauses before the ne
   store.close();
 });
 
+test('SIGINT during the last keyword checkpoints it and still pauses the run', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-sigint-last-'));
+  let calls = 0;
+  let pause = false;
+  const first = await executeRun(
+    baseOptions(store, runId, runDirectory, {
+      collect: async (keyword) => {
+        calls += 1;
+        if (calls === 4) pause = true;
+        return okResult(keyword);
+      },
+      hooks: makeHooks({ pauseRequested: () => pause }),
+    }),
+  );
+  assert.equal(first.kind, 'paused');
+  assert.equal(store.loadRun(runId)?.state, 'paused');
+  assert.equal(calls, 4);
+  assert.deepEqual(
+    store.loadKeywords(runId).map((k) => k.status),
+    ['completed', 'completed', 'completed', 'completed'],
+  );
+  assert.equal(store.loadRun(runId)?.lookups, 4);
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as { state: string; progress: { completedKeywords: number; totalKeywords: number } };
+  assert.equal(manifest.state, 'paused');
+  assert.equal(manifest.progress.completedKeywords, 4);
+
+  // A resume with nothing pending finalizes without re-collecting anything.
+  const second = await executeRun(
+    baseOptions(store, runId, runDirectory, {
+      mode: 'resume',
+      keywords: [],
+      collect: async (keyword) => {
+        calls += 1;
+        return okResult(keyword);
+      },
+    }),
+  );
+  assert.equal(second.kind, 'finished');
+  assert.equal(second.state, 'completed');
+  assert.equal(calls, 4);
+  assert.equal(store.loadRun(runId)?.lookups, 4);
+  assert.equal(store.loadRun(runId)?.state, 'completed');
+  store.close();
+});
+
 test('each keyword is committed before the next one starts', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();

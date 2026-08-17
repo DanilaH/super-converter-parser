@@ -9,7 +9,7 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { collectKeyword, type CollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
-import { RunStore } from '../db/store.js';
+import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -140,17 +140,20 @@ export async function runCli(
 
   let pauseRequested = false;
   let sigintCount = 0;
-  process.on('SIGINT', () => {
+  // Named so the listener can be removed in finally without touching any
+  // SIGINT handlers registered by other code in the same process.
+  const onSigint = () => {
     sigintCount += 1;
     if (sigintCount === 1) {
       console.log('');
       console.log('Stopping... (Ctrl+C again to force quit)');
       pauseRequested = true;
     } else {
-      process.removeAllListeners('SIGINT');
+      process.off('SIGINT', onSigint);
       process.kill(process.pid, 'SIGINT');
     }
-  });
+  };
+  process.on('SIGINT', onSigint);
 
   let browser: Browser | null = null;
   let store: RunStore | null = null;
@@ -208,13 +211,23 @@ export async function runCli(
       console.log(`  ✓ runs/${runId}/run.sqlite initialized (schema v${store.version})`);
     }
 
-    browser = await deps.connect(runConfig.browser.cdpUrl);
-    console.log(`  ✓ Research Chrome connected (${runConfig.browser.cdpUrl})`);
+    // A resume with nothing left to collect must not touch the browser: the
+    // run finalizes from the store alone.
+    const needsBrowser =
+      mode === 'fresh' ||
+      store.loadKeywords(runId).filter((k) => !isTerminalKeywordStatus(k.status)).length > 0;
 
-    const context = getPrimaryContext(browser);
-    await deps.preflight(context, runConfig);
-    console.log('  ✓ Google reachable');
-    console.log(`  ✓ Keyword Surfer injection detected; configured market: ${runConfig.research.market}`);
+    let context: BrowserContext | null = null;
+    if (needsBrowser) {
+      browser = await deps.connect(runConfig.browser.cdpUrl);
+      console.log(`  ✓ Research Chrome connected (${runConfig.browser.cdpUrl})`);
+      context = getPrimaryContext(browser);
+      await deps.preflight(context, runConfig);
+      console.log('  ✓ Google reachable');
+      console.log(`  ✓ Keyword Surfer injection detected; configured market: ${runConfig.research.market}`);
+    } else {
+      console.log('  ✓ no keywords remain; finalizing without browser work');
+    }
 
     if (mode === 'fresh') {
       const rows = await loadSeedRows(options.seedsPath as string);
@@ -240,8 +253,10 @@ export async function runCli(
       input,
       runDirectory,
       debugRoot,
+      // collect only runs when there are pending keywords, which implies the
+      // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
-        deps.collect(context, runConfig, record, debugRootForKeyword),
+        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
       hooks,
     });
 
@@ -267,11 +282,12 @@ export async function runCli(
     return EXIT_INTERNAL;
   } finally {
     store?.close();
-    // Do NOT call browser.close(): the Research Chrome is an operator-owned
-    // persistent process (connectOverCDP close() terminates it). Dropping the
-    // reference disconnects us while leaving the browser alive for the next
-    // run/resume.
+    // close() on a connectOverCDP browser only closes the CDP connection (the
+    // operator's Chrome process survives); leaving it open would keep the
+    // event loop alive and hang the CLI after it has returned its exit code.
+    await browser?.close().catch(() => undefined);
     browser = null;
+    process.off('SIGINT', onSigint);
   }
 }
 

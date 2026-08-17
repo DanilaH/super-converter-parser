@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { RunStore, SCHEMA_VERSION } from './store.js';
 import { loadConfig } from '../config/config.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
@@ -130,6 +131,49 @@ test('commitKeyword persists keyword and SERP rows in one write and replaces row
   >;
   assert.equal(afterReplace.status, 'partial');
   assert.equal(store.loadSerpRows(runId).length, 1);
+  store.close();
+});
+
+test('commitKeyword rolls back atomically when the SERP insert fails', () => {
+  const { store, runId } = makeStore();
+  const row = (position: number) => ({
+    keyword: 'compare lists',
+    position,
+    title: `t${position}`,
+    url: `https://example.com/${position}`,
+    hostname: 'example.com',
+    resultType: 'organic' as const,
+  });
+  store.replaceSerpRows(runId, 0, [row(1), row(2)]);
+
+  // Break every SERP insert from inside SQLite so the transaction aborts
+  // after the keyword UPDATE has already executed.
+  const db = (store as unknown as { db: Database.Database }).db;
+  db.exec(
+    `CREATE TRIGGER serp_insert_abort BEFORE INSERT ON serp_rows
+     BEGIN SELECT RAISE(ABORT, 'test injection'); END`,
+  );
+
+  const target = store.loadKeyword(runId, 0) as NonNullable<
+    ReturnType<RunStore['loadKeyword']>
+  >;
+  assert.throws(() =>
+    store.commitKeyword(
+      runId,
+      { ...target, status: 'completed', collectedAt: '2026-01-01T00:00:00.000Z' },
+      [row(3)],
+    ),
+  );
+
+  // Neither the terminal keyword status nor the previous SERP rows changed.
+  const after = store.loadKeyword(runId, 0) as NonNullable<
+    ReturnType<RunStore['loadKeyword']>
+  >;
+  assert.equal(after.status, 'pending');
+  assert.equal(after.collectedAt, null);
+  assert.equal(store.loadSerpRows(runId).length, 2);
+  assert.equal(store.loadSerpRows(runId)[0]?.position, 1);
+  assert.equal(store.loadSerpRows(runId)[1]?.position, 2);
   store.close();
 });
 
