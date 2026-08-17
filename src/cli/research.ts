@@ -264,7 +264,11 @@ export async function runCli(
     return EXIT_INTERNAL;
   } finally {
     store?.close();
-    await browser?.close().catch(() => undefined);
+    // Do NOT call browser.close(): the Research Chrome is an operator-owned
+    // persistent process (connectOverCDP close() terminates it). Dropping the
+    // reference disconnects us while leaving the browser alive for the next
+    // run/resume.
+    browser = null;
   }
 }
 
