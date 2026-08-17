@@ -372,7 +372,7 @@ function progressLine(
     const averageMs = samples.reduce((sum, value) => sum + value, 0) / samples.length;
     eta = ` | ETA ~${formatDuration(Math.round(averageMs * remaining))}`;
   }
-  return `Keywords ${processed}/${total} | Cache ${hitRate}% (${cache.hits} hit / ${cache.misses + cache.expired} miss) | Browser lookups ${lookups} | Errors ${progress.errors}${eta}`;
+  return `Keywords ${processed}/${total} | Cache ${hitRate}% (${cache.hits} hit / ${cache.misses} miss) | Browser lookups ${lookups} | Errors ${progress.errors}${eta}`;
 }
 
 function formatDuration(ms: number): string {

@@ -32,6 +32,7 @@ export type ResearchConfig = {
       partialMs: number;
       failedMs: number;
       relatedMs: number;
+      relatedErrorMs: number;
       domainOkMs: number;
       domainNotFoundMs: number;
       domainErrorMs: number;
@@ -70,6 +71,7 @@ const DEFAULTS: ResearchConfig = {
       partialMs: 6 * 60 * 60 * 1000,
       failedMs: 60 * 60 * 1000,
       relatedMs: 7 * 24 * 60 * 60 * 1000,
+      relatedErrorMs: 60 * 60 * 1000,
       domainOkMs: 30 * 24 * 60 * 60 * 1000,
       domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
       domainErrorMs: 60 * 60 * 1000,
@@ -141,6 +143,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     partialMs: readPositiveInt('CACHE_TTL_PARTIAL_MS', env.CACHE_TTL_PARTIAL_MS, DEFAULTS.cache.ttl.partialMs),
     failedMs: readPositiveInt('CACHE_TTL_FAILED_MS', env.CACHE_TTL_FAILED_MS, DEFAULTS.cache.ttl.failedMs),
     relatedMs: readPositiveInt('CACHE_TTL_RELATED_MS', env.CACHE_TTL_RELATED_MS, DEFAULTS.cache.ttl.relatedMs),
+    relatedErrorMs: readPositiveInt(
+      'CACHE_TTL_RELATED_ERROR_MS',
+      env.CACHE_TTL_RELATED_ERROR_MS,
+      DEFAULTS.cache.ttl.relatedErrorMs,
+    ),
     domainOkMs: readPositiveInt('CACHE_TTL_DOMAIN_OK_MS', env.CACHE_TTL_DOMAIN_OK_MS, DEFAULTS.cache.ttl.domainOkMs),
     domainNotFoundMs: readPositiveInt(
       'CACHE_TTL_DOMAIN_NOT_FOUND_MS',

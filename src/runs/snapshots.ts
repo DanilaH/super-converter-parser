@@ -13,6 +13,11 @@ export function countProgress(keywords: StoredKeyword[]): {
   return { completed, partial, failed, errors: partial + failed };
 }
 
+// One definition of the truth for cache accounting: `misses` counts every
+// keyword that was not served from the cache, including expired entries, so
+// the manifest rollup, the live progress line, and hit-rate math always
+// agree. `expired` and `refreshed` are informational sub-buckets: expired is
+// part of misses; refreshed (a deliberate bypass) is not.
 export function countCacheStats(keywords: StoredKeyword[]): {
   hits: number;
   misses: number;
@@ -22,8 +27,10 @@ export function countCacheStats(keywords: StoredKeyword[]): {
   const stats = { hits: 0, misses: 0, expired: 0, refreshed: 0 };
   for (const item of keywords) {
     if (item.cacheStatus === 'hit') stats.hits += 1;
-    else if (item.cacheStatus === 'miss') stats.misses += 1;
-    else if (item.cacheStatus === 'expired') stats.expired += 1;
+    else if (item.cacheStatus === 'expired') {
+      stats.misses += 1;
+      stats.expired += 1;
+    } else if (item.cacheStatus === 'miss') stats.misses += 1;
     else if (item.cacheStatus === 'refreshed') stats.refreshed += 1;
   }
   return stats;

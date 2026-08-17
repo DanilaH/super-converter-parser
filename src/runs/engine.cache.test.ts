@@ -192,11 +192,14 @@ test('expired entries are misses that refresh the cache with a new expiry', asyn
   const store = RunStore.openInMemory();
   const cache = CacheStore.openInMemory();
   const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'cache-expired-'));
   primeCache(cache, 'compare lists', 'completed', 1000, '2020-01-01T00:00:00.000Z');
 
+  const logs: string[] = [];
   const outcome = await executeRun(
-    baseOptions(store, runId, await mkdtemp(join(tmpdir(), 'cache-expired-')), cache, {
+    baseOptions(store, runId, runDirectory, cache, {
       keywords: KEYWORDS.slice(0, 1),
+      hooks: makeHooks({ logger: (line) => logs.push(line) }),
     }),
   );
   assert.equal(outcome.kind, 'finished');
@@ -206,6 +209,15 @@ test('expired entries are misses that refresh the cache with a new expiry', asyn
   assert.ok(refreshed !== null);
   assert.ok(Date.parse(refreshed.expiresAt) > Date.parse('2020-01-01T00:00:00.000Z'));
   assert.equal(refreshed.collectedAt, store.loadKeyword(runId, 0)?.collectedAt);
+
+  // Expired entries count as misses everywhere: the live line, the manifest
+  // rollup, and the run keywords agree on the same numbers.
+  const progressLines = logs.filter((line) => line.startsWith('Keywords '));
+  assert.match(progressLines[0] as string, /Cache 0% \(0 hit \/ 1 miss\)/);
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
+  assert.deepEqual(manifest.progress.cache, { hits: 0, misses: 1, expired: 1, refreshed: 0 });
   store.close();
   cache.close();
 });
@@ -429,6 +441,35 @@ test('cache hit rate appears in progress lines', async () => {
   assert.match(progressLines[0] as string, /Cache 100% \(1 hit \/ 0 miss\)/);
   assert.match(progressLines[1] as string, /Cache 50% \(1 hit \/ 1 miss\)/);
   assert.match(progressLines[3] as string, /Cache 25% \(1 hit \/ 3 miss\) \| Browser lookups 3 \| Errors 0/);
+  store.close();
+  cache.close();
+});
+
+test('expired entries are accounted as misses in the live line and the manifest', async () => {
+  const store = RunStore.openInMemory();
+  const cache = CacheStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'cache-expired-mixed-'));
+  const ttl = BASE_CONFIG.cache.ttl.completedMs;
+  primeCache(cache, 'compare lists', 'completed', 1000, '2020-01-01T00:00:00.000Z');
+  for (const keyword of KEYWORDS.slice(1)) {
+    primeCache(cache, keyword.normalizedKeyword, 'completed', ttl);
+  }
+
+  const logs: string[] = [];
+  const outcome = await executeRun(
+    baseOptions(store, runId, runDirectory, cache, {
+      hooks: makeHooks({ logger: (line) => logs.push(line) }),
+    }),
+  );
+  assert.equal(outcome.kind, 'finished');
+  const progressLines = logs.filter((line) => line.startsWith('Keywords '));
+  assert.match(progressLines[3] as string, /Cache 75% \(3 hit \/ 1 miss\)/);
+  const manifest = JSON.parse(
+    await readFile(join(runDirectory, 'manifest.json'), 'utf8'),
+  ) as { progress: { cache: { hits: number; misses: number; expired: number; refreshed: number } } };
+  // misses includes the expired entry; expired remains visible separately.
+  assert.deepEqual(manifest.progress.cache, { hits: 3, misses: 1, expired: 1, refreshed: 0 });
   store.close();
   cache.close();
 });

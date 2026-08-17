@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import {
   CACHE_SCHEMA_VERSION,
   ttlMsForKeywordStatus,
   ttlMsForDomainStatus,
+  ttlMsForRelatedStatus,
   type CacheTtlSettings,
   type CachedKeywordEntry,
   type CachedRelatedEntry,
@@ -117,6 +119,7 @@ test('failed entries keep their error and short TTL mapping', () => {
     partialMs: 6 * 60 * 60 * 1000,
     failedMs: 60 * 60 * 1000,
     relatedMs: 7 * 24 * 60 * 60 * 1000,
+    relatedErrorMs: 60 * 60 * 1000,
     domainOkMs: 30 * 24 * 60 * 60 * 1000,
     domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
     domainErrorMs: 60 * 60 * 1000,
@@ -127,6 +130,9 @@ test('failed entries keep their error and short TTL mapping', () => {
   assert.equal(ttlMsForDomainStatus('ok', ttl), 30 * 24 * 60 * 60 * 1000);
   assert.equal(ttlMsForDomainStatus('not_found', ttl), 30 * 24 * 60 * 60 * 1000);
   assert.equal(ttlMsForDomainStatus('error', ttl), 60 * 60 * 1000);
+  assert.equal(ttlMsForRelatedStatus('ok', ttl), 7 * 24 * 60 * 60 * 1000);
+  assert.equal(ttlMsForRelatedStatus('empty', ttl), 7 * 24 * 60 * 60 * 1000);
+  assert.equal(ttlMsForRelatedStatus('error', ttl), 60 * 60 * 1000);
 });
 
 test('related cache roundtrip preserves parent keyword, identity and TTL-derived expiry', () => {
@@ -139,6 +145,8 @@ test('related cache roundtrip preserves parent keyword, identity and TTL-derived
       cacheKey: key,
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
+      status: 'ok',
+      error: null,
       rows: [
         { relatedKeyword: 'compare lists online', overlap: 80, volume: 1200 },
         { relatedKeyword: 'compare two lists', overlap: 60, volume: 800 },
@@ -155,6 +163,8 @@ test('related cache roundtrip preserves parent keyword, identity and TTL-derived
   assert.equal(loaded.expiresAt, '2026-01-08T00:00:00.000Z');
   assert.equal(loaded.normalizedKeyword, 'compare lists');
   assert.deepEqual(loaded.identity, IDENTITY);
+  assert.equal(loaded.status, 'ok');
+  assert.equal(loaded.error, null);
   assert.equal(store.getRelated('other'), null);
   store.close();
 });
@@ -166,6 +176,8 @@ test('related entries are scoped by identity: a different market cannot read the
       cacheKey: buildRelatedCacheKey('compare lists', IDENTITY),
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
+      status: 'ok',
+      error: null,
       rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
     },
     '2026-01-01T00:00:00.000Z',
@@ -178,6 +190,75 @@ test('related entries are scoped by identity: a different market cannot read the
   store.close();
 });
 
+test('related entries cache empty and error states distinctly from never-fetched', () => {
+  const store = CacheStore.openInMemory();
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  const ttlMs = 7 * 24 * 60 * 60 * 1000;
+
+  // A genuinely empty expansion is cached, not treated as a miss.
+  const emptyKey = buildRelatedCacheKey('no related', IDENTITY);
+  store.putRelated(
+    {
+      cacheKey: emptyKey,
+      normalizedKeyword: 'no related',
+      identity: IDENTITY,
+      status: 'empty',
+      error: null,
+      rows: [],
+    },
+    storedAt,
+    ttlMs,
+  );
+  const empty = store.getRelated(emptyKey) as CachedRelatedEntry;
+  assert.equal(empty?.status, 'empty');
+  assert.deepEqual(empty?.rows, []);
+  assert.equal(empty?.error, null);
+  assert.equal(empty?.expiresAt, '2026-01-08T00:00:00.000Z');
+
+  // A failed expansion is cached with its error for a short TTL.
+  const errorKey = buildRelatedCacheKey('broken keyword', IDENTITY);
+  store.putRelated(
+    {
+      cacheKey: errorKey,
+      normalizedKeyword: 'broken keyword',
+      identity: IDENTITY,
+      status: 'error',
+      error: 'SURFER_PARSE_ERROR: related sidebar not found',
+      rows: [],
+    },
+    storedAt,
+    60 * 60 * 1000,
+  );
+  const error = store.getRelated(errorKey) as CachedRelatedEntry;
+  assert.equal(error?.status, 'error');
+  assert.equal(error?.error, 'SURFER_PARSE_ERROR: related sidebar not found');
+  assert.deepEqual(error?.rows, []);
+  assert.equal(error?.expiresAt, '2026-01-01T01:00:00.000Z');
+
+  // An error entry is replaced by a successful one in place.
+  store.putRelated(
+    {
+      cacheKey: errorKey,
+      normalizedKeyword: 'broken keyword',
+      identity: IDENTITY,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'fixed keyword', overlap: 50, volume: 400 }],
+    },
+    storedAt,
+    ttlMs,
+  );
+  const fixed = store.getRelated(errorKey) as CachedRelatedEntry;
+  assert.equal(fixed?.status, 'ok');
+  assert.equal(fixed?.error, null);
+  assert.equal(fixed?.rows.length, 1);
+  assert.equal(fixed?.rows[0]?.relatedKeyword, 'fixed keyword');
+
+  // A key that was never written is still a miss.
+  assert.equal(store.getRelated('never-written'), null);
+  store.close();
+});
+
 test('putRelated replaces an existing entry and derives a fresh expiry', () => {
   const store = CacheStore.openInMemory();
   const key = buildRelatedCacheKey('compare lists', IDENTITY);
@@ -186,6 +267,8 @@ test('putRelated replaces an existing entry and derives a fresh expiry', () => {
       cacheKey: key,
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
+      status: 'ok',
+      error: null,
       rows: [{ relatedKeyword: 'old', overlap: 1, volume: 1 }],
     },
     '2026-01-01T00:00:00.000Z',
@@ -198,6 +281,8 @@ test('putRelated replaces an existing entry and derives a fresh expiry', () => {
       cacheKey: key,
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
+      status: 'ok',
+      error: null,
       rows: [{ relatedKeyword: 'new', overlap: 2, volume: 2 }],
     },
     storedAt,
@@ -210,7 +295,7 @@ test('putRelated replaces an existing entry and derives a fresh expiry', () => {
   store.close();
 });
 
-test('a v1 cache database migrates to v2 with default parent keyword fields', async () => {
+test('a v1 cache database migrates to the current schema and is backed up first', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-v1-'));
   const path = join(directory, 'cache.sqlite');
   const v1 = new Database(path);
@@ -258,24 +343,157 @@ test('a v1 cache database migrates to v2 with default parent keyword fields', as
       expires_at TEXT NOT NULL
     );
   `);
+  // A v1 keyword entry that must survive the migration.
+  v1.prepare(
+    `INSERT INTO keyword_cache
+       (cache_key, keyword, normalized_keyword, identity, status, surfer, google, error, collected_at, stored_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
+  ).run(
+    'k1',
+    'compare lists',
+    'compare lists',
+    JSON.stringify(IDENTITY),
+    'completed',
+    JSON.stringify({ volume: 49500 }),
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    '2026-12-08T00:00:00.000Z',
+  );
   v1.close();
 
   const migrated = CacheStore.open(path);
   assert.equal(migrated.version, CACHE_SCHEMA_VERSION);
-  assert.equal(migrated.version, 2);
-  // v2 columns exist and are writable through the new contract.
+  assert.equal(migrated.version, 3);
+  // The pre-migration copy is preserved next to the original.
+  const backupPath = `${path}.pre-v1.bak`;
+  assert.ok(existsSync(backupPath));
+  const backup = new Database(backupPath);
+  assert.equal(backup.pragma('user_version', { simple: true }), 1);
+  assert.equal((backup.prepare('SELECT COUNT(*) AS c FROM keyword_cache').get() as { c: number }).c, 1);
+  backup.close();
+  // Existing data survived the structural changes.
+  assert.equal(migrated.getKeyword('k1')?.record.surfer?.volume, 49500);
+  // v2/v3 columns exist and are writable through the new contract.
   migrated.putRelated(
     {
       cacheKey: buildRelatedCacheKey('compare lists', IDENTITY),
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
-      rows: [{ relatedKeyword: 'x', overlap: 1, volume: 1 }],
+      status: 'empty',
+      error: null,
+      rows: [],
     },
     '2026-01-01T00:00:00.000Z',
     7 * 24 * 60 * 60 * 1000,
   );
-  assert.equal(migrated.getRelated(buildRelatedCacheKey('compare lists', IDENTITY))?.rows.length, 1);
+  const related = migrated.getRelated(buildRelatedCacheKey('compare lists', IDENTITY));
+  assert.equal(related?.status, 'empty');
+  assert.equal(migrated.getRelated('other'), null);
   migrated.close();
+});
+
+test('a failed migration rolls back atomically and leaves the old version intact', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-rollback-'));
+  const path = join(directory, 'cache.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  // v1 schema but related_cache already has a "keyword" column, so the v2
+  // ALTER ADD COLUMN must fail; the transaction must roll back everything.
+  v1.exec(`
+    CREATE TABLE keyword_cache (
+      cache_key TEXT PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      normalized_keyword TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      surfer TEXT,
+      google TEXT,
+      error TEXT,
+      collected_at TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE serp_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      keyword TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      hostname TEXT NOT NULL,
+      result_type TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE related_cache (
+      cache_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      related_keyword TEXT NOT NULL,
+      overlap INTEGER,
+      volume INTEGER,
+      keyword TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (cache_key, position)
+    );
+    CREATE TABLE domain_cache (
+      domain TEXT PRIMARY KEY,
+      dr REAL,
+      status TEXT NOT NULL,
+      error TEXT,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+  `);
+  v1.prepare(
+    `INSERT INTO keyword_cache
+       (cache_key, keyword, normalized_keyword, identity, status, surfer, google, error, collected_at, stored_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+  ).run('k1', 'x', 'x', '{}', 'pending', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-08T00:00:00.000Z');
+  v1.close();
+
+  assert.throws(
+    () => CacheStore.open(path),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+  );
+
+  // The failed migration left the file fully usable at v1 with its data.
+  const raw = new Database(path);
+  assert.equal(raw.pragma('user_version', { simple: true }), 1);
+  assert.equal((raw.prepare('SELECT COUNT(*) AS c FROM keyword_cache').get() as { c: number }).c, 1);
+  const columns = raw.prepare('PRAGMA table_info(related_cache)').all() as Array<{ name: string }>;
+  assert.ok(!columns.some((column) => column.name === 'identity'));
+  raw.close();
+});
+
+test('a cache database from a newer schema version is refused', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cache-migrate-future-'));
+  const path = join(directory, 'cache.sqlite');
+  const newer = new Database(path);
+  newer.pragma('user_version = 99');
+  newer.close();
+  assert.throws(
+    () => CacheStore.open(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'CACHE_DB_ERROR' &&
+      error.message.includes('newer than this build supports'),
+  );
+});
+
+test('store methods wrap driver failures as CACHE_DB_ERROR', () => {
+  const store = CacheStore.openInMemory();
+  store.close();
+  assert.throws(
+    () => store.getKeyword('x'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+  );
+  assert.throws(
+    () => store.getRelated('x'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+  );
+  assert.throws(
+    () => store.getDomain('x'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CACHE_DB_ERROR',
+  );
 });
 
 test('domain cache roundtrip with explicit TTL', () => {
@@ -312,6 +530,8 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
       cacheKey: 'related-expired',
       normalizedKeyword: 'compare lists',
       identity: IDENTITY,
+      status: 'ok',
+      error: null,
       rows: [{ relatedKeyword: 'x', overlap: null, volume: null }],
     },
     '2020-01-01T00:00:00.000Z',
@@ -364,7 +584,10 @@ test('TTL defaults match the documented cache semantics', () => {
   assert.equal(CONFIG.cache.ttl.completedMs, 7 * 24 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.partialMs, 6 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.failedMs, 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.relatedMs, 7 * 24 * 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.relatedErrorMs, 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.domainOkMs, 30 * 24 * 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.domainErrorMs, 60 * 60 * 1000);
 });
 
 test('keywordCacheIdentity comes from config and parser versions', () => {

@@ -111,7 +111,8 @@ Configuration via environment variables (all optional):
 | `CACHE_TTL_COMPLETED_MS` | `7d` | Cache TTL for completed keywords |
 | `CACHE_TTL_PARTIAL_MS` | `6h` | Cache TTL for partial keywords |
 | `CACHE_TTL_FAILED_MS` | `1h` | Cache TTL for failed keywords |
-| `CACHE_TTL_RELATED_MS` | `7d` | Cache TTL for related keywords |
+| `CACHE_TTL_RELATED_MS` | `7d` | Cache TTL for related keywords (ok and empty expansions) |
+| `CACHE_TTL_RELATED_ERROR_MS` | `1h` | Cache TTL for failed related-keyword expansions |
 | `CACHE_TTL_DOMAIN_OK_MS` | `30d` | Cache TTL for successful domain DR lookups |
 | `CACHE_TTL_DOMAIN_NOT_FOUND_MS` | `30d` | Cache TTL for not-found domain DR lookups |
 | `CACHE_TTL_DOMAIN_ERROR_MS` | `1h` | Cache TTL for failed domain DR lookups |
@@ -192,7 +193,23 @@ checkpoint, so a run never depends on the cache row after it is committed.
   `Keywords 4/4 | Cache 100% (4 hit / 0 miss) | Browser lookups 0 | Errors 0`;
 - related-keyword entries live in the same cache under `related` keys scoped by
   the parent keyword and the same identity (market/hl/gl/topN/parser versions),
-  with the `CACHE_TTL_RELATED_MS` expiry derived by the store from `storedAt`;
+  with the expiry derived by the store from `storedAt + ttlMs`. Every entry is
+  explicitly `ok` (rows), `empty` (genuinely no related keywords, cached so it
+  is not refetched), or `error` (failed expansion, message kept, short TTL via
+  `CACHE_TTL_RELATED_ERROR_MS`); `empty`/`error` are distinguishable from
+  "never fetched";
+- cache accounting is consistent everywhere: an expired entry counts as a miss
+  in the live progress line, the manifest rollup (`misses` includes `expired`,
+  which is reported separately), and the hit-rate math; `refreshed` is a
+  deliberate bypass and never a miss;
+- schema changes are safe: an existing database is copied to
+  `cache.sqlite.pre-vN.bak` before the first migration, each migration is a
+  single atomic transaction (a failure leaves the old version fully intact and
+  raises `CACHE_DB_ERROR`), and a database from a newer schema version is
+  refused instead of opened silently;
+- every cache-store operation surfaces driver failures as `CACHE_DB_ERROR`
+  (exit 3) with the original cause attached; nothing leaks as a raw SQLite
+  error into exit code 1;
 - if the cache DB cannot be opened, the CLI fails loudly with `CACHE_DB_ERROR`
   (exit 3) instead of silently running uncached.
 

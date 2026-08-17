@@ -117,6 +117,7 @@ function printUsage(): void {
   console.log('  CACHE_TTL_PARTIAL_MS         Cache TTL for partial keywords in ms (default 6h)');
   console.log('  CACHE_TTL_FAILED_MS          Cache TTL for failed keywords in ms (default 1h)');
   console.log('  CACHE_TTL_RELATED_MS         Cache TTL for related keywords in ms (default 7d)');
+  console.log('  CACHE_TTL_RELATED_ERROR_MS   Cache TTL for failed related-keyword expansions in ms (default 1h)');
   console.log('  CACHE_TTL_DOMAIN_OK_MS       Cache TTL for successful DR lookups in ms (default 30d)');
   console.log('  CACHE_TTL_DOMAIN_NOT_FOUND_MS Cache TTL for not-found DR lookups in ms (default 30d)');
   console.log('  CACHE_TTL_DOMAIN_ERROR_MS    Cache TTL for failed DR lookups in ms (default 1h)');
