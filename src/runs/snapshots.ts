@@ -1,5 +1,13 @@
-import { RunStore, storedKeywordToRecord, type StoredKeyword, type StoredRun } from '../db/store.js';
-import { writeJsonAtomic, type RunManifest, type RunState } from './run.js';
+import {
+  RunStore,
+  isTerminalKeywordStatus,
+  storedKeywordToRecord,
+  type StoredKeyword,
+  type StoredRun,
+} from '../db/store.js';
+import { writeJsonAtomic, writeTextAtomic, type RunManifest, type RunState } from './run.js';
+import { renderCsv } from '../exports/csv.js';
+import type { SerpResult } from '../google/serp.js';
 
 export function countProgress(keywords: StoredKeyword[]): {
   completed: number;
@@ -91,4 +99,88 @@ export async function writeSnapshots(
     'keywords output',
   );
   await writeJsonAtomic(`${runDirectory}/serp.json`, serpRows, 'SERP output');
+  await writeTextAtomic(
+    `${runDirectory}/keywords.csv`,
+    renderKeywordsCsv(keywords, organicCounts(runId, store)),
+    'keywords CSV',
+  );
+  await writeTextAtomic(`${runDirectory}/serp.csv`, renderSerpCsv(serpRows), 'SERP CSV');
 }
+
+function organicCounts(runId: string, store: RunStore): Map<number, number> {
+  return new Map(store.loadSerpRowCounts(runId).map((item) => [item.keywordIdx, item.count]));
+}
+
+// Operator-facing keyword export: exactly one row per canonical keyword in
+// input order, with the fixed column contract of TASK-004. Missing values are
+// empty cells (never "null"/"undefined"); numeric zero is a real value. The
+// organic count comes from the run checkpoint, not from cache state.
+export function renderKeywordsCsv(keywords: StoredKeyword[], organicCounts: Map<number, number>): string {
+  const rows = [KEYWORDS_CSV_HEADERS];
+  for (const keyword of keywords) {
+    const organic =
+      isTerminalKeywordStatus(keyword.status)
+        ? String(organicCounts.get(keyword.idx) ?? 0)
+        : '';
+    rows.push([
+      keyword.keyword,
+      keyword.normalizedKeyword,
+      sourceRowsValue(keyword),
+      keyword.surfer === null || keyword.surfer.volume === null ? '' : String(keyword.surfer.volume),
+      keyword.surfer === null || keyword.surfer.cpc === null ? '' : String(keyword.surfer.cpc),
+      keyword.surfer?.market ?? '',
+      keyword.google?.hl ?? '',
+      keyword.google?.gl ?? '',
+      keyword.google?.pageUrl ?? '',
+      keyword.google?.detectedLocation ?? '',
+      keyword.google === null ? '' : String(keyword.google.geoWarning),
+      organic,
+      keyword.status,
+      keyword.error?.code ?? '',
+      keyword.error?.message ?? '',
+      keyword.cacheStatus ?? '',
+      keyword.collectedAt ?? '',
+    ]);
+  }
+  return renderCsv(rows);
+}
+
+// One row per stored organic result, ordered by keyword input index and then
+// position; keywords without organic results contribute no rows.
+export function renderSerpCsv(serpRows: SerpResult[]): string {
+  const rows = [SERP_CSV_HEADERS];
+  for (const row of serpRows) {
+    rows.push([row.keyword, String(row.position), row.title, row.url, row.hostname, row.resultType]);
+  }
+  return renderCsv(rows);
+}
+
+function sourceRowsValue(keyword: StoredKeyword): string {
+  const rows = Array.from(
+    new Set(keyword.sources.flatMap((source) => source.rowNumbers)),
+  );
+  rows.sort((a, b) => a - b);
+  return rows.join('|');
+}
+
+const KEYWORDS_CSV_HEADERS = [
+  'keyword',
+  'normalized_keyword',
+  'source_rows',
+  'surfer_volume',
+  'surfer_cpc',
+  'surfer_market',
+  'google_hl',
+  'google_gl',
+  'google_url',
+  'detected_google_location',
+  'geo_warning',
+  'organic_result_count',
+  'status',
+  'error_code',
+  'error_message',
+  'cache_status',
+  'collected_at',
+];
+
+const SERP_CSV_HEADERS = ['keyword', 'position', 'title', 'url', 'hostname', 'result_type'];

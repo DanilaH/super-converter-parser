@@ -302,6 +302,17 @@ export class RunStore {
     }));
   }
 
+  // Organic result counts per keyword, read from the run checkpoint (the
+  // same rows that serp.json/serp.csv publish), never from cache state.
+  loadSerpRowCounts(runId: string): Array<{ keywordIdx: number; count: number }> {
+    return this.db
+      .prepare(
+        `SELECT keyword_idx AS keywordIdx, COUNT(*) AS count
+         FROM serp_rows WHERE run_id = ? GROUP BY keyword_idx`,
+      )
+      .all(runId) as Array<{ keywordIdx: number; count: number }>;
+  }
+
   updateKeyword(runId: string, keyword: StoredKeyword): void {
     this.db
       .prepare(

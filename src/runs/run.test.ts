@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug } from './run.js';
+import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug, writeTextAtomic } from './run.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -75,4 +75,28 @@ test('createRunDirectory refuses to reuse an existing run without modifying it',
       error.message.includes('refusing to overwrite'),
   );
   assert.equal(await readFile(markerPath, 'utf8'), marker);
+});
+
+test('writeTextAtomic publishes content and cleans up its temp file', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'urr-text-atomic-'));
+  const target = join(parent, 'keywords.csv');
+  await writeTextAtomic(target, '\uFEFFa,b\r\n', 'keywords CSV');
+  assert.equal(await readFile(target, 'utf8'), '\uFEFFa,b\r\n');
+  const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(leftovers, []);
+});
+
+test('a failing text write raises OUTPUT_WRITE_ERROR and leaves no temp file behind', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'urr-text-fail-'));
+  // A directory at the target path forces the final rename to fail on every
+  // platform, exactly like a blocked artifact location; no partially-written
+  // file can appear and the temp file must be cleaned up.
+  const target = join(parent, 'keywords.csv');
+  await mkdir(target);
+  await assert.rejects(
+    writeTextAtomic(target, '\uFEFFnew,content\r\n', 'keywords CSV'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+  );
+  const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(leftovers, []);
 });

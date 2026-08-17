@@ -172,10 +172,30 @@ export async function writeJsonAtomic(
   data: unknown,
   description: string,
 ): Promise<void> {
+  let content: string;
+  try {
+    content = `${JSON.stringify(data, null, 2)}\n`;
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to serialize ${description} for "${path}".`,
+      { cause: error },
+    );
+  }
+  await writeTextAtomic(path, content, description);
+}
+
+// Atomic text publication with the same recoverable semantics as JSON: write
+// to a temp file, rename over the target, and clean the temp file up on
+// failure, so a crash or an error never exposes a partially-written target.
+export async function writeTextAtomic(
+  path: string,
+  content: string,
+  description: string,
+): Promise<void> {
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
-    const serialized = `${JSON.stringify(data, null, 2)}\n`;
-    await writeFile(tempPath, serialized, 'utf8');
+    await writeFile(tempPath, content, 'utf8');
     await rename(tempPath, path);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
