@@ -25,6 +25,19 @@ export type ResearchConfig = {
     surferFailureThreshold: number;
     googleConsecutiveThreshold: number;
   };
+  cache: {
+    path: string;
+    ttl: {
+      completedMs: number;
+      partialMs: number;
+      failedMs: number;
+      relatedMs: number;
+      relatedErrorMs: number;
+      domainOkMs: number;
+      domainNotFoundMs: number;
+      domainErrorMs: number;
+    };
+  };
 };
 
 const DEFAULTS: ResearchConfig = {
@@ -50,6 +63,19 @@ const DEFAULTS: ResearchConfig = {
     surferWindow: 15,
     surferFailureThreshold: 12,
     googleConsecutiveThreshold: 10,
+  },
+  cache: {
+    path: 'data/cache/cache.sqlite',
+    ttl: {
+      completedMs: 7 * 24 * 60 * 60 * 1000,
+      partialMs: 6 * 60 * 60 * 1000,
+      failedMs: 60 * 60 * 1000,
+      relatedMs: 7 * 24 * 60 * 60 * 1000,
+      relatedErrorMs: 60 * 60 * 1000,
+      domainOkMs: 30 * 24 * 60 * 60 * 1000,
+      domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
+      domainErrorMs: 60 * 60 * 1000,
+    },
   },
 };
 
@@ -112,6 +138,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     );
   }
 
+  const cacheTtl = {
+    completedMs: readPositiveInt('CACHE_TTL_COMPLETED_MS', env.CACHE_TTL_COMPLETED_MS, DEFAULTS.cache.ttl.completedMs),
+    partialMs: readPositiveInt('CACHE_TTL_PARTIAL_MS', env.CACHE_TTL_PARTIAL_MS, DEFAULTS.cache.ttl.partialMs),
+    failedMs: readPositiveInt('CACHE_TTL_FAILED_MS', env.CACHE_TTL_FAILED_MS, DEFAULTS.cache.ttl.failedMs),
+    relatedMs: readPositiveInt('CACHE_TTL_RELATED_MS', env.CACHE_TTL_RELATED_MS, DEFAULTS.cache.ttl.relatedMs),
+    relatedErrorMs: readPositiveInt(
+      'CACHE_TTL_RELATED_ERROR_MS',
+      env.CACHE_TTL_RELATED_ERROR_MS,
+      DEFAULTS.cache.ttl.relatedErrorMs,
+    ),
+    domainOkMs: readPositiveInt('CACHE_TTL_DOMAIN_OK_MS', env.CACHE_TTL_DOMAIN_OK_MS, DEFAULTS.cache.ttl.domainOkMs),
+    domainNotFoundMs: readPositiveInt(
+      'CACHE_TTL_DOMAIN_NOT_FOUND_MS',
+      env.CACHE_TTL_DOMAIN_NOT_FOUND_MS,
+      DEFAULTS.cache.ttl.domainNotFoundMs,
+    ),
+    domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
+  };
+
   const config: ResearchConfig = {
     research: {
       market: (env.RESEARCH_MARKET ?? DEFAULTS.research.market).trim(),
@@ -142,6 +187,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     },
     retry,
     circuitBreaker,
+    cache: {
+      path: (env.CACHE_DB_PATH ?? DEFAULTS.cache.path).trim(),
+      ttl: cacheTtl,
+    },
   };
 
   if (!config.research.market || !config.research.googleHl || !config.research.googleGl) {
@@ -157,6 +206,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
 
   if (!config.browser.surferWidgetSelector) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'SURFER_WIDGET_SELECTOR must not be empty.');
+  }
+
+  if (!config.cache.path) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'CACHE_DB_PATH must not be empty.');
   }
 
   return config;

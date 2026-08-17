@@ -235,3 +235,191 @@ test('writeJsonAtomic failure leaves no temp files behind', async () => {
   const files = await readdir(directory);
   assert.deepEqual(files, ['snapshot.json']);
 });
+
+const V1_SCHEMA = `
+  CREATE TABLE runs (
+    run_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    input_path TEXT NOT NULL,
+    config_snapshot TEXT NOT NULL,
+    parser_versions TEXT NOT NULL,
+    lookups INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT
+  );
+
+  CREATE TABLE keywords (
+    run_id TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    keyword TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    sources TEXT NOT NULL,
+    status TEXT NOT NULL,
+    surfer TEXT,
+    google TEXT,
+    error TEXT,
+    collected_at TEXT,
+    PRIMARY KEY (run_id, idx)
+  );
+
+  CREATE TABLE serp_rows (
+    run_id TEXT NOT NULL,
+    keyword_idx INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    hostname TEXT NOT NULL,
+    result_type TEXT NOT NULL,
+    PRIMARY KEY (run_id, keyword_idx, position)
+  );
+`;
+
+test('a v1 run store migrates to the current schema with its data intact', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-migrate-v1-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'completed', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 3, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.2.0' }),
+  );
+  v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status, surfer, google, error, collected_at)
+     VALUES ('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', ?, 'completed', ?, ?, NULL, ?)`,
+  ).run(
+    JSON.stringify([{ type: 'seed', rowNumbers: [1] }]),
+    JSON.stringify({ volume: 49500 }),
+    JSON.stringify({ hl: 'en', gl: 'us' }),
+    '2026-01-01T00:00:00.000Z',
+  );
+  v1.prepare(
+    `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, result_type)
+     VALUES ('run-1', 0, 1, 'compare lists', 'title', 'https://example.com/1', 'example.com', 'organic')`,
+  ).run();
+  v1.close();
+
+  const migrated = RunStore.open(path);
+  assert.equal(migrated.version, SCHEMA_VERSION);
+  const run = migrated.loadRun('run-1') as NonNullable<ReturnType<RunStore['loadRun']>>;
+  // v2 columns default sanely for a migrated run.
+  assert.equal(run.forceRefresh, false);
+  assert.deepEqual(run.refreshKeywords, []);
+  assert.equal(run.lookups, 3);
+  assert.equal(run.input.path, 'input/seeds.csv');
+  const keyword = migrated.loadKeywords('run-1')[0] as NonNullable<ReturnType<RunStore['loadKeywords']>>[number];
+  // Terminal keywords of a pre-cache (v1) run were collected fresh, never
+  // from the cache: the migration marks them 'miss' so cache accounting
+  // stays complete; pending keywords keep null.
+  assert.equal(keyword.cacheStatus, 'miss');
+  assert.equal(keyword.surfer?.volume, 49500);
+  assert.equal(migrated.loadSerpRows('run-1').length, 1);
+  // The v2 columns are writable through the new contract.
+  migrated.setRunCacheRefresh('run-1', true, ['standing desk']);
+  assert.equal(migrated.loadRun('run-1')?.forceRefresh, true);
+  migrated.close();
+});
+
+test('a v1 migration marks terminal keywords as miss and leaves pending as null', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-migrate-v1-status-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'paused', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 2, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.2.0' }),
+  );
+  const insertKeyword = v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertKeyword.run('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', '[]', 'completed');
+  insertKeyword.run('run-1', 1, 'kw-0002', 'best office chairs', 'best office chairs', '[]', 'partial');
+  insertKeyword.run('run-1', 2, 'kw-0003', 'standing desk', 'standing desk', '[]', 'failed');
+  insertKeyword.run('run-1', 3, 'kw-0004', 'ergonomic mouse', 'ergonomic mouse', '[]', 'pending');
+  insertKeyword.run('run-1', 4, 'kw-0005', 'broken keyword', 'broken keyword', '[]', 'running');
+  v1.close();
+
+  const migrated = RunStore.open(path);
+  assert.deepEqual(
+    migrated.loadKeywords('run-1').map((keyword) => keyword.cacheStatus),
+    ['miss', 'miss', 'miss', null, null],
+  );
+  migrated.close();
+});
+
+test('a failed run-store migration rolls back atomically and leaves the old version intact', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-migrate-rollback-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  // v1 schema but runs already has a "force_refresh" column, so the v2 ALTER
+  // ADD COLUMN must fail; the transaction must roll back everything.
+  v1.exec(V1_SCHEMA.replace(
+    'pause_reason TEXT',
+    'pause_reason TEXT,\n    force_refresh INTEGER NOT NULL DEFAULT 0',
+  ));
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'created', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 0, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.2.0' }),
+  );
+  v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+     VALUES ('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', ?, 'pending')`,
+  ).run(JSON.stringify([{ type: 'seed', rowNumbers: [1] }]));
+  v1.close();
+
+  assert.throws(
+    () => RunStore.open(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'DB_ERROR' &&
+      error.message.includes('migration v2 failed'),
+  );
+
+  // The failed migration left the file fully usable at v1 with its data.
+  const raw = new Database(path);
+  assert.equal(raw.pragma('user_version', { simple: true }), 1);
+  assert.equal((raw.prepare('SELECT COUNT(*) AS c FROM runs').get() as { c: number }).c, 1);
+  const columns = raw.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
+  assert.ok(!columns.some((column) => column.name === 'refresh_keywords'));
+  raw.close();
+});
+
+test('a run store from a newer schema version is refused', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-migrate-future-'));
+  const path = join(directory, 'run.sqlite');
+  const newer = new Database(path);
+  newer.pragma('user_version = 99');
+  newer.close();
+  assert.throws(
+    () => RunStore.open(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'DB_ERROR' &&
+      error.message.includes('newer than this build supports'),
+  );
+});

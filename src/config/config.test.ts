@@ -26,6 +26,7 @@ test('loadConfig applies environment overrides', () => {
     GOOGLE_GL: 'de',
     TOP_N: '15',
     SURFER_WIDGET_SELECTOR: '#broken-selector',
+    CACHE_TTL_RELATED_ERROR_MS: '1800000',
   } as NodeJS.ProcessEnv);
 
   assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9333');
@@ -37,6 +38,7 @@ test('loadConfig applies environment overrides', () => {
   assert.equal(config.research.googleGl, 'de');
   assert.equal(config.research.topN, 15);
   assert.equal(config.browser.surferWidgetSelector, '#broken-selector');
+  assert.equal(config.cache.ttl.relatedErrorMs, 1800000);
 });
 
 test('loadConfig rejects invalid TOP_N', () => {

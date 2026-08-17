@@ -7,7 +7,7 @@
   "scripts": {
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
-    "test": "tsx --test src/config/config.test.ts src/input/seeds/normalize.test.ts src/surfer/parser.test.ts src/google/serp.test.ts src/runs/run.test.ts src/db/store.test.ts src/runs/policies.test.ts src/runs/engine.test.ts src/runs/engine.snapshot.test.ts src/cli/research.test.ts",
+    "test": "tsx --test src/config/config.test.ts src/input/seeds/normalize.test.ts src/surfer/parser.test.ts src/google/serp.test.ts src/runs/run.test.ts src/db/store.test.ts src/runs/policies.test.ts src/runs/engine.test.ts src/runs/engine.snapshot.test.ts src/runs/engine.cache.test.ts src/cache/keys.test.ts src/cache/store.test.ts src/cache/resolve.test.ts src/cli/research.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

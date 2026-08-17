@@ -2,6 +2,7 @@ node_modules/
 /debug/
 /runs/
 /output/
+/data/
 .research-profile/
 .research-cft/
 .research-cft2/
