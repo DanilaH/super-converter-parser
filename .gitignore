@@ -3,6 +3,8 @@ node_modules/
 /runs/
 /output/
 .research-profile/
+.research-cft/
+.research-cft2/
 playwright-report/
 test-results/
 .env

@@ -10,7 +10,8 @@ test('loadConfig returns defaults', () => {
   assert.equal(config.research.googleGl, 'us');
   assert.equal(config.research.topN, 10);
   assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9222');
-  assert.equal(config.browser.surferWaitTimeoutMs, 30000);
+  assert.equal(config.browser.surferWaitTimeoutMs, 60000);
+  assert.equal(config.browser.surferPreflightTimeoutMs, 60000);
   assert.equal(config.browser.surferWidgetSelector, '.surfer-main-keyword-widget');
 });
 
@@ -18,6 +19,7 @@ test('loadConfig applies environment overrides', () => {
   const config = loadConfig({
     CDP_URL: 'http://127.0.0.1:9333',
     SURFER_WAIT_MS: '45000',
+    SURFER_PREFLIGHT_TIMEOUT_MS: '45000',
     NAVIGATION_TIMEOUT_MS: '90000',
     RESEARCH_MARKET: 'DE',
     GOOGLE_HL: 'de',
@@ -28,6 +30,7 @@ test('loadConfig applies environment overrides', () => {
 
   assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9333');
   assert.equal(config.browser.surferWaitTimeoutMs, 45000);
+  assert.equal(config.browser.surferPreflightTimeoutMs, 45000);
   assert.equal(config.browser.navigationTimeoutMs, 90000);
   assert.equal(config.research.market, 'DE');
   assert.equal(config.research.googleHl, 'de');
@@ -54,5 +57,23 @@ test('loadConfig rejects non-numeric timeouts', () => {
     () => loadConfig({ SURFER_WAIT_MS: 'abc' } as NodeJS.ProcessEnv),
     (error: unknown) =>
       error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+  );
+});
+
+test('loadConfig rejects breaker failures exceeding the window', () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        BREAKER_SURFER_WINDOW: '15',
+        BREAKER_SURFER_FAILURES: '16',
+      } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+  );
+  assert.doesNotThrow(() =>
+    loadConfig({
+      BREAKER_SURFER_WINDOW: '15',
+      BREAKER_SURFER_FAILURES: '15',
+    } as NodeJS.ProcessEnv),
   );
 });
