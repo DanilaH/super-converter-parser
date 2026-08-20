@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename as fsRename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
@@ -196,7 +196,7 @@ export async function writeTextAtomic(
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
     await writeFile(tempPath, content, 'utf8');
-    await rename(tempPath, path);
+    await renameImpl(tempPath, path);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw new ResearchError(
@@ -205,4 +205,12 @@ export async function writeTextAtomic(
       { cause: error },
     );
   }
+}
+
+// Test seam: lets tests force a deterministic rename failure without deleting
+// the target file first (which would not prove the existing file is preserved).
+let renameImpl: (oldPath: string, newPath: string) => Promise<void> = fsRename;
+
+export function setRenameForTesting(fn: (oldPath: string, newPath: string) => Promise<void>): void {
+  renameImpl = fn;
 }

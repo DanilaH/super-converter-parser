@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunStore, type StoredKeyword } from '../db/store.js';
@@ -440,7 +440,7 @@ test('a partial keyword appears in keywords.csv with its organic count', async (
   store.close();
 });
 
-test('an atomic snapshot failure leaves the previously published CSV intact', async () => {
+test('an atomic snapshot failure preserves the previously published CSV byte-for-byte', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();
   const runDirectory = await mkdtemp(join(tmpdir(), 'csv-atomic-preserve-'));
@@ -475,37 +475,41 @@ test('an atomic snapshot failure leaves the previously published CSV intact', as
     'hit',
   );
 
-  // First publish succeeds and produces the previously published artifact.
+  // First publish succeeds and produces the previously published artifacts.
   await writeSnapshots(store, runId, runDirectory, 'running');
-  const published = await readFile(join(runDirectory, 'keywords.csv'), 'utf8');
-  await writeFile(join(runDirectory, 'keywords.csv.old'), published, 'utf8');
+  const target = join(runDirectory, 'keywords.csv');
+  const manifestPath = join(runDirectory, 'manifest.json');
+  const published = await readFile(target, 'utf8');
+  const previousManifest = await readFile(manifestPath, 'utf8');
 
-  // Block the next publish at the keywords.csv path: a directory at the
-  // target makes the atomic rename fail, exactly like a blocked artifact
-  // location. The previously published file is moved out of the way first.
-  await rm(join(runDirectory, 'keywords.csv'));
-  const blocker = join(runDirectory, 'keywords.csv');
-  await mkdir(blocker);
+  // Deterministic failure: force the atomic rename to throw. We do NOT delete
+  // the target first — that would only prove a missing file stays missing.
+  // The point is that an existing target must survive the failed replace.
+  const { setRenameForTesting } = await import('../runs/run.js');
+  setRenameForTesting(async () => {
+    throw new Error('rename blocked');
+  });
+  try {
+    await assert.rejects(
+      () => writeSnapshots(store, runId, runDirectory, 'running'),
+      (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+    );
 
-  await assert.rejects(
-    () => writeSnapshots(store, runId, runDirectory, 'running'),
-    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
-  );
+    // The existing target CSV is byte-for-byte unchanged and no temp file leaked.
+    assert.equal(await readFile(target, 'utf8'), published);
+    const leftovers = (await readdir(runDirectory)).filter((name) => name.includes('.tmp-'));
+    assert.deepEqual(leftovers, []);
+    // The previously published manifest remains on disk, so the run stays
+    // resumable even though the new snapshot publish failed.
+    assert.equal(await readFile(manifestPath, 'utf8'), previousManifest);
+    assert.equal(store.loadRun(runId)?.state, 'created');
+  } finally {
+    setRenameForTesting(fsRename);
+  }
 
-  // The previously published CSV is untouched, no partial file or temp file
-  // leaked, and the run stays resumable (manifestless snapshot).
-  assert.equal(await readFile(join(runDirectory, 'keywords.csv.old'), 'utf8'), published);
-  const leftovers = (await readdir(runDirectory)).filter((name) => name.includes('.tmp-'));
-  assert.deepEqual(leftovers, []);
-  // The run never reached a terminal state, so it stays resumable even though
-  // the snapshot publish failed.
-  assert.equal(store.loadRun(runId)?.state, 'created');
-
-  // Removing the block and republishing succeeds and restores keywords.csv
-  // from the current checkpoint; the preserved copy is still readable.
-  await rm(blocker, { recursive: true, force: true });
+  // With the block lifted, a republish succeeds and overwrites with the same
+  // content from the current checkpoint.
   await writeSnapshots(store, runId, runDirectory, 'completed');
-  assert.equal(await readFile(join(runDirectory, 'keywords.csv'), 'utf8'), published);
-  assert.equal(await readFile(join(runDirectory, 'keywords.csv.old'), 'utf8'), published);
+  assert.equal(await readFile(target, 'utf8'), published);
   store.close();
 });

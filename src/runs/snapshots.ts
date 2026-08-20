@@ -105,9 +105,10 @@ export async function writeSnapshots(
   );
   await writeTextAtomic(`${runDirectory}/serp.csv`, renderSerpCsv(serpRows), 'SERP CSV');
   // The manifest is the last artifact written: every data file is on disk
-  // before the marker exists, so a crash or a publish failure leaves the run
-  // manifestless (and therefore resumable) rather than appearing finished
-  // with a partial artifact set.
+  // before it, so if publishing fails mid-way the previously published
+  // manifest (and data files) remain on disk. The run stays resumable and the
+  // operator can distinguish a real failure from a finished run, instead of
+  // seeing a partial artifact set dressed up as complete.
   await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
 }
 

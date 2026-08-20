@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename as fsRename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug, writeTextAtomic } from './run.js';
@@ -86,17 +86,26 @@ test('writeTextAtomic publishes content and cleans up its temp file', async () =
   assert.deepEqual(leftovers, []);
 });
 
-test('a failing text write raises OUTPUT_WRITE_ERROR and leaves no temp file behind', async () => {
+test('a failing rename preserves an existing target file and leaves no temp file behind', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'urr-text-fail-'));
-  // A directory at the target path forces the final rename to fail on every
-  // platform, exactly like a blocked artifact location; no partially-written
-  // file can appear and the temp file must be cleaned up.
   const target = join(parent, 'keywords.csv');
-  await mkdir(target);
-  await assert.rejects(
-    writeTextAtomic(target, '\uFEFFnew,content\r\n', 'keywords CSV'),
-    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
-  );
-  const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
-  assert.deepEqual(leftovers, []);
+  // Existing target with known content; we must prove it survives, not that a
+  // missing file stays missing.
+  await writeFile(target, '\uFEFForiginal\r\n', 'utf8');
+  const { setRenameForTesting } = await import('./run.js');
+  setRenameForTesting(async () => {
+    throw new Error('rename blocked');
+  });
+  try {
+    await assert.rejects(
+      writeTextAtomic(target, '\uFEFFnew,content\r\n', 'keywords CSV'),
+      (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+    );
+    // The existing target is byte-for-byte unchanged and the temp file is gone.
+    assert.equal(await readFile(target, 'utf8'), '\uFEFForiginal\r\n');
+    const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    setRenameForTesting(fsRename);
+  }
 });
