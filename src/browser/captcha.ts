@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline/promises';
+import { existsSync, rmSync } from 'node:fs';
 import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 
@@ -23,11 +24,26 @@ export async function waitForManualCaptcha(page: Page): Promise<void> {
 
 export async function pauseForManualCaptcha(page: Page): Promise<void> {
   console.log('\nGoogle просит ручную проверку.');
-  console.log('Реши CAPTCHA в окне Research Chrome, затем нажми Enter здесь.');
+  console.log('Реши CAPTCHA в окне Research Chrome.');
 
-  const input = createInterface({ input: process.stdin, output: process.stdout });
-  await input.question('');
-  input.close();
+  const marker = process.env.CAPTCHA_DONE_MARKER ?? 'C:\\tmp\\captcha-done.txt';
+
+  if (process.stdin.isTTY) {
+    console.log('Затем нажми Enter здесь.');
+    const input = createInterface({ input: process.stdin, output: process.stdout });
+    await input.question('');
+    input.close();
+  } else {
+    console.log(`Затем создай файл-маркер: ${marker}`);
+    const start = Date.now();
+    while (!existsSync(marker)) {
+      if (Date.now() - start > 10 * 60 * 1000) {
+        throw new ResearchError('CAPTCHA_REQUIRED', 'CAPTCHA wait timeout (marker not created).');
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    rmSync(marker, { force: true });
+  }
 
   await page.waitForLoadState('domcontentloaded').catch(() => undefined);
 }

@@ -288,3 +288,59 @@ CSV + report + machine status
 ```
 
 The operator should not manually open every Google/Ahrefs page.
+
+---
+
+## Live research run (Chrome + Keyword Surfer)
+
+The runner connects to a running Chrome over CDP (`CDP_URL`, default `http://127.0.0.1:9222`).
+Surfer must be installed in that Chrome (`hasSurfer` preflight check).
+
+### Critical: user-data-dir must not contain spaces
+
+The operator's real profile lives at a path with a space
+(`C:\Users\Biba Bobovich\AppData\Local\Google\Chrome\User Data`). Chrome does **not**
+open the DevTools port when launched with `--user-data-dir` containing a space
+(every launch method — cmd/bat/PowerShell `&`/Node spawn — reports `CDP: DOWN`).
+
+Workaround that works (proven live):
+
+1. Copy the real `Default` profile to a space-free path, e.g. `C:\tmp\research-profile`
+   (robocopy, exclude caches; keep `Local Extension Settings` so Surfer carries over).
+2. Launch Chrome on that copy:
+
+   ```bat
+   @echo off
+   start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+     --remote-debugging-port=9333 ^
+     --user-data-dir=C:\tmp\research-profile ^
+     --profile-directory=Default ^
+     --remote-allow-origins=*
+   ```
+
+3. In `chrome://extensions`, enable / re-install Keyword Surfer (a copied profile is
+   treated as non-standard, so Chrome may disable extensions on first launch).
+4. Run the research against the copy:
+
+   ```text
+   CDP_URL=http://127.0.0.1:9333 npm run research -- --seeds input/seeds.csv --expand
+   ```
+
+CDP on the space-free copy works and Surfer injects (proven: live returned
+`compare lists -> volume 49,500 | cpc $7.90 | organic 9`, identical to the spike).
+
+### Known live limitation: related-keywords widget
+
+The related-keywords widget `.keyword-surfer-sidebar` is parsed correctly from the
+**real spike DOM** (fixture `test/fixtures/surfer-related-table.html` ->
+`instagram / 50% / 30400000`). However, in a copied/free Surfer profile the widget
+often does **not** render on the live SERP page. When it is absent, related expansion
+is recorded as a non-fatal structured error (`related.status = 'error'`) and the
+keyword still completes with its main volume/cpc/organic data. This is an environment
+limitation of the Surfer account/extension state, not a parser defect.
+
+### CAPTCHA in background runs
+
+`pauseForManualCaptcha` waits for stdin when `process.stdin.isTTY`, otherwise polls for
+the marker file `C:\tmp\captcha-done.txt` (override with `CAPTCHA_DONE_MARKER`). Create
+the file after solving CAPTCHA in the Research Chrome window to let a background run resume.

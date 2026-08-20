@@ -96,6 +96,10 @@ export async function collectKeyword(
     let related: SurferRelatedOutcome = { status: 'empty', error: null, rows: [] };
     const isSeed = keyword.sources.some((source) => source.type === 'seed');
     if (config.expansion.enabled && config.expansion.depth >= 1 && isSeed) {
+      // The related-keywords widget can mount lazily after the main Surfer
+      // widget; scroll the results so Surfer renders it before we read.
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+      await page.waitForTimeout(1000);
       try {
         const parsed = await readSurferRelated(
           page,
@@ -107,8 +111,10 @@ export async function collectKeyword(
             ? { status: 'ok', error: null, rows: parsed }
             : { status: 'empty', error: null, rows: [] };
       } catch (error) {
-        const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
-        errors.push({ code, message });
+        // Related-keyword expansion is optional enrichment: a missing/broken
+        // widget must not downgrade an otherwise-successful keyword. The error
+        // is preserved in the structured related outcome for traceability.
+        const { code } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
         related = { status: 'error', error: code, rows: [] };
       }
     }
