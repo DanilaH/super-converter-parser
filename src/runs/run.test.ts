@@ -13,7 +13,7 @@ test('buildKeywordRecords persists seed provenance in output records', () => {
     { keyword: 'compare lists', rowNumber: 3 },
     { keyword: 'zip code lookup', rowNumber: 2 },
   ]);
-  const records = buildKeywordRecords(keywords);
+  const records = buildKeywordRecords(keywords, 'seeds');
 
   assert.equal(records.length, 2);
   assert.deepEqual(records[0]!.sources, [{ type: 'seed', rowNumbers: [1, 3] }]);
@@ -21,10 +21,13 @@ test('buildKeywordRecords persists seed provenance in output records', () => {
 });
 
 test('buildKeywordRecords emits deterministic ids and pending state', () => {
-  const records = buildKeywordRecords([
-    { keyword: 'a', normalizedKeyword: 'a', sourceRows: [1] },
-    { keyword: 'b', normalizedKeyword: 'b', sourceRows: [2] },
-  ]);
+  const records = buildKeywordRecords(
+    [
+      { keyword: 'a', normalizedKeyword: 'a', sourceRows: [1] },
+      { keyword: 'b', normalizedKeyword: 'b', sourceRows: [2] },
+    ],
+    'seeds',
+  );
 
   assert.equal(records[0]!.id, 'kw-0001');
   assert.equal(records[1]!.id, 'kw-0002');

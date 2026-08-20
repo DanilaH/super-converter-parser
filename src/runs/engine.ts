@@ -1,5 +1,6 @@
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
+import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { CollectionResult } from '../browser/collect.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
@@ -67,9 +68,9 @@ export type ExecuteRunOptions = {
   store: RunStore;
   runId: string;
   mode: 'fresh' | 'resume';
-  keywords: SeedKeyword[];
+  keywords: SeedKeyword[] | MicrosoftKeyword[];
   config: ResearchConfig;
-  input: { kind: 'seeds'; path: string };
+  input: { kind: 'seeds' | 'microsoft'; path: string };
   runDirectory: string;
   debugRoot: string;
   collect: CollectKeywordFn;

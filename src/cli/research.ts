@@ -7,6 +7,8 @@ import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
 import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
+import { loadMicrosoftRows } from '../input/microsoft/load.js';
+import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, type CollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
@@ -25,6 +27,7 @@ export const EXIT_PAUSED = 130;
 
 type CliOptions = {
   seedsPath: string | null;
+  microsoftPath: string | null;
   resumeRunId: string | null;
   forceRefresh: boolean;
   refreshKeywords: string[];
@@ -52,6 +55,7 @@ export const DEFAULT_CLI_DEPS: CliDeps = {
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     seedsPath: null,
+    microsoftPath: null,
     resumeRunId: null,
     forceRefresh: false,
     refreshKeywords: [],
@@ -60,6 +64,9 @@ function parseArgs(argv: string[]): CliOptions {
     const arg = argv[index] as string;
     if (arg === '--seeds') {
       options.seedsPath = argv[index + 1] ?? null;
+      index += 1;
+    } else if (arg === '--microsoft') {
+      options.microsoftPath = argv[index + 1] ?? null;
       index += 1;
     } else if (arg === '--resume') {
       options.resumeRunId = argv[index + 1] ?? null;
@@ -88,10 +95,12 @@ function printUsage(): void {
   console.log('  npm run research -- --seeds <path>');
   console.log('  npm run research -- --seeds <path> --force-refresh');
   console.log('  npm run research -- --seeds <path> --refresh-keyword "json diff"');
+  console.log('  npm run research -- --microsoft <path>');
   console.log('  npm run research -- --resume <run-id>');
   console.log('');
   console.log('Options:');
   console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
+  console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
@@ -199,7 +208,15 @@ export async function runCli(
     console.error('--seeds and --resume are mutually exclusive.');
     return EXIT_INVALID_INPUT;
   }
-  if (!options.seedsPath && !options.resumeRunId) {
+  if (options.microsoftPath && options.resumeRunId) {
+    console.error('--microsoft and --resume are mutually exclusive.');
+    return EXIT_INVALID_INPUT;
+  }
+  if (options.seedsPath && options.microsoftPath) {
+    console.error('--seeds and --microsoft are mutually exclusive.');
+    return EXIT_INVALID_INPUT;
+  }
+  if (!options.seedsPath && !options.microsoftPath && !options.resumeRunId) {
     printUsage();
     return EXIT_INVALID_INPUT;
   }
@@ -231,8 +248,8 @@ export async function runCli(
     let runDirectory: string;
     let debugRoot: string;
     let mode: 'fresh' | 'resume';
-    let keywords: SeedKeyword[] = [];
-    let input: { kind: 'seeds'; path: string };
+    let keywords: SeedKeyword[] | MicrosoftKeyword[] = [];
+    let input: { kind: 'seeds' | 'microsoft'; path: string };
     let refreshKeywords: string[] = [];
     let runConfig = config;
 
@@ -266,7 +283,9 @@ export async function runCli(
       runDirectory = `runs/${runId}`;
       debugRoot = `debug/${runId}`;
       mode = 'fresh';
-      input = { kind: 'seeds', path: options.seedsPath as string };
+      input = options.microsoftPath
+        ? { kind: 'microsoft', path: options.microsoftPath as string }
+        : { kind: 'seeds', path: options.seedsPath as string };
 
       console.log('Utility Research Runner');
       console.log('');
@@ -280,9 +299,15 @@ export async function runCli(
     }
 
     if (mode === 'fresh') {
-      const rows = await loadSeedRows(options.seedsPath as string);
-      keywords = buildSeedKeywords(rows);
-      console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
+      if (options.microsoftPath) {
+        const rows = await loadMicrosoftRows(options.microsoftPath);
+        keywords = buildMicrosoftKeywords(rows);
+        console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords (Microsoft)`);
+      } else {
+        const rows = await loadSeedRows(options.seedsPath as string);
+        keywords = buildSeedKeywords(rows);
+        console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
+      }
       refreshKeywords = validateRefreshKeywords(
         options.refreshKeywords,
         keywords.map((item) => item.normalizedKeyword),

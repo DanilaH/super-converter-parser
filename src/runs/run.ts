@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
+import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 
@@ -39,7 +40,7 @@ export type RunManifest = {
   updatedAt: string;
   state: RunState;
   input: {
-    kind: 'seeds';
+    kind: 'seeds' | 'microsoft';
     path: string;
   };
   configSnapshot: ResearchConfig;
@@ -67,11 +68,28 @@ export type RunManifest = {
   };
 };
 
+export type MicrosoftData = {
+  volumeBucket?: string | null;
+  volumeRaw?: number | null;
+  competition?: string | null;
+  cpc?: number | null;
+};
+
+export type MicrosoftSource = {
+  type: 'microsoft';
+  sourceRow: number;
+  adGroup?: string;
+  microsoft?: MicrosoftData;
+};
+
+export type KeywordSource = { type: 'seed'; rowNumbers: number[] } | MicrosoftSource;
+
 export type KeywordRecord = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
-  sources: Array<{ type: 'seed'; rowNumbers: number[] }>;
+  sources: KeywordSource[];
+  microsoft?: MicrosoftData | null;
   surfer: {
     volume: number | null;
     cpc: number | null;
@@ -110,17 +128,46 @@ export function keywordSlug(keyword: string): string {
   return slug.slice(0, 60) || 'keyword';
 }
 
-export function buildKeywordRecords(keywords: SeedKeyword[]): KeywordRecord[] {
-  return keywords.map((seed, index) => ({
-    id: `kw-${String(index + 1).padStart(4, '0')}`,
-    keyword: seed.keyword,
-    normalizedKeyword: seed.normalizedKeyword,
-    sources: [{ type: 'seed', rowNumbers: seed.sourceRows }],
-    surfer: null,
-    google: null,
-    status: 'pending',
-    error: null,
-  }));
+export function buildKeywordRecords(
+  keywords: SeedKeyword[] | MicrosoftKeyword[],
+  kind: 'seeds' | 'microsoft',
+): KeywordRecord[] {
+  return keywords.map((item, index) => {
+    if (kind === 'microsoft') {
+      const microsoft = item as MicrosoftKeyword;
+      return {
+        id: `kw-${String(index + 1).padStart(4, '0')}`,
+        keyword: microsoft.keyword,
+        normalizedKeyword: microsoft.normalizedKeyword,
+        sources: [
+          {
+            type: 'microsoft',
+            sourceRow: microsoft.sourceRows[0] ?? -1,
+            adGroup: microsoft.adGroup,
+            microsoft: microsoft.microsoft,
+          },
+        ],
+        microsoft: microsoft.microsoft,
+        surfer: null,
+        google: null,
+        status: 'pending',
+        error: null,
+      };
+    }
+
+    const seed = item as SeedKeyword;
+    return {
+      id: `kw-${String(index + 1).padStart(4, '0')}`,
+      keyword: seed.keyword,
+      normalizedKeyword: seed.normalizedKeyword,
+      sources: [{ type: 'seed', rowNumbers: seed.sourceRows }],
+      microsoft: null,
+      surfer: null,
+      google: null,
+      status: 'pending',
+      error: null,
+    };
+  });
 }
 
 export async function ensureWritableDirectory(directory: string): Promise<void> {
