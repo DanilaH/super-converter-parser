@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug, writeTextAtomic } from './run.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
+import { buildMicrosoftKeywords } from '../input/microsoft/normalize.js';
 import { ResearchError } from '../shared/errors.js';
 
 test('buildKeywordRecords persists seed provenance in output records', () => {
@@ -35,6 +36,42 @@ test('buildKeywordRecords emits deterministic ids and pending state', () => {
   assert.equal(records[0]!.surfer, null);
   assert.equal(records[0]!.google, null);
   assert.equal(records[0]!.error, null);
+});
+
+test('buildKeywordRecords preserves every Microsoft occurrence as a source', () => {
+  const keywords = buildMicrosoftKeywords([
+    {
+      adGroup: 'A',
+      keyword: 'dup keyword',
+      volumeBucket: '1K - 10K',
+      competition: null,
+      cpc: null,
+      rowNumber: 1,
+    },
+    {
+      adGroup: 'B',
+      keyword: 'dup keyword',
+      volumeBucket: null,
+      competition: '0.50',
+      cpc: 0.2,
+      rowNumber: 5,
+    },
+  ]);
+  const records = buildKeywordRecords(keywords, 'microsoft');
+
+  assert.equal(records.length, 1);
+  const sources = records[0]!.sources.filter((s) => s.type === 'microsoft');
+  assert.equal(sources.length, 2);
+  assert.deepEqual(
+    sources.map((s) => (s.type === 'microsoft' ? s.sourceRow : -1)),
+    [1, 5],
+  );
+  assert.equal(
+    sources[1]!.type === 'microsoft' && sources[1]!.cpc,
+    0.2,
+  );
+  // Aggregated signal is chosen deterministically, not from sourceRows[0].
+  assert.equal(records[0]!.microsoft?.volumeBucket, '1K - 10K');
 });
 
 test('keywordSlug produces stable artifact names', () => {

@@ -2,12 +2,13 @@ import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
-import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
+import { aggregateMicrosoft, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { SerpResult } from '../google/serp.js';
 import {
   TERMINAL_KEYWORD_STATUSES,
   type KeywordRecord,
   type KeywordSource,
+  type MicrosoftSource,
   type KeywordStatus,
   type RunState,
 } from '../runs/run.js';
@@ -236,14 +237,9 @@ export class RunStore {
         let sourcesJson: string;
         if (input.input.kind === 'microsoft') {
           const microsoft = item as MicrosoftKeyword;
-          sourcesJson = JSON.stringify([
-            {
-              type: 'microsoft',
-              sourceRow: microsoft.sourceRows[0],
-              adGroup: microsoft.adGroup,
-              microsoft: microsoft.microsoft,
-            },
-          ]);
+          sourcesJson = JSON.stringify(
+            microsoft.occurrences.map((occurrence) => ({ type: 'microsoft', ...occurrence })),
+          );
         } else {
           const seed = item as SeedKeyword;
           sourcesJson = JSON.stringify([{ type: 'seed', rowNumbers: seed.sourceRows }]);
@@ -469,9 +465,13 @@ function mapKeywordRow(row: KeywordRow): StoredKeyword {
 }
 
 export function storedKeywordToRecord(keyword: StoredKeyword): KeywordRecord {
-  const firstSource = keyword.sources[0];
-  const microsoft =
-    firstSource && firstSource.type === 'microsoft' ? (firstSource.microsoft ?? null) : null;
+  const microsoftSources = keyword.sources.filter(
+    (source): source is MicrosoftSource => source.type === 'microsoft',
+  );
+  // The aggregated Microsoft signal is derived deterministically from the
+  // preserved occurrences, so a load/resume round-trip reproduces the same
+  // value without storing a separate aggregate column.
+  const microsoft = microsoftSources.length > 0 ? aggregateMicrosoft(microsoftSources) : null;
   return {
     id: keyword.id,
     keyword: keyword.keyword,

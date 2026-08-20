@@ -66,10 +66,18 @@ function emptyToNull(value: string | undefined): string | null {
   return trimmed;
 }
 
-function parseNumberOrNull(value: string | null): number | null {
+// A non-empty, non-numeric value is a schema error (with the offending row and
+// column), not a silent null. Only an empty/`null` cell becomes null.
+function parseNumberOrThrow(value: string | null, rowNumber: number, column: string): number | null {
   if (value === null) return null;
   const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  if (!Number.isFinite(number)) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Microsoft file "${column}" at row ${rowNumber} is not a valid number: "${value}".`,
+    );
+  }
+  return number;
 }
 
 export async function loadMicrosoftRows(path: string): Promise<MicrosoftRow[]> {
@@ -123,7 +131,11 @@ export async function loadMicrosoftRows(path: string): Promise<MicrosoftRow[]> {
 
     const volumeBucket = emptyToNull(columns.volume ? record[columns.volume] : undefined);
     const competition = emptyToNull(columns.competition ? record[columns.competition] : undefined);
-    const cpc = parseNumberOrNull(emptyToNull(columns.cpc ? record[columns.cpc] : undefined));
+    const cpc = parseNumberOrThrow(
+      emptyToNull(columns.cpc ? record[columns.cpc] : undefined),
+      rowNumber,
+      columns.cpc ?? 'cpc',
+    );
 
     rows.push({
       adGroup: columns.adGroup ? (emptyToNull(record[columns.adGroup]) ?? '') : '',

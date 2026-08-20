@@ -84,6 +84,37 @@ test('loadMicrosoftRows rejects an empty Keyword cell', async () => {
   );
 });
 
+test('loadMicrosoftRows rejects a non-numeric CPC value with row and column', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ms-cpc-'));
+  const path = await writeCsv(
+    directory,
+    'cpc.csv',
+    'Keyword,Suggested Bid\nbad cpc,abc\n',
+  );
+
+  await assert.rejects(
+    () => loadMicrosoftRows(path),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes('row 2') &&
+      error.message.includes('Suggested Bid') &&
+      error.message.includes('not a valid number'),
+  );
+});
+
+test('loadMicrosoftRows treats an empty CPC cell as null, not an error', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ms-cpc-empty-'));
+  const path = await writeCsv(
+    directory,
+    'cpc-empty.csv',
+    'Keyword,Suggested Bid\nno cpc,-\n',
+  );
+
+  const rows = await loadMicrosoftRows(path);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.cpc, null);
+});
+
 test('loadMicrosoftRows rejects a non-CSV / unreadable file', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ms-missing-'));
   await assert.rejects(

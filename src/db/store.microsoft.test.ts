@@ -50,8 +50,12 @@ test('a Microsoft run stores keyword provenance and source columns', () => {
     'Pdf Page',
   );
   assert.equal(
-    addPages.sources[0]!.type === 'microsoft' && addPages.sources[0]!.microsoft?.volumeBucket,
+    addPages.sources[0]!.type === 'microsoft' && addPages.sources[0]!.volumeBucket,
     '100 - 1K',
+  );
+  assert.equal(
+    addPages.sources[0]!.type === 'microsoft' && addPages.sources[0]!.cpc,
+    0.11,
   );
 
   const record = storedKeywordToRecord(addPages);
@@ -59,7 +63,6 @@ test('a Microsoft run stores keyword provenance and source columns', () => {
   assert.equal(record.microsoft?.volumeRaw, 1000);
   assert.equal(record.microsoft?.competition, '0.85');
   assert.equal(record.microsoft?.cpc, 0.11);
-  assert.equal(record.microsoft?.volumeBucket, '100 - 1K');
 
   const compare = stored.find((item) => item.normalizedKeyword === 'compare lists')!;
   const compareRecord = storedKeywordToRecord(compare);
@@ -70,4 +73,75 @@ test('a Microsoft run stores keyword provenance and source columns', () => {
   const run = store.loadRun('run-ms-1');
   assert.equal(run?.input.kind, 'microsoft');
   assert.equal(run?.input.path, 'input/microsoft.csv');
+});
+
+test('a Microsoft keyword in multiple rows keeps every occurrence through create/load', () => {
+  const store = RunStore.openInMemory();
+  const rows: MicrosoftRow[] = [
+    {
+      adGroup: 'A',
+      keyword: 'dup keyword',
+      volumeBucket: '1K - 10K',
+      competition: null,
+      cpc: null,
+      rowNumber: 1,
+    },
+    {
+      adGroup: 'B',
+      keyword: 'dup keyword',
+      volumeBucket: null,
+      competition: '0.50',
+      cpc: 0.2,
+      rowNumber: 5,
+    },
+    {
+      adGroup: 'C',
+      keyword: 'dup keyword',
+      volumeBucket: '100 - 1K',
+      competition: null,
+      cpc: null,
+      rowNumber: 8,
+    },
+  ];
+  const keywords = buildMicrosoftKeywords(rows);
+
+  store.createRun({
+    runId: 'run-ms-dup',
+    configSnapshot: CONFIG,
+    parserVersions: { surfer: '1.0.0', google: '1.0.0' },
+    input: { kind: 'microsoft', path: 'input/microsoft.csv' },
+    keywords,
+  });
+
+  const stored = store.loadKeywords('run-ms-dup');
+  assert.equal(stored.length, 1);
+  const dup = stored[0]!;
+  assert.equal(dup.normalizedKeyword, 'dup keyword');
+
+  // All three source rows are preserved, not just sourceRows[0].
+  assert.equal(dup.sources.length, 3);
+  const microsoftSources = dup.sources.filter((s) => s.type === 'microsoft');
+  assert.equal(microsoftSources.length, 3);
+  assert.deepEqual(
+    microsoftSources.map((s) => (s.type === 'microsoft' ? s.sourceRow : -1)),
+    [1, 5, 8],
+  );
+  assert.deepEqual(
+    microsoftSources.map((s) => (s.type === 'microsoft' ? s.adGroup : '')),
+    ['A', 'B', 'C'],
+  );
+  assert.equal(
+    microsoftSources[1]!.type === 'microsoft' && microsoftSources[1]!.cpc,
+    0.2,
+  );
+
+  // The aggregated signal is chosen deterministically (most populated fields,
+  // lowest source row on ties) and survives the load round-trip unchanged.
+  const record = storedKeywordToRecord(dup);
+  assert.deepEqual(record.microsoft, {
+    volumeBucket: '1K - 10K',
+    volumeRaw: 10000,
+    competition: null,
+    cpc: null,
+  });
 });

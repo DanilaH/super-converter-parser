@@ -4,7 +4,11 @@ import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
-import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
+import type {
+  MicrosoftAggregate,
+  MicrosoftKeyword,
+  MicrosoftOccurrence,
+} from '../input/microsoft/normalize.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 
@@ -68,19 +72,10 @@ export type RunManifest = {
   };
 };
 
-export type MicrosoftData = {
-  volumeBucket?: string | null;
-  volumeRaw?: number | null;
-  competition?: string | null;
-  cpc?: number | null;
-};
-
-export type MicrosoftSource = {
-  type: 'microsoft';
-  sourceRow: number;
-  adGroup?: string;
-  microsoft?: MicrosoftData;
-};
+// One preserved Microsoft source row. It carries the full occurrence (not just
+// the row number), so duplicate keywords keep every contributing row's ad
+// group, volume, competition, and CPC provenance.
+export type MicrosoftSource = { type: 'microsoft' } & MicrosoftOccurrence;
 
 export type KeywordSource = { type: 'seed'; rowNumbers: number[] } | MicrosoftSource;
 
@@ -89,7 +84,7 @@ export type KeywordRecord = {
   keyword: string;
   normalizedKeyword: string;
   sources: KeywordSource[];
-  microsoft?: MicrosoftData | null;
+  microsoft?: MicrosoftAggregate | null;
   surfer: {
     volume: number | null;
     cpc: number | null;
@@ -139,14 +134,7 @@ export function buildKeywordRecords(
         id: `kw-${String(index + 1).padStart(4, '0')}`,
         keyword: microsoft.keyword,
         normalizedKeyword: microsoft.normalizedKeyword,
-        sources: [
-          {
-            type: 'microsoft',
-            sourceRow: microsoft.sourceRows[0] ?? -1,
-            adGroup: microsoft.adGroup,
-            microsoft: microsoft.microsoft,
-          },
-        ],
+        sources: microsoft.occurrences.map((occurrence) => ({ type: 'microsoft', ...occurrence })),
         microsoft: microsoft.microsoft,
         surfer: null,
         google: null,
