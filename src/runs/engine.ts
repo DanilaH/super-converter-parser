@@ -1,7 +1,7 @@
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import type { CollectionResult } from '../browser/collect.js';
-import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
+import { GOOGLE_PARSER_VERSION, type SerpResult } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import { ResearchError } from '../shared/errors.js';
@@ -29,7 +29,8 @@ import {
 } from './policies.js';
 import { keywordCacheIdentity, buildKeywordCacheKey } from '../cache/keys.js';
 import { mergedCacheRefresh, resolveKeywordAccess, type CacheResolution } from '../cache/resolve.js';
-import { ttlMsForKeywordStatus, type KeywordCache } from '../cache/store.js';
+import { CacheStore, ttlMsForKeywordStatus, type KeywordCache } from '../cache/store.js';
+import type { AhrefsClient } from '../ahrefs/client.js';
 
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
@@ -77,6 +78,10 @@ export type ExecuteRunOptions = {
   hooks: EngineHooks;
   publishSnapshots?: SnapshotsPublisher;
   cache?: EngineCacheOptions;
+  // Ahrefs Domain Rating enrichment. When present the engine resolves a DR for
+  // every registrable domain in the organic SERP and persists it next to the
+  // SERP row. Domain rating lookups are cached and rate limited.
+  ahrefs?: { apiKey: string | null; client: AhrefsClient };
 };
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
@@ -207,6 +212,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
     if (resolution.kind === 'hit') {
       const entry = resolution.entry;
+      await applyDomainRatings({
+        serpRows: entry.serpRows,
+        ahrefs: options.ahrefs?.client ?? null,
+        domainCache: (options.cache?.store ?? null) as CacheStore | null,
+        config,
+        now: hooks.now,
+        sleep: hooks.sleep,
+        logger,
+      });
       const committed: StoredKeyword = {
         ...stored,
         status: entry.record.status,
@@ -271,7 +285,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             ? 'expired'
             : 'miss'
         : null;
-      store.commitKeyword(runId, committed, result?.serpRows ?? [], cacheStatus);
+      const serpRows = result?.serpRows ?? [];
+      await applyDomainRatings({
+        serpRows,
+        ahrefs: options.ahrefs?.client ?? null,
+        domainCache: (options.cache?.store ?? null) as CacheStore | null,
+        config,
+        now: hooks.now,
+        sleep: hooks.sleep,
+        logger,
+      });
+      store.commitKeyword(runId, committed, serpRows, cacheStatus);
       breaker.record(record.status, record.error?.code ?? null);
       samples.push(hooks.now() - startAt);
 
@@ -443,6 +467,62 @@ function applySurferExpansion(params: {
     added.push(candidate.keyword);
   }
   return added;
+}
+
+// Resolves an Ahrefs Domain Rating for every distinct registrable domain in the
+// organic SERP, reusing the domain cache so repeated domains across keywords
+// trigger a single fresh lookup per TTL window. Mutates `serpRows` in place.
+export async function applyDomainRatings(params: {
+  serpRows: SerpResult[];
+  ahrefs: AhrefsClient | null;
+  domainCache: CacheStore | null;
+  config: ResearchConfig;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  logger: (line: string) => void;
+}): Promise<void> {
+  const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
+  if (!ahrefs || !domainCache) return;
+
+  const seen = new Set<string>();
+  for (const row of serpRows) {
+    const domain = row.registrableDomain;
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+
+    const cached = domainCache.getDomain(domain);
+    let dr: number | null = null;
+    if (cached && Date.parse(cached.expiresAt) > now()) {
+      dr = cached.dr;
+    } else {
+      try {
+        const rating = await ahrefs(domain);
+        const ttl =
+          rating.status === 'ok'
+            ? config.cache.ttl.domainOkMs
+            : rating.status === 'not_found'
+              ? config.cache.ttl.domainNotFoundMs
+              : config.cache.ttl.domainErrorMs;
+        domainCache.putDomain(
+          domain,
+          { dr: rating.dr, status: rating.status, error: rating.error ?? null },
+          new Date(now()).toISOString(),
+          ttl,
+        );
+        dr = rating.dr;
+      } catch (error) {
+        logger(
+          `  ⚠ Ahrefs DR lookup failed for ${domain}: ${error instanceof ResearchError ? error.code : 'AHREFS_ERROR'}`,
+        );
+        dr = null;
+      }
+      await sleep(config.ahrefs.rateLimitMinDelayMs);
+    }
+
+    for (const target of serpRows) {
+      if (target.registrableDomain === domain) target.dr = dr;
+    }
+  }
 }
 
 export type { RetrySettings, BreakerSettings };

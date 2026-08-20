@@ -8,13 +8,14 @@ import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { collectKeyword, type CollectionResult } from '../browser/collect.js';
-import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
+import { executeRun, validateResume, type EngineHooks, type ExecuteRunOptions } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, planRunCache } from '../cache/resolve.js';
+import { createAhrefsClient, type AhrefsClient } from '../ahrefs/client.js';
 
 export const EXIT_OK = 0;
 export const EXIT_INTERNAL = 1;
@@ -309,6 +310,16 @@ export async function runCli(
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
 
+    const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
+    let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
+    if (ahrefsApiKey) {
+      ahrefs = { apiKey: ahrefsApiKey, client: createAhrefsClient(ahrefsApiKey) };
+      console.log('  ✓ Ahrefs DR enrichment enabled (AHREFS_API_KEY detected)');
+    } else {
+      console.log('  • Ahrefs DR enrichment disabled (set AHREFS_API_KEY to enable)');
+    }
+    console.log('');
+
     // A fresh run's keywords exist only in the seeds (executeRun inserts them
     // into the store); a resume's pending keywords live in the run store.
     const pendingNormalized =
@@ -371,7 +382,7 @@ export async function runCli(
       runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
     }
 
-    const outcome = await executeRun({
+    const engineArgs: ExecuteRunOptions = {
       store,
       runId,
       mode,
@@ -391,7 +402,12 @@ export async function runCli(
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
       },
-    });
+    };
+    if (ahrefs) {
+      engineArgs.ahrefs = ahrefs;
+    }
+
+    const outcome = await executeRun(engineArgs);
 
     if (outcome.kind === 'paused') {
       console.log('');

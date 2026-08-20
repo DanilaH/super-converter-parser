@@ -46,6 +46,11 @@ export type ResearchConfig = {
       domainErrorMs: number;
     };
   };
+  ahrefs: {
+    rateLimitMinDelayMs: number;
+    rateLimitMaxDelayMs: number;
+    timeoutMs: number;
+  };
 };
 
 const DEFAULTS: ResearchConfig = {
@@ -92,6 +97,11 @@ const DEFAULTS: ResearchConfig = {
       domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
       domainErrorMs: 60 * 60 * 1000,
     },
+  },
+  ahrefs: {
+    rateLimitMinDelayMs: 1000,
+    rateLimitMaxDelayMs: 10_000,
+    timeoutMs: 15_000,
   },
 };
 
@@ -234,6 +244,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     retry,
     circuitBreaker,
     expansion,
+    ahrefs: {
+      rateLimitMinDelayMs: readPositiveNumber(
+        'AHREFS_MIN_DELAY_MS',
+        env.AHREFS_MIN_DELAY_MS,
+        DEFAULTS.ahrefs.rateLimitMinDelayMs,
+      ),
+      rateLimitMaxDelayMs: readPositiveNumber(
+        'AHREFS_MAX_DELAY_MS',
+        env.AHREFS_MAX_DELAY_MS,
+        DEFAULTS.ahrefs.rateLimitMaxDelayMs,
+      ),
+      timeoutMs: readPositiveNumber('AHREFS_TIMEOUT_MS', env.AHREFS_TIMEOUT_MS, DEFAULTS.ahrefs.timeoutMs),
+    },
     cache: {
       path: (env.CACHE_DB_PATH ?? DEFAULTS.cache.path).trim(),
       ttl: cacheTtl,

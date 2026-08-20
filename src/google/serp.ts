@@ -1,4 +1,5 @@
 import type { ResearchConfig } from '../config/config.js';
+import { registrableDomain } from '../domains/normalize.js';
 
 export const GOOGLE_PARSER_VERSION = '1.2.0';
 
@@ -19,6 +20,8 @@ export type SerpResult = {
   title: string;
   url: string;
   hostname: string;
+  registrableDomain: string;
+  dr: number | null;
   resultType: 'organic';
 };
 
@@ -89,6 +92,8 @@ export function buildOrganicResults(
       title: link.title,
       url: link.href,
       hostname: url.hostname,
+      registrableDomain: registrableDomain(url.hostname) ?? '',
+      dr: null,
       resultType: 'organic',
     });
 

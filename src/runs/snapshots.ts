@@ -56,6 +56,15 @@ export async function writeSnapshots(
   const progress = countProgress(keywords);
   const cacheStats = countCacheStats(keywords);
 
+  const uniqueDomains = new Set(
+    serpRows.map((row) => row.registrableDomain).filter((domain): domain is string => domain !== ''),
+  );
+  const completedDomains = new Set(
+    serpRows
+      .filter((row) => row.dr !== null && row.registrableDomain !== '')
+      .map((row) => row.registrableDomain),
+  ).size;
+
   const manifest: RunManifest = {
     runId,
     createdAt: run.createdAt,
@@ -72,6 +81,8 @@ export async function writeSnapshots(
       failedKeywords: progress.failed,
       errors: progress.errors,
       lookups: run.lookups,
+      totalDomains: uniqueDomains.size,
+      completedDomains,
       cache: {
         ...cacheStats,
         hitRatePercent: cacheHitRatePercent(

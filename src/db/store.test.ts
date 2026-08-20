@@ -93,6 +93,8 @@ test('replaceSerpRows overwrites previous rows for the keyword', () => {
     title: `t${position}`,
     url: `https://example.com/${position}`,
     hostname: 'example.com',
+    registrableDomain: 'example.com',
+    dr: null,
     resultType: 'organic' as const,
   });
   store.replaceSerpRows(runId, 0, [row(1), row(2)]);
@@ -114,6 +116,8 @@ test('commitKeyword persists keyword and SERP rows in one write and replaces row
       title: `t${index + 1}`,
       url: `https://example.com/${index + 1}`,
       hostname: 'example.com',
+      registrableDomain: 'example.com',
+      dr: null,
       resultType: 'organic' as const,
     }));
 
@@ -142,6 +146,8 @@ test('commitKeyword rolls back atomically when the SERP insert fails', () => {
     title: `t${position}`,
     url: `https://example.com/${position}`,
     hostname: 'example.com',
+    registrableDomain: 'example.com',
+    dr: null,
     resultType: 'organic' as const,
   });
   store.replaceSerpRows(runId, 0, [row(1), row(2)]);
