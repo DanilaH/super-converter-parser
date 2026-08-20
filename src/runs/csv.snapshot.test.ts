@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunStore, type StoredKeyword } from '../db/store.js';
@@ -395,4 +395,117 @@ test('cached runs serialize through the same CSV contract as fresh runs', async 
   assert.ok(serp.includes('compare lists,1,cached title,https://cached.com,cached.com,organic'));
   store.close();
   cache.close();
+});
+
+test('a partial keyword appears in keywords.csv with its organic count', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'csv-partial-'));
+  store.createRun({
+    runId,
+    configSnapshot: BASE_CONFIG,
+    parserVersions: { surfer: '1.0.0', google: '1.2.0' },
+    input: INPUT,
+    keywords: KEYWORDS,
+  });
+  const keywords = store.loadKeywords(runId);
+  store.commitKeyword(
+    runId,
+    {
+      ...(keywords[0] as StoredKeyword),
+      status: 'partial',
+      surfer: { volume: 49500, cpc: 7.9, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: null,
+      error: null,
+      collectedAt: '2026-01-01T00:00:00.000Z',
+    },
+    [
+      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 3, title: 'c', url: 'https://c.com', hostname: 'c.com', resultType: 'organic' },
+    ],
+    'miss',
+  );
+  await writeSnapshots(store, runId, runDirectory, 'running');
+
+  const csv = await readFile(join(runDirectory, 'keywords.csv'), 'utf8');
+  const lines = csv.slice(1).split('\r\n').filter((line) => line.length > 0);
+  assert.equal(lines.length, 5, 'header + 4 keyword rows, only the first is committed');
+  // Partial keywords are terminal: they carry their Surfer data and the
+  // organic count from the checkpoint, with empty Google/error cells.
+  assert.equal(
+    lines[1],
+    'compare lists,compare lists,1,49500,7.9,US,,,,,,3,partial,,,miss,2026-01-01T00:00:00.000Z',
+  );
+  store.close();
+});
+
+test('an atomic snapshot failure leaves the previously published CSV intact', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'csv-atomic-preserve-'));
+  store.createRun({
+    runId,
+    configSnapshot: BASE_CONFIG,
+    parserVersions: { surfer: '1.0.0', google: '1.2.0' },
+    input: INPUT,
+    keywords: KEYWORDS,
+  });
+  const keywords = store.loadKeywords(runId);
+  store.commitKeyword(
+    runId,
+    {
+      ...(keywords[0] as StoredKeyword),
+      status: 'completed',
+      surfer: { volume: 49500, cpc: 7.9, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: {
+        hl: 'en',
+        gl: 'us',
+        pageUrl: 'https://google.com/search?q=compare+lists',
+        detectedLocation: null,
+        geoWarning: false,
+      },
+      error: null,
+      collectedAt: '2026-01-01T00:00:00.000Z',
+    },
+    [
+      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
+    ],
+    'hit',
+  );
+
+  // First publish succeeds and produces the previously published artifact.
+  await writeSnapshots(store, runId, runDirectory, 'running');
+  const published = await readFile(join(runDirectory, 'keywords.csv'), 'utf8');
+  await writeFile(join(runDirectory, 'keywords.csv.old'), published, 'utf8');
+
+  // Block the next publish at the keywords.csv path: a directory at the
+  // target makes the atomic rename fail, exactly like a blocked artifact
+  // location. The previously published file is moved out of the way first.
+  await rm(join(runDirectory, 'keywords.csv'));
+  const blocker = join(runDirectory, 'keywords.csv');
+  await mkdir(blocker);
+
+  await assert.rejects(
+    () => writeSnapshots(store, runId, runDirectory, 'running'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+  );
+
+  // The previously published CSV is untouched, no partial file or temp file
+  // leaked, and the run stays resumable (manifestless snapshot).
+  assert.equal(await readFile(join(runDirectory, 'keywords.csv.old'), 'utf8'), published);
+  const leftovers = (await readdir(runDirectory)).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(leftovers, []);
+  // The run never reached a terminal state, so it stays resumable even though
+  // the snapshot publish failed.
+  assert.equal(store.loadRun(runId)?.state, 'created');
+
+  // Removing the block and republishing succeeds and restores keywords.csv
+  // from the current checkpoint; the preserved copy is still readable.
+  await rm(blocker, { recursive: true, force: true });
+  await writeSnapshots(store, runId, runDirectory, 'completed');
+  assert.equal(await readFile(join(runDirectory, 'keywords.csv'), 'utf8'), published);
+  assert.equal(await readFile(join(runDirectory, 'keywords.csv.old'), 'utf8'), published);
+  store.close();
 });

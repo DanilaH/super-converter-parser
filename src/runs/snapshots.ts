@@ -90,7 +90,6 @@ export async function writeSnapshots(
     },
   };
 
-  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
   // keywords.json carries the per-keyword cache decision alongside the raw
   // data, so downstream consumers can always tell cached from fresh rows.
   await writeJsonAtomic(
@@ -105,6 +104,11 @@ export async function writeSnapshots(
     'keywords CSV',
   );
   await writeTextAtomic(`${runDirectory}/serp.csv`, renderSerpCsv(serpRows), 'SERP CSV');
+  // The manifest is the last artifact written: every data file is on disk
+  // before the marker exists, so a crash or a publish failure leaves the run
+  // manifestless (and therefore resumable) rather than appearing finished
+  // with a partial artifact set.
+  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
 }
 
 function organicCounts(runId: string, store: RunStore): Map<number, number> {
