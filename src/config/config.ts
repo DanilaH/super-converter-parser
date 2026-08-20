@@ -14,6 +14,7 @@ export type ResearchConfig = {
     surferWaitTimeoutMs: number;
     surferPreflightTimeoutMs: number;
     surferWidgetSelector: string;
+    surferRelatedWidgetSelector: string;
   };
   retry: {
     maxAttempts: number;
@@ -24,6 +25,13 @@ export type ResearchConfig = {
     surferWindow: number;
     surferFailureThreshold: number;
     googleConsecutiveThreshold: number;
+  };
+  expansion: {
+    enabled: boolean;
+    depth: number;
+    maxCandidatesPerKeyword: number;
+    minOverlap: number;
+    minVolume: number;
   };
   cache: {
     path: string;
@@ -52,7 +60,8 @@ const DEFAULTS: ResearchConfig = {
     navigationTimeoutMs: 60_000,
     surferWaitTimeoutMs: 60_000,
     surferPreflightTimeoutMs: 60_000,
-    surferWidgetSelector: SURFER_MARKERS.mainWidget,
+      surferWidgetSelector: SURFER_MARKERS.mainWidget,
+      surferRelatedWidgetSelector: SURFER_MARKERS.relatedWidget,
   },
   retry: {
     maxAttempts: 3,
@@ -63,6 +72,13 @@ const DEFAULTS: ResearchConfig = {
     surferWindow: 15,
     surferFailureThreshold: 12,
     googleConsecutiveThreshold: 10,
+  },
+  expansion: {
+    enabled: false,
+    depth: 1,
+    maxCandidatesPerKeyword: 20,
+    minOverlap: 0,
+    minVolume: 0,
   },
   cache: {
     path: 'data/cache/cache.sqlite',
@@ -102,6 +118,17 @@ function readPositiveInt(name: string, value: string | undefined, fallback: numb
   return parsed;
 }
 
+function readBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  throw new ResearchError(
+    'INPUT_SCHEMA_ERROR',
+    `Invalid ${name}: expected true/false, got "${value}".`,
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig {
   const topN = readPositiveNumber('TOP_N', env.TOP_N, DEFAULTS.research.topN);
   if (topN < 1 || topN > 30) {
@@ -136,6 +163,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       'INPUT_SCHEMA_ERROR',
       `Invalid BREAKER_SURFER_FAILURES: expected at most BREAKER_SURFER_WINDOW (${circuitBreaker.surferWindow}), got ${circuitBreaker.surferFailureThreshold}.`,
     );
+  }
+
+  const expansion = {
+    enabled: readBoolean('EXPANSION_ENABLED', env.EXPANSION_ENABLED, DEFAULTS.expansion.enabled),
+    depth: readPositiveInt('EXPANSION_DEPTH', env.EXPANSION_DEPTH, DEFAULTS.expansion.depth),
+    maxCandidatesPerKeyword: readPositiveInt(
+      'EXPANSION_MAX_CANDIDATES',
+      env.EXPANSION_MAX_CANDIDATES,
+      DEFAULTS.expansion.maxCandidatesPerKeyword,
+    ),
+    minOverlap: readPositiveNumber('EXPANSION_MIN_OVERLAP', env.EXPANSION_MIN_OVERLAP, DEFAULTS.expansion.minOverlap),
+    minVolume: readPositiveNumber('EXPANSION_MIN_VOLUME', env.EXPANSION_MIN_VOLUME, DEFAULTS.expansion.minVolume),
+  };
+
+  if (expansion.depth < 1) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'EXPANSION_DEPTH must be at least 1.');
   }
 
   const cacheTtl = {
@@ -184,9 +227,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       surferWidgetSelector: (
         env.SURFER_WIDGET_SELECTOR ?? DEFAULTS.browser.surferWidgetSelector
       ).trim(),
+      surferRelatedWidgetSelector: (
+        env.SURFER_RELATED_WIDGET_SELECTOR ?? DEFAULTS.browser.surferRelatedWidgetSelector
+      ).trim(),
     },
     retry,
     circuitBreaker,
+    expansion,
     cache: {
       path: (env.CACHE_DB_PATH ?? DEFAULTS.cache.path).trim(),
       ttl: cacheTtl,
@@ -206,6 +253,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
 
   if (!config.browser.surferWidgetSelector) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'SURFER_WIDGET_SELECTOR must not be empty.');
+  }
+
+  if (!config.browser.surferRelatedWidgetSelector) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      'SURFER_RELATED_WIDGET_SELECTOR must not be empty.',
+    );
   }
 
   if (!config.cache.path) {

@@ -31,6 +31,7 @@ type CliOptions = {
   resumeRunId: string | null;
   forceRefresh: boolean;
   refreshKeywords: string[];
+  expand: boolean;
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -59,6 +60,7 @@ function parseArgs(argv: string[]): CliOptions {
     resumeRunId: null,
     forceRefresh: false,
     refreshKeywords: [],
+    expand: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -73,6 +75,8 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
+    } else if (arg === '--expand') {
+      options.expand = true;
     } else if (arg === '--refresh-keyword') {
       const value = argv[index + 1];
       if (value === undefined) {
@@ -103,6 +107,7 @@ function printUsage(): void {
   console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
+  console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
   console.log('Environment:');
@@ -115,6 +120,12 @@ function printUsage(): void {
   console.log('  GOOGLE_GL                    Google country parameter (default us)');
   console.log('  TOP_N                        Max organic results per keyword (default 10, max 30)');
   console.log('  SURFER_WIDGET_SELECTOR       Override Surfer main widget selector (testing hook)');
+  console.log('  SURFER_RELATED_WIDGET_SELECTOR Override Surfer related-keywords widget selector');
+  console.log('  EXPANSION_ENABLED            Enable Surfer related-keyword expansion (true/false)');
+  console.log('  EXPANSION_DEPTH              Expansion depth (default 1)');
+  console.log('  EXPANSION_MAX_CANDIDATES     Max related candidates per keyword (default 20)');
+  console.log('  EXPANSION_MIN_OVERLAP        Drop candidates with lower overlap (default 0)');
+  console.log('  EXPANSION_MIN_VOLUME         Drop candidates with lower volume (default 0)');
   console.log('  RETRY_MAX_ATTEMPTS           Max collection attempts per keyword (default 3)');
   console.log('  RETRY_BASE_DELAY_MS          Initial retry backoff (default 1000)');
   console.log('  RETRY_MAX_DELAY_MS           Retry backoff cap (default 15000)');
@@ -148,9 +159,11 @@ export function effectiveConfigForResume(
       `Run "${runId}" persisted SURFER_WIDGET_SELECTOR "${persisted.browser.surferWidgetSelector}" but the current value is "${current.browser.surferWidgetSelector}". Start a new run instead; the widget selector must not change between resume attempts.`,
     );
   }
-  // Semantic research settings come from the persisted snapshot; operational
-  // settings (connection, timeouts, retries, breaker) use the current env.
-  return { ...current, research: persisted.research };
+  // Semantic research settings (including expansion) come from the persisted
+  // snapshot so a resumed run reproduces the original expansion behavior;
+  // operational settings (connection, timeouts, retries, breaker) use the
+  // current env.
+  return { ...current, research: persisted.research, expansion: persisted.expansion };
 }
 
 // Refresh flags name real run keywords (normalized exactly like the queue
@@ -380,6 +393,10 @@ export async function runCli(
       logger: (line) => console.log(line),
       pauseRequested: () => pauseRequested,
     };
+
+    if (options.expand) {
+      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
+    }
 
     const outcome = await executeRun({
       store,

@@ -71,5 +71,10 @@ export function buildParserFailureContext(
 }
 
 export function isParserErrorCode(code: ResearchErrorCode): boolean {
-  return code === 'SURFER_NOT_DETECTED' || code === 'SURFER_PARSE_ERROR' || code === 'GOOGLE_SERP_PARSE_ERROR';
+  return (
+    code === 'SURFER_NOT_DETECTED' ||
+    code === 'SURFER_PARSE_ERROR' ||
+    code === 'SURFER_RELATED_PARSE_ERROR' ||
+    code === 'GOOGLE_SERP_PARSE_ERROR'
+  );
 }

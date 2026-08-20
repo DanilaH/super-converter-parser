@@ -163,9 +163,11 @@ export function renderSerpCsv(serpRows: SerpResult[]): string {
 function sourceRowsValue(keyword: StoredKeyword): string {
   const rows = Array.from(
     new Set(
-      keyword.sources.flatMap((source) =>
-        source.type === 'seed' ? source.rowNumbers : [source.sourceRow],
-      ),
+      keyword.sources.flatMap((source) => {
+        if (source.type === 'seed') return source.rowNumbers;
+        if (source.type === 'microsoft') return [source.sourceRow];
+        return source.rowNumbers ?? [];
+      }),
     ),
   );
   rows.sort((a, b) => a - b);
