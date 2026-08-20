@@ -67,11 +67,15 @@ export type RunManifest = {
   };
 };
 
+export type KeywordSource =
+  | { type: 'seed'; rowNumbers: number[] }
+  | { type: 'surfer_related'; parentKeyword: string; overlap?: number | null };
+
 export type KeywordRecord = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
-  sources: Array<{ type: 'seed'; rowNumbers: number[] }>;
+  sources: KeywordSource[];
   surfer: {
     volume: number | null;
     cpc: number | null;

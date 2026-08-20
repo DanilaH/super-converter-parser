@@ -6,6 +6,7 @@ import type { SerpResult } from '../google/serp.js';
 import {
   TERMINAL_KEYWORD_STATUSES,
   type KeywordRecord,
+  type KeywordSource,
   type KeywordStatus,
   type RunState,
 } from '../runs/run.js';
@@ -91,7 +92,7 @@ export type StoredKeyword = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
-  sources: Array<{ type: 'seed'; rowNumbers: number[] }>;
+  sources: KeywordRecord['sources'];
   status: KeywordStatus;
   surfer: KeywordRecord['surfer'];
   google: KeywordRecord['google'];
@@ -275,6 +276,35 @@ export class RunStore {
       .prepare('SELECT * FROM keywords WHERE run_id = ? AND idx = ?')
       .get(runId, idx) as KeywordRow | undefined;
     return row ? mapKeywordRow(row) : null;
+  }
+
+  // Appends an expansion candidate (e.g. a Surfer-related keyword) to an already
+  // created run. The new row gets the next sequential idx so ordering and
+  // resume behavior stay consistent with seed rows. Returns the persisted row.
+  addKeyword(
+    runId: string,
+    keyword: { keyword: string; normalizedKeyword: string; sources: KeywordSource[] },
+  ): StoredKeyword {
+    const nextIdx = (
+      this.db
+        .prepare('SELECT COALESCE(MAX(idx), -1) + 1 AS next FROM keywords WHERE run_id = ?')
+        .get(runId) as { next: number }
+    ).next;
+
+    const id = `kw-${String(nextIdx + 1).padStart(4, '0')}`;
+    const insert = this.db.prepare(
+      `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+    );
+    insert.run(
+      runId,
+      nextIdx,
+      id,
+      keyword.keyword,
+      keyword.normalizedKeyword,
+      JSON.stringify(keyword.sources),
+    );
+    return this.loadKeyword(runId, nextIdx)!;
   }
 
   loadSerpRows(runId: string): SerpResult[] {

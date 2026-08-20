@@ -3,6 +3,7 @@ import type { SeedKeyword } from '../input/seeds/normalize.js';
 import type { CollectionResult } from '../browser/collect.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import { ResearchError } from '../shared/errors.js';
 import {
   RunStore,
@@ -158,6 +159,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     .sort((a, b) => a.idx - b.idx);
 
   const total = store.loadKeywords(runId).length;
+  const seenNormalized = new Set(pending.map((keyword) => keyword.normalizedKeyword));
   const breaker = new CircuitBreaker(config.circuitBreaker);
   const samples: number[] = [];
   let processedCount = store
@@ -312,6 +314,21 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           );
         }
       }
+
+      if (config.expansion.enabled && config.expansion.depth >= 1 && result && result.related.length > 0) {
+        const added = applySurferExpansion({
+          runId,
+          store,
+          parentKeyword: record.keyword,
+          related: result.related,
+          config,
+          seenNormalized,
+          logger,
+        });
+        for (const name of added) {
+          logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
+        }
+      }
     }
 
     await publish(store, runId, runDirectory, 'running');
@@ -389,6 +406,43 @@ function formatDuration(ms: number): string {
 function formatVolume(volume: number | null): string {
   if (volume === null) return 'n/a';
   return volume.toLocaleString('en-US');
+}
+
+function applySurferExpansion(params: {
+  runId: string;
+  store: RunStore;
+  parentKeyword: string;
+  related: SurferRelatedKeyword[];
+  config: ResearchConfig;
+  seenNormalized: Set<string>;
+  logger: (line: string) => void;
+}): string[] {
+  const { runId, store, parentKeyword, related, config, seenNormalized, logger } = params;
+  if (!config.expansion.enabled || config.expansion.depth < 1) return [];
+
+  const candidates = related
+    .filter(
+      (item) =>
+        config.expansion.minVolume === 0 || (item.volume ?? 0) >= config.expansion.minVolume,
+    )
+    .filter(
+      (item) =>
+        config.expansion.minOverlap === 0 || (item.overlap ?? 0) >= config.expansion.minOverlap,
+    )
+    .filter((item) => !seenNormalized.has(item.normalizedKeyword))
+    .slice(0, config.expansion.maxCandidatesPerKeyword);
+
+  const added: string[] = [];
+  for (const candidate of candidates) {
+    seenNormalized.add(candidate.normalizedKeyword);
+    store.addKeyword(runId, {
+      keyword: candidate.keyword,
+      normalizedKeyword: candidate.normalizedKeyword,
+      sources: [{ type: 'surfer_related', parentKeyword, overlap: candidate.overlap ?? null }],
+    });
+    added.push(candidate.keyword);
+  }
+  return added;
 }
 
 export type { RetrySettings, BreakerSettings };

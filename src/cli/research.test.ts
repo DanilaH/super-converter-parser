@@ -37,6 +37,7 @@ function okResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
+    related: [],
   };
 }
 

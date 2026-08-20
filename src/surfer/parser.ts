@@ -75,3 +75,66 @@ export async function readSurferResult(
     ).slice(0, 200)}`,
   );
 }
+
+export type SurferRelatedKeyword = {
+  keyword: string;
+  normalizedKeyword: string;
+  overlap: number | null;
+  volume: number | null;
+};
+
+// Pure parser used by the browser-backed reader and by unit tests. The related
+// keyword widget renders one candidate per line; each line carries the keyword
+// text plus optional numeric volume/overlap tokens. We keep the keyword text
+// and lift any detected numbers into structured fields.
+export function parseSurferRelatedText(widgetText: string): SurferRelatedKeyword[] {
+  const lines = widgetText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const result: SurferRelatedKeyword[] = [];
+  for (const line of lines) {
+    const numbers = line.match(/\d[\d,.]*\s*[KMB]?/gi) ?? [];
+    const volume = parseSurferNumber(numbers[0]);
+    const overlap = parseSurferNumber(numbers[1]);
+
+    const keyword = line
+      .replace(/\d[\d,.]*\s*[KMB]?/gi, '')
+      .replace(/[|•·\-–—]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!keyword) continue;
+
+    result.push({
+      keyword,
+      normalizedKeyword: keyword.toLowerCase(),
+      volume,
+      overlap,
+    });
+  }
+
+  return result;
+}
+
+export async function readSurferRelated(
+  page: Page,
+  widgetSelector: string,
+  waitMs: number,
+): Promise<SurferRelatedKeyword[]> {
+  const widget = page.locator(widgetSelector).first();
+  const deadline = Date.now() + waitMs;
+
+  while (Date.now() <= deadline) {
+    const text = (await widget.innerText().catch(() => '')).trim();
+    if (text) {
+      const parsed = parseSurferRelatedText(text);
+      if (parsed.length > 0) return parsed;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return [];
+}

@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from 'playwright-core';
 import type { ResearchConfig } from '../config/config.js';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
-import { readSurferResult } from '../surfer/parser.js';
+import { readSurferResult, readSurferRelated, type SurferRelatedKeyword } from '../surfer/parser.js';
 import {
   BODY_TEXT_SCRIPT,
   buildOrganicResults,
@@ -25,6 +25,7 @@ import { keywordSlug } from '../runs/run.js';
 export type CollectionResult = {
   record: KeywordRecord;
   serpRows: SerpResult[];
+  related: SurferRelatedKeyword[];
   debugArtifactPath: string | null;
 };
 
@@ -77,6 +78,20 @@ export async function collectKeyword(
     } catch (error) {
       const { code, message } = toComponentError(error, 'SURFER_PARSE_ERROR');
       errors.push({ code, message });
+    }
+
+    let related: SurferRelatedKeyword[] = [];
+    if (config.expansion.enabled && config.expansion.depth >= 1) {
+      try {
+        related = await readSurferRelated(
+          page,
+          config.browser.surferRelatedWidgetSelector,
+          config.browser.surferWaitTimeoutMs,
+        );
+      } catch (error) {
+        const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
+        errors.push({ code, message });
+      }
     }
 
     try {
@@ -145,7 +160,7 @@ export async function collectKeyword(
       error: firstError ? { code: firstError.code, message: firstError.message } : null,
     };
 
-    return { record, serpRows, debugArtifactPath };
+    return { record, serpRows, related, debugArtifactPath };
   } catch (error) {
     const { code, message } = toComponentError(error, 'GOOGLE_UNAVAILABLE');
 
@@ -163,7 +178,7 @@ export async function collectKeyword(
       error: { code, message },
     };
 
-    return { record, serpRows: [], debugArtifactPath: null };
+    return { record, serpRows: [], related: [], debugArtifactPath: null };
   } finally {
     await page.close().catch(() => undefined);
   }
