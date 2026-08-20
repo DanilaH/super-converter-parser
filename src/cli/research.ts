@@ -387,7 +387,9 @@ export async function runCli(
     }
     console.log('');
     console.log(`Run completed: ${outcome.state}`);
-    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json)`);
+    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv)`);
+    console.log(`  CSV: runs/${runId}/keywords.csv`);
+    console.log(`  CSV: runs/${runId}/serp.csv`);
     return EXIT_OK;
   } catch (error) {
     console.error('');

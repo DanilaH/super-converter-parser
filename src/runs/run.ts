@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename as fsRename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
@@ -172,11 +172,31 @@ export async function writeJsonAtomic(
   data: unknown,
   description: string,
 ): Promise<void> {
+  let content: string;
+  try {
+    content = `${JSON.stringify(data, null, 2)}\n`;
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to serialize ${description} for "${path}".`,
+      { cause: error },
+    );
+  }
+  await writeTextAtomic(path, content, description);
+}
+
+// Atomic text publication with the same recoverable semantics as JSON: write
+// to a temp file, rename over the target, and clean the temp file up on
+// failure, so a crash or an error never exposes a partially-written target.
+export async function writeTextAtomic(
+  path: string,
+  content: string,
+  description: string,
+): Promise<void> {
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
-    const serialized = `${JSON.stringify(data, null, 2)}\n`;
-    await writeFile(tempPath, serialized, 'utf8');
-    await rename(tempPath, path);
+    await writeFile(tempPath, content, 'utf8');
+    await renameImpl(tempPath, path);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw new ResearchError(
@@ -185,4 +205,12 @@ export async function writeJsonAtomic(
       { cause: error },
     );
   }
+}
+
+// Test seam: lets tests force a deterministic rename failure without deleting
+// the target file first (which would not prove the existing file is preserved).
+let renameImpl: (oldPath: string, newPath: string) => Promise<void> = fsRename;
+
+export function setRenameForTesting(fn: (oldPath: string, newPath: string) => Promise<void>): void {
+  renameImpl = fn;
 }
