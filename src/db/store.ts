@@ -291,6 +291,35 @@ export class RunStore {
     return row ? mapKeywordRow(row) : null;
   }
 
+  // Appends an expansion candidate (e.g. a Surfer-related keyword) to an already
+  // created run. The new row gets the next sequential idx so ordering and
+  // resume behavior stay consistent with seed rows. Returns the persisted row.
+  addKeyword(
+    runId: string,
+    keyword: { keyword: string; normalizedKeyword: string; sources: KeywordSource[] },
+  ): StoredKeyword {
+    const nextIdx = (
+      this.db
+        .prepare('SELECT COALESCE(MAX(idx), -1) + 1 AS next FROM keywords WHERE run_id = ?')
+        .get(runId) as { next: number }
+    ).next;
+
+    const id = `kw-${String(nextIdx + 1).padStart(4, '0')}`;
+    const insert = this.db.prepare(
+      `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+    );
+    insert.run(
+      runId,
+      nextIdx,
+      id,
+      keyword.keyword,
+      keyword.normalizedKeyword,
+      JSON.stringify(keyword.sources),
+    );
+    return this.loadKeyword(runId, nextIdx)!;
+  }
+
   loadSerpRows(runId: string): SerpResult[] {
     const rows = this.db
       .prepare(

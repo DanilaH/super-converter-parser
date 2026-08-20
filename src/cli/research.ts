@@ -9,7 +9,7 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
-import { collectKeyword, type CollectionResult } from '../browser/collect.js';
+import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
@@ -31,6 +31,7 @@ type CliOptions = {
   resumeRunId: string | null;
   forceRefresh: boolean;
   refreshKeywords: string[];
+  expand: boolean;
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -44,12 +45,19 @@ export type CliDeps = {
     record: KeywordRecord,
     debugRoot: string,
   ) => Promise<CollectionResult>;
+  collectRelated?: (
+    context: BrowserContext,
+    config: ResearchConfig,
+    record: KeywordRecord,
+    debugRoot: string,
+  ) => Promise<RelatedCollectionResult>;
 };
 
 export const DEFAULT_CLI_DEPS: CliDeps = {
   connect: connectResearchChrome,
   preflight: preflightGoogleAndSurfer,
   collect: collectKeyword,
+  collectRelated: collectRelatedKeyword,
 };
 
 function parseArgs(argv: string[]): CliOptions {
@@ -59,6 +67,7 @@ function parseArgs(argv: string[]): CliOptions {
     resumeRunId: null,
     forceRefresh: false,
     refreshKeywords: [],
+    expand: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -73,6 +82,8 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
+    } else if (arg === '--expand') {
+      options.expand = true;
     } else if (arg === '--refresh-keyword') {
       const value = argv[index + 1];
       if (value === undefined) {
@@ -103,6 +114,7 @@ function printUsage(): void {
   console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
+  console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
   console.log('Environment:');
@@ -115,6 +127,12 @@ function printUsage(): void {
   console.log('  GOOGLE_GL                    Google country parameter (default us)');
   console.log('  TOP_N                        Max organic results per keyword (default 10, max 30)');
   console.log('  SURFER_WIDGET_SELECTOR       Override Surfer main widget selector (testing hook)');
+  console.log('  SURFER_RELATED_WIDGET_SELECTOR Override Surfer related-keywords widget selector');
+  console.log('  EXPANSION_ENABLED            Enable Surfer related-keyword expansion (true/false)');
+  console.log('  EXPANSION_DEPTH              Expansion depth (default 1)');
+  console.log('  EXPANSION_MAX_CANDIDATES     Max related candidates per keyword (default 20)');
+  console.log('  EXPANSION_MIN_OVERLAP        Drop candidates with lower overlap (default 0)');
+  console.log('  EXPANSION_MIN_VOLUME         Drop candidates with lower volume (default 0)');
   console.log('  RETRY_MAX_ATTEMPTS           Max collection attempts per keyword (default 3)');
   console.log('  RETRY_BASE_DELAY_MS          Initial retry backoff (default 1000)');
   console.log('  RETRY_MAX_DELAY_MS           Retry backoff cap (default 15000)');
@@ -148,9 +166,22 @@ export function effectiveConfigForResume(
       `Run "${runId}" persisted SURFER_WIDGET_SELECTOR "${persisted.browser.surferWidgetSelector}" but the current value is "${current.browser.surferWidgetSelector}". Start a new run instead; the widget selector must not change between resume attempts.`,
     );
   }
-  // Semantic research settings come from the persisted snapshot; operational
-  // settings (connection, timeouts, retries, breaker) use the current env.
-  return { ...current, research: persisted.research };
+  if (current.browser.surferRelatedWidgetSelector !== persisted.browser.surferRelatedWidgetSelector) {
+    throw new ResearchError(
+      'RESUME_CONFIG_MISMATCH',
+      `Run "${runId}" persisted SURFER_RELATED_WIDGET_SELECTOR "${persisted.browser.surferRelatedWidgetSelector}" but the current value is "${current.browser.surferRelatedWidgetSelector}". Start a new run instead; the related widget selector must not change between resume attempts.`,
+    );
+  }
+  // Semantic research settings (including expansion and the related widget
+  // selector) come from the persisted snapshot so a resumed run reproduces the
+  // original expansion behavior; operational settings (connection, timeouts,
+  // retries, breaker) use the current env.
+  return {
+    ...current,
+    research: persisted.research,
+    expansion: persisted.expansion,
+    browser: { ...current.browser, surferRelatedWidgetSelector: persisted.browser.surferRelatedWidgetSelector },
+  };
 }
 
 // Refresh flags name real run keywords (normalized exactly like the queue
@@ -319,6 +350,13 @@ export async function runCli(
       );
     }
 
+    // --expand applies only when starting a fresh run. A resumed run must
+    // reproduce its persisted expansion config and must never silently flip
+    // expansion on for a run that was created without it.
+    if (options.expand && mode === 'fresh') {
+      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
+    }
+
     cacheStore = CacheStore.open(runConfig.cache.path);
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
@@ -347,15 +385,31 @@ export async function runCli(
     );
     const refreshSet = new Set(effective.refreshKeywords);
 
-    // The browser is needed unless every pending keyword will be served as a
-    // fresh cache hit. The plan also fixes one resolution per keyword so the
-    // engine executes exactly the decision made here (no TOCTOU window
-    // between the "do we need Chrome?" read and the actual cache reads).
+    // Expansion has an independent cache decision. A keyword-cache hit still
+    // needs Chrome when its root keyword has no fresh successful/empty related
+    // lookup. Related children are intentionally excluded (depth is fixed at 1).
+    const expandableKeywords = new Set(
+      mode === 'fresh'
+        ? pendingNormalized
+        : store
+            .loadKeywords(runId)
+            .filter(
+              (item) =>
+                !isTerminalKeywordStatus(item.status) &&
+                !item.sources.some((source) => source.type === 'surfer_related'),
+            )
+            .map((item) => item.normalizedKeyword),
+    );
+
     const plan = planRunCache(
       pendingNormalized,
       { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
       cacheStore,
       Date.now(),
+      {
+        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
+        expandableKeywords,
+      },
     );
     const needsBrowser = plan.needsBrowser;
 
@@ -381,6 +435,7 @@ export async function runCli(
       pauseRequested: () => pauseRequested,
     };
 
+    const relatedCollector = deps.collectRelated;
     const outcome = await executeRun({
       store,
       runId,
@@ -394,12 +449,24 @@ export async function runCli(
       // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
         deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
+      ...(relatedCollector
+        ? {
+            collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
+              relatedCollector(
+                context as BrowserContext,
+                runConfig,
+                record,
+                debugRootForKeyword,
+              ),
+          }
+        : {}),
       hooks,
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
+        relatedResolutions: plan.relatedResolutions,
       },
     });
 

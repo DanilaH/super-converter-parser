@@ -77,7 +77,10 @@ export type RunManifest = {
 // group, volume, competition, and CPC provenance.
 export type MicrosoftSource = { type: 'microsoft' } & MicrosoftOccurrence;
 
-export type KeywordSource = { type: 'seed'; rowNumbers: number[] } | MicrosoftSource;
+export type KeywordSource =
+  | { type: 'seed'; rowNumbers: number[] }
+  | MicrosoftSource
+  | { type: 'surfer_related'; parentKeyword: string; overlap?: number | null; rowNumbers?: number[] };
 
 export type KeywordRecord = {
   id: string;
