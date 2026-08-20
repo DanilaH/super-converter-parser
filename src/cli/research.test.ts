@@ -644,3 +644,59 @@ test('all-hit seed with a cached related list pointing at a missing candidate en
     process.chdir(previousCwd);
   }
 });
+
+test('all-hit seed with no related cache still connects for expansion lookup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-expand-related-miss-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\ncompare lists', 'utf8');
+  const cachePath = join(directory, 'cache', 'cache.sqlite');
+  const config = loadConfig({ CACHE_DB_PATH: cachePath } as NodeJS.ProcessEnv);
+  const identity = keywordCacheIdentity(config);
+  const cacheStore = CacheStore.open(cachePath);
+  const storedAt = new Date().toISOString();
+  cacheStore.putKeyword({
+    cacheKey: buildKeywordCacheKey('compare lists', identity),
+    keyword: 'compare lists',
+    normalizedKeyword: 'compare lists',
+    identity,
+    record: {
+      id: 'cached', keyword: 'compare lists', normalizedKeyword: 'compare lists',
+      sources: [{ type: 'seed', rowNumbers: [1] }], status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: storedAt },
+      google: { hl: 'en', gl: 'us', pageUrl: 'https://google.com/search?q=x', detectedLocation: null, geoWarning: false },
+      error: null,
+    },
+    serpRows: [], collectedAt: storedAt, storedAt,
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  cacheStore.close();
+
+  let connectCalls = 0;
+  const collected: string[] = [];
+  const deps: CliDeps = {
+    connect: async () => {
+      connectCalls += 1;
+      return { contexts: () => [{}], close: async () => undefined } as unknown as Browser;
+    },
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => {
+      collected.push(record.normalizedKeyword);
+      return okResult(record);
+    },
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--expand'],
+      deps,
+      { CACHE_DB_PATH: cachePath } as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_OK);
+    assert.equal(connectCalls, 1);
+    assert.deepEqual(collected, ['compare lists']);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});

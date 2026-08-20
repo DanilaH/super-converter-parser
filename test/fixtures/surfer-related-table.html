@@ -5,10 +5,9 @@
   <title>Surfer related table fixture</title>
 </head>
 <body>
-  <!-- Mirrors the real Keyword Surfer sidebar DOM: the related-keywords table
-       lives inside the MAIN Google document, inside the element whose class is
-       keyword-surfer-sidebar (NOT inside an iframe). -->
-  <div class="keyword-surfer keyword-surfer-sidebar">
+  <!-- Mirrors the real Keyword Surfer sidebar custom element in the main
+       Google document. `keyword-surfer-sidebar` is a tag, not a CSS class. -->
+  <keyword-surfer-sidebar class="keyword-surfer">
     <div class="keyword-surfer-sidebar-header">Keyword ideas</div>
     <table class="keyword-surfer-related-table">
       <thead>
@@ -51,6 +50,6 @@
         </tr>
       </tbody>
     </table>
-  </div>
+  </keyword-surfer-sidebar>
 </body>
 </html>

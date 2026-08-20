@@ -9,13 +9,13 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
-import { collectKeyword, type CollectionResult } from '../browser/collect.js';
+import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
-import { keywordCacheIdentity, buildRelatedCacheKey } from '../cache/keys.js';
+import { keywordCacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, planRunCache } from '../cache/resolve.js';
 
 export const EXIT_OK = 0;
@@ -45,12 +45,19 @@ export type CliDeps = {
     record: KeywordRecord,
     debugRoot: string,
   ) => Promise<CollectionResult>;
+  collectRelated?: (
+    context: BrowserContext,
+    config: ResearchConfig,
+    record: KeywordRecord,
+    debugRoot: string,
+  ) => Promise<RelatedCollectionResult>;
 };
 
 export const DEFAULT_CLI_DEPS: CliDeps = {
   connect: connectResearchChrome,
   preflight: preflightGoogleAndSurfer,
   collect: collectKeyword,
+  collectRelated: collectRelatedKeyword,
 };
 
 function parseArgs(argv: string[]): CliOptions {
@@ -378,34 +385,31 @@ export async function runCli(
     );
     const refreshSet = new Set(effective.refreshKeywords);
 
-    // The browser is needed unless every pending keyword will be served as a
-    // fresh cache hit. The plan also fixes one resolution per keyword so the
-    // engine executes exactly the decision made here (no TOCTOU window
-    // between the "do we need Chrome?" read and the actual cache reads).
-    // Warm-expansion candidates are derived from the related cache so the plan
-    // engages the browser when an all-hit seed still points at a missing
-    // candidate that only the engine will queue during execution.
-    const relatedCandidates: string[] = [];
-    if (runConfig.expansion.enabled && runConfig.expansion.depth >= 1) {
-      const now = Date.now();
-      for (const normalized of pendingNormalized) {
-        const entry = cacheStore.getRelated?.(buildRelatedCacheKey(normalized, identity));
-        if (entry && entry.status === 'ok' && Date.parse(entry.expiresAt) > now) {
-          for (const row of entry.rows) {
-            if (!relatedCandidates.includes(row.relatedKeyword)) {
-              relatedCandidates.push(row.relatedKeyword);
-            }
-          }
-        }
-      }
-    }
+    // Expansion has an independent cache decision. A keyword-cache hit still
+    // needs Chrome when its root keyword has no fresh successful/empty related
+    // lookup. Related children are intentionally excluded (depth is fixed at 1).
+    const expandableKeywords = new Set(
+      mode === 'fresh'
+        ? pendingNormalized
+        : store
+            .loadKeywords(runId)
+            .filter(
+              (item) =>
+                !isTerminalKeywordStatus(item.status) &&
+                !item.sources.some((source) => source.type === 'surfer_related'),
+            )
+            .map((item) => item.normalizedKeyword),
+    );
 
     const plan = planRunCache(
       pendingNormalized,
       { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
       cacheStore,
       Date.now(),
-      relatedCandidates,
+      {
+        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
+        expandableKeywords,
+      },
     );
     const needsBrowser = plan.needsBrowser;
 
@@ -431,6 +435,7 @@ export async function runCli(
       pauseRequested: () => pauseRequested,
     };
 
+    const relatedCollector = deps.collectRelated;
     const outcome = await executeRun({
       store,
       runId,
@@ -444,12 +449,24 @@ export async function runCli(
       // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
         deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
+      ...(relatedCollector
+        ? {
+            collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
+              relatedCollector(
+                context as BrowserContext,
+                runConfig,
+                record,
+                debugRootForKeyword,
+              ),
+          }
+        : {}),
       hooks,
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
+        relatedResolutions: plan.relatedResolutions,
       },
     });
 

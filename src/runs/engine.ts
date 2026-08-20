@@ -1,10 +1,11 @@
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
-import type { CollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
+import type { CollectionResult, RelatedCollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import type { SurferRelatedKeyword } from '../surfer/parser.js';
+import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { ResearchError } from '../shared/errors.js';
 import {
   RunStore,
@@ -29,13 +30,18 @@ import {
   type RetrySettings,
 } from './policies.js';
 import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey, type CacheIdentity } from '../cache/keys.js';
-import { mergedCacheRefresh, resolveKeywordAccess, type CacheResolution } from '../cache/resolve.js';
-import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, type CachedRelatedEntry, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
+import { mergedCacheRefresh, resolveKeywordAccess, resolveRelatedAccess, type CacheResolution, type RelatedCacheResolution } from '../cache/resolve.js';
+import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
 
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
   debugRoot: string,
 ) => Promise<CollectionResult>;
+
+export type CollectRelatedFn = (
+  keyword: KeywordRecord,
+  debugRoot: string,
+) => Promise<RelatedCollectionResult>;
 
 export type SnapshotsPublisher = (
   store: RunStore,
@@ -59,6 +65,7 @@ export type EngineCacheOptions = {
   // Precomputed per-keyword decisions (one read per keyword, made before the
   // browser decision); when present the engine must not re-read the cache.
   resolutions?: Map<string, CacheResolution>;
+  relatedResolutions?: Map<string, RelatedCacheResolution>;
 };
 
 export type RunOutcome =
@@ -75,6 +82,7 @@ export type ExecuteRunOptions = {
   runDirectory: string;
   debugRoot: string;
   collect: CollectKeywordFn;
+  collectRelated?: CollectRelatedFn;
   hooks: EngineHooks;
   publishSnapshots?: SnapshotsPublisher;
   cache?: EngineCacheOptions;
@@ -114,6 +122,10 @@ export function validateResume(store: RunStore, runId: string): StoredRun {
 export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome> {
   const { store, runId, mode, keywords, config, input, runDirectory, debugRoot, collect, hooks } =
     options;
+  const collectRelated: CollectRelatedFn = options.collectRelated ?? (async (keyword, relatedDebugRoot) => {
+    const result = await collect(keyword, relatedDebugRoot);
+    return { related: result.related, debugArtifactPath: result.debugArtifactPath };
+  });
   const { logger } = hooks;
   const publish = options.publishSnapshots ?? writeSnapshots;
 
@@ -232,25 +244,25 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         error: entry.record.error,
         collectedAt: entry.collectedAt,
       };
-      store.commitKeyword(runId, committed, entry.serpRows, 'hit');
-      logger(
-        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
-      );
 
-      // Warm expansion: a cached keyword still expands from the related cache
-      // without touching the browser, preserving the cache-hit benefit. An
-      // expired related entry must not be used, otherwise stale candidates
-      // would be revived.
+      // Keyword and related caches are resolved independently. A cached primary
+      // result must not suppress expansion when its related lookup is missing,
+      // expired, or an earlier error.
       if (config.expansion.enabled && config.expansion.depth >= 1 && isExpandableKeyword(stored)) {
-        const relatedEntry = options.cache?.store.getRelated?.(
-          buildRelatedCacheKey(stored.normalizedKeyword, identity),
-        );
-        if (relatedEntry && relatedEntry.status === 'ok' && isRelatedEntryFresh(relatedEntry, hooks.now())) {
+        const relatedResolution =
+          options.cache?.relatedResolutions?.get(stored.normalizedKeyword) ??
+          resolveRelatedAccess(
+            stored.normalizedKeyword,
+            identity,
+            options.cache?.store ?? null,
+            hooks.now(),
+          );
+        if (relatedResolution.kind === 'hit_ok') {
           const added = applySurferExpansion({
             runId,
             store,
             parentKeyword: stored.keyword,
-            related: relatedRowsToSurferKeywords(relatedEntry.rows),
+            related: relatedRowsToSurferKeywords(relatedResolution.entry.rows),
             config,
             seenNormalized,
             logger,
@@ -258,8 +270,42 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           for (const name of added) {
             logger(`  ↳ expansion (cached): +${name} (parent: ${stored.keyword})`);
           }
+        } else if (relatedResolution.kind !== 'hit_empty') {
+          store.incrementLookups(runId);
+          const relatedResult = await collectRelated(storedKeywordToRecord(stored), debugRoot);
+          const collectedAt = new Date(hooks.now()).toISOString();
+          persistRelatedCache({
+            cache: options.cache,
+            identity,
+            keyword: storedKeywordToRecord(stored),
+            related: relatedResult.related,
+            config,
+            collectedAt,
+          });
+          reportRelatedOutcome(relatedResult, stored.normalizedKeyword, logger);
+          if (relatedResult.related.status === 'ok') {
+            const added = applySurferExpansion({
+              runId,
+              store,
+              parentKeyword: stored.keyword,
+              related: relatedResult.related.rows,
+              config,
+              seenNormalized,
+              logger,
+            });
+            for (const name of added) {
+              logger(`  ↳ expansion: +${name} (parent: ${stored.keyword})`);
+            }
+          }
         }
       }
+      // Commit the cached primary only after any required related lookup. If
+      // the process exits during that lookup, the root remains resumable and
+      // expansion cannot be silently skipped on restart.
+      store.commitKeyword(runId, committed, entry.serpRows, 'hit');
+      logger(
+        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
+      );
     } else {
       const startAt = hooks.now();
       let result: CollectionResult | null = null;
@@ -364,10 +410,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         cache: options.cache,
         identity,
         keyword: record,
-        related: result?.related ?? { status: 'empty', error: null, rows: [] },
+        related: result?.related ?? { status: 'not_attempted', error: null, rows: [] },
         config,
         collectedAt,
       });
+      if (result) reportRelatedOutcome(result, record.normalizedKeyword, logger);
 
       // Expansion runs only for seed keywords; depth-one related candidates are
       // queued for collection but never expanded themselves. It triggers only
@@ -439,7 +486,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 // candidates added by expansion carry a surfer_related source and are collected
 // but never expanded further, which keeps expansion strictly depth-one.
 function isExpandableKeyword(keyword: StoredKeyword): boolean {
-  return keyword.sources.some((source) => source.type === 'seed');
+  return !keyword.sources.some((source) => source.type === 'surfer_related');
 }
 
 function relatedRowsToSurferKeywords(
@@ -447,14 +494,10 @@ function relatedRowsToSurferKeywords(
 ): SurferRelatedKeyword[] {
   return rows.map((row) => ({
     keyword: row.relatedKeyword,
-    normalizedKeyword: row.relatedKeyword.toLowerCase(),
+    normalizedKeyword: normalizeKeyword(row.relatedKeyword),
     overlap: row.overlap,
     volume: row.volume,
   }));
-}
-
-function isRelatedEntryFresh(entry: CachedRelatedEntry, now: number): boolean {
-  return Date.parse(entry.expiresAt) > now;
 }
 
 function persistRelatedCache(params: {
@@ -466,7 +509,7 @@ function persistRelatedCache(params: {
   collectedAt: string;
 }): void {
   const { cache, identity, keyword, related, config, collectedAt } = params;
-  if (!cache?.store.putRelated) return;
+  if (!cache?.store.putRelated || related.status === 'not_attempted') return;
   const status: CachedRelatedStatus = related.status;
   try {
     cache.store.putRelated({
@@ -483,6 +526,20 @@ function persistRelatedCache(params: {
     }, collectedAt, ttlMsForRelatedStatus(status, config.cache.ttl));
   } catch {
     // A related-cache write failure must never corrupt the run.
+  }
+}
+
+function reportRelatedOutcome(
+  result: RelatedCollectionResult,
+  normalizedKeyword: string,
+  logger: (line: string) => void,
+): void {
+  if (result.related.status !== 'error') return;
+  logger(
+    `  ⚠ related keywords failed for "${normalizedKeyword}": ${result.related.error ?? 'SURFER_RELATED_PARSE_ERROR'}`,
+  );
+  if (result.debugArtifactPath) {
+    logger(`  ⚠ related parser debug artifacts saved to ${result.debugArtifactPath}`);
   }
 }
 

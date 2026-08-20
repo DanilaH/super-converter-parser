@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser } from 'playwright-core';
+import { ResearchError } from '../shared/errors.js';
 import { readSurferRelated } from './parser.js';
 
 // Reads the related-keywords table from the real Surfer sidebar DOM (the
@@ -27,12 +28,24 @@ test('browser-reader parses the real keyword-surfer-sidebar related table', asyn
     );
     const page = await browser.newPage();
     await page.setContent(html);
-    const rows = await readSurferRelated(page, '.keyword-surfer-sidebar', 2000);
+    assert.equal(await page.locator('.keyword-surfer-sidebar').count(), 0);
+    const rows = await readSurferRelated(page, 'keyword-surfer-sidebar', 2000);
     assert.ok(rows.length >= 1, 'expected at least one related row');
     assert.equal(rows[0]!.keyword, 'instagram');
     assert.equal(rows[0]!.overlap, 50);
     assert.equal(rows[0]!.volume, 30400000);
     assert.equal(rows[1]!.keyword, 'ig app');
+
+    await page.setContent(`
+      <keyword-surfer-sidebar class="keyword-surfer">
+        <table><tbody><tr><td></td><td>broken row</td><td>50%</td></tr></tbody></table>
+      </keyword-surfer-sidebar>
+    `);
+    await assert.rejects(
+      readSurferRelated(page, 'keyword-surfer-sidebar', 50),
+      (error: unknown) =>
+        error instanceof ResearchError && error.code === 'SURFER_RELATED_PARSE_ERROR',
+    );
   } finally {
     await browser.close();
   }

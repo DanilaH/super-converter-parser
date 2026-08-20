@@ -15,6 +15,7 @@ export type ParserFailureContext = {
   };
   selectors: {
     surferMainWidget: string;
+    surferRelatedWidget: string;
     surferCssMarker: string;
     organicResults: string;
     detectedLocation: string;
@@ -61,6 +62,7 @@ export function buildParserFailureContext(
     },
     selectors: {
       surferMainWidget: config.browser.surferWidgetSelector,
+      surferRelatedWidget: config.browser.surferRelatedWidgetSelector,
       surferCssMarker: SURFER_MARKERS.cssMarker,
       organicResults: GOOGLE_SELECTORS.organicResults,
       detectedLocation: GOOGLE_SELECTORS.detectedLocation,

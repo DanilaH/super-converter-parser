@@ -331,13 +331,14 @@ CDP on the space-free copy works and Surfer injects (proven: live returned
 
 ### Known live limitation: related-keywords widget
 
-The related-keywords widget `.keyword-surfer-sidebar` is parsed correctly from the
+The related-keywords widget `keyword-surfer-sidebar` is parsed correctly from the
 **real spike DOM** (fixture `test/fixtures/surfer-related-table.html` ->
 `instagram / 50% / 30400000`). However, in a copied/free Surfer profile the widget
 often does **not** render on the live SERP page. When it is absent, related expansion
 is recorded as a non-fatal structured error (`related.status = 'error'`) and the
 keyword still completes with its main volume/cpc/organic data. This is an environment
-limitation of the Surfer account/extension state, not a parser defect.
+limitation observed with that Surfer account/extension state. Parser errors retain
+HTML/screenshot/context evidence so the distinction can be verified per run.
 
 ### CAPTCHA in background runs
 

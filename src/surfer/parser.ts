@@ -1,5 +1,6 @@
 import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
+import { normalizeKeyword } from '../input/seeds/normalize.js';
 
 export type SurferResult = {
   volume: number | null;
@@ -86,9 +87,9 @@ export type SurferRelatedKeyword = {
   volume: number | null;
 };
 
-// One structured row as extracted from the Surfer related-keywords table
-// inside the assets.keywordsur.fr frame. Columns are Keyword | Overlap | Volume.
-// We never parse the whole iframe as free text; each row is pulled from its
+// One structured row as extracted from the Surfer related-keywords table in
+// the main document. Columns are Keyword | Overlap | Volume.
+// We never parse the whole widget as free text; each row is pulled from its
 // own cells so the keyword name never inherits a stray "%" or volume digit.
 export type SurferRelatedTableRow = {
   keyword: string;
@@ -120,7 +121,7 @@ export function parseSurferRelatedRows(rows: SurferRelatedTableRow[]): SurferRel
     if (!keyword) continue;
     result.push({
       keyword,
-      normalizedKeyword: keyword.toLowerCase(),
+      normalizedKeyword: normalizeKeyword(keyword),
       overlap: parseSurferOverlap(row.overlapText),
       volume: parseSurferNumber(row.volumeText),
     });
@@ -128,37 +129,45 @@ export function parseSurferRelatedRows(rows: SurferRelatedTableRow[]): SurferRel
   return result;
 }
 
-// Surfer renders the related-keywords widget inside an extension iframe hosted
-// on assets.keywordsur.fr. We must read the table from that frame, not from the
-// main document (the widget is absent from the top-level DOM).
-const RELATED_FRAME_URL = /assets\.keywordsur\.fr/;
-
 // Reads the related-keywords table that Keyword Surfer renders in the main
 // Google DOM inside the keyword-surfer-sidebar element. Each row's direct <td>
 // cells are [checkbox, keyword, overlap, volume]; we take the keyword/overlap/
 // volume cells (indices 1/2/3) and read only the direct cell text so nested
 // <a>/<span>/<div> text is not duplicated.
-async function extractRelatedRows(page: Page, widgetSelector: string): Promise<SurferRelatedTableRow[] | null> {
-  return page.evaluate((widgetSel: string): SurferRelatedTableRow[] | null => {
+type RelatedDomSnapshot =
+  | { state: 'widget_missing' | 'table_missing' | 'empty' }
+  | { state: 'malformed'; cellCounts: number[] }
+  | { state: 'rows'; rows: SurferRelatedTableRow[] };
+
+async function extractRelatedRows(page: Page, widgetSelector: string): Promise<RelatedDomSnapshot> {
+  return page.evaluate((widgetSel: string): RelatedDomSnapshot => {
     const widget = document.querySelector(widgetSel);
-    if (!widget) return null;
+    if (!widget) return { state: 'widget_missing' };
     const table = widget.querySelector('table');
-    if (!table) return null;
+    if (!table) return { state: 'table_missing' };
     const tbody = table.querySelector('tbody') ?? table;
     const trs = Array.from(tbody.querySelectorAll(':scope > tr'));
+    if (trs.length === 0) return { state: 'empty' };
     const out: SurferRelatedTableRow[] = [];
+    const malformedCellCounts: number[] = [];
     for (const tr of trs) {
       // Only direct child <td> cells; nested elements are not traversed, so
       // their text is not duplicated.
       const tds = Array.from(tr.querySelectorAll(':scope > td'));
-      if (tds.length < 4) continue;
+      if (tds.length !== 4) {
+        malformedCellCounts.push(tds.length);
+        continue;
+      }
       out.push({
         keyword: (tds[1]?.textContent ?? '').trim(),
         overlapText: (tds[2]?.textContent ?? '').trim(),
         volumeText: (tds[3]?.textContent ?? '').trim(),
       });
     }
-    return out;
+    if (malformedCellCounts.length > 0) {
+      return { state: 'malformed', cellCounts: malformedCellCounts };
+    }
+    return { state: 'rows', rows: out };
   }, widgetSelector);
 }
 
@@ -168,26 +177,30 @@ export async function readSurferRelated(
   waitMs: number,
 ): Promise<SurferRelatedKeyword[]> {
   const deadline = Date.now() + waitMs;
-  let widgetSeen = false;
+  let lastSnapshot: RelatedDomSnapshot = { state: 'widget_missing' };
 
   while (Date.now() <= deadline) {
-    const rows = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
-    if (rows === null || rows === undefined) {
-      // Widget not present yet; keep waiting (it may still mount).
-      await page.waitForTimeout(500);
-      continue;
+    const snapshot = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
+    if (snapshot !== undefined) lastSnapshot = snapshot;
+    if (snapshot?.state === 'rows') return parseSurferRelatedRows(snapshot.rows);
+    if (snapshot?.state === 'malformed') {
+      throw new ResearchError(
+        'SURFER_RELATED_PARSE_ERROR',
+        `Surfer related-keywords table contains malformed rows; expected exactly 4 direct <td> cells, got ${snapshot.cellCounts.join(', ')}.`,
+      );
     }
-    widgetSeen = true;
-    if (rows.length > 0) return parseSurferRelatedRows(rows);
     await page.waitForTimeout(500);
   }
 
-  if (!widgetSeen) {
+  if (lastSnapshot.state === 'empty') return [];
+  if (lastSnapshot.state === 'widget_missing') {
     throw new ResearchError(
       'SURFER_RELATED_PARSE_ERROR',
       `Surfer related-keywords widget "${widgetSelector}" was not found in the page.`,
     );
   }
-  // Widget present, but genuinely no related keywords.
-  return [];
+  throw new ResearchError(
+    'SURFER_RELATED_PARSE_ERROR',
+    `Surfer related-keywords widget "${widgetSelector}" was found, but its table was not found.`,
+  );
 }

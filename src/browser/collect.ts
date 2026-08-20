@@ -27,7 +27,7 @@ import { keywordSlug } from '../runs/run.js';
 // even when the primary collection succeeded, and a successful primary
 // collection with a broken related widget still preserves the related 'error'.
 export type SurferRelatedOutcome = {
-  status: 'ok' | 'empty' | 'error';
+  status: 'not_attempted' | 'ok' | 'empty' | 'error';
   error: string | null;
   rows: SurferRelatedKeyword[];
 };
@@ -35,6 +35,11 @@ export type SurferRelatedOutcome = {
 export type CollectionResult = {
   record: KeywordRecord;
   serpRows: SerpResult[];
+  related: SurferRelatedOutcome;
+  debugArtifactPath: string | null;
+};
+
+export type RelatedCollectionResult = {
   related: SurferRelatedOutcome;
   debugArtifactPath: string | null;
 };
@@ -93,9 +98,10 @@ export async function collectKeyword(
     // The related-keyword reader runs only for root/seed keywords. Expanded
     // (surfer_related) keywords are themselves collected but never expanded
     // further, so re-reading their related list would be wasted browser work.
-    let related: SurferRelatedOutcome = { status: 'empty', error: null, rows: [] };
-    const isSeed = keyword.sources.some((source) => source.type === 'seed');
-    if (config.expansion.enabled && config.expansion.depth >= 1 && isSeed) {
+    let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
+    let relatedParserError: ComponentError | null = null;
+    const isRoot = !keyword.sources.some((source) => source.type === 'surfer_related');
+    if (config.expansion.enabled && config.expansion.depth >= 1 && isRoot) {
       // The related-keywords widget can mount lazily after the main Surfer
       // widget; scroll the results so Surfer renders it before we read.
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
@@ -114,8 +120,9 @@ export async function collectKeyword(
         // Related-keyword expansion is optional enrichment: a missing/broken
         // widget must not downgrade an otherwise-successful keyword. The error
         // is preserved in the structured related outcome for traceability.
-        const { code } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
+        const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
         related = { status: 'error', error: code, rows: [] };
+        relatedParserError = { code, message };
       }
     }
 
@@ -162,6 +169,22 @@ export async function collectKeyword(
       );
     }
 
+    if (relatedParserError && isParserErrorCode(relatedParserError.code)) {
+      debugArtifactPath = await saveParserFailureArtifacts(
+        page,
+        config,
+        debugRoot,
+        `${keywordSlug(keyword.normalizedKeyword)}-related`,
+        buildParserFailureContext(
+          keyword.normalizedKeyword,
+          pageUrl,
+          config,
+          relatedParserError.code,
+          relatedParserError.message,
+        ),
+      );
+    }
+
     const fetchedAt = new Date().toISOString();
     const record: KeywordRecord = {
       ...keyword,
@@ -203,7 +226,87 @@ export async function collectKeyword(
       error: { code, message },
     };
 
-    return { record, serpRows: [], related: { status: 'empty', error: null, rows: [] }, debugArtifactPath: null };
+    return {
+      record,
+      serpRows: [],
+      related: { status: 'not_attempted', error: null, rows: [] },
+      debugArtifactPath: null,
+    };
+  } finally {
+    await page.close().catch(() => undefined);
+  }
+}
+
+// Refreshes only the optional related-keyword enrichment for a keyword whose
+// primary keyword/SERP result is already a cache hit. The cached primary result
+// remains authoritative and is never overwritten by this browser visit.
+export async function collectRelatedKeyword(
+  context: BrowserContext,
+  config: ResearchConfig,
+  keyword: KeywordRecord,
+  debugRoot: string,
+): Promise<RelatedCollectionResult> {
+  const page = await context.newPage();
+  let pageUrl = '';
+  try {
+    await page.goto(buildSearchUrl(config, keyword.keyword), {
+      waitUntil: 'domcontentloaded',
+      timeout: config.browser.navigationTimeoutMs,
+    });
+    pageUrl = page.url();
+    try {
+      await waitForManualCaptcha(page);
+    } catch (error) {
+      if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
+        await pauseForManualCaptcha(page);
+      } else {
+        throw error;
+      }
+    }
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+    await page.waitForTimeout(1000);
+    try {
+      const rows = await readSurferRelated(
+        page,
+        config.browser.surferRelatedWidgetSelector,
+        config.browser.surferWaitTimeoutMs,
+      );
+      return {
+        related: rows.length > 0
+          ? { status: 'ok', error: null, rows }
+          : { status: 'empty', error: null, rows: [] },
+        debugArtifactPath: null,
+      };
+    } catch (error) {
+      const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
+      const debugArtifactPath = isParserErrorCode(code)
+        ? await saveParserFailureArtifacts(
+            page,
+            config,
+            debugRoot,
+            `${keywordSlug(keyword.normalizedKeyword)}-related`,
+            buildParserFailureContext(
+              keyword.normalizedKeyword,
+              pageUrl,
+              config,
+              code,
+              message,
+            ),
+          )
+        : null;
+      return {
+        related: { status: 'error', error: code, rows: [] },
+        debugArtifactPath,
+      };
+    }
+  } catch {
+    // Navigation/CAPTCHA failures happen before the related reader has a
+    // truthful result, so they must not be cached as a genuine empty list.
+    return {
+      related: { status: 'not_attempted', error: null, rows: [] },
+      debugArtifactPath: null,
+    };
   } finally {
     await page.close().catch(() => undefined);
   }

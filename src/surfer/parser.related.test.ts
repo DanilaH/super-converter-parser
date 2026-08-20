@@ -55,6 +55,13 @@ test('empty row list yields no candidates', () => {
   assert.deepEqual(parseSurferRelatedRows([]), []);
 });
 
+test('related keyword uses the same whitespace normalization as seeds', () => {
+  const [result] = parseSurferRelatedRows([
+    { keyword: '  Compare   TWO Lists  ', overlapText: '50%', volumeText: '100' },
+  ]);
+  assert.equal(result?.normalizedKeyword, 'compare two lists');
+});
+
 test('fixture: real Surfer related-keywords table order', () => {
   // Mirrors the observed Keyword | Overlap | Volume column order.
   const rows: SurferRelatedTableRow[] = [
