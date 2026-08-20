@@ -15,7 +15,7 @@ import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
-import { keywordCacheIdentity } from '../cache/keys.js';
+import { keywordCacheIdentity, buildRelatedCacheKey } from '../cache/keys.js';
 import { mergedCacheRefresh, planRunCache } from '../cache/resolve.js';
 
 export const EXIT_OK = 0;
@@ -159,11 +159,22 @@ export function effectiveConfigForResume(
       `Run "${runId}" persisted SURFER_WIDGET_SELECTOR "${persisted.browser.surferWidgetSelector}" but the current value is "${current.browser.surferWidgetSelector}". Start a new run instead; the widget selector must not change between resume attempts.`,
     );
   }
-  // Semantic research settings (including expansion) come from the persisted
-  // snapshot so a resumed run reproduces the original expansion behavior;
-  // operational settings (connection, timeouts, retries, breaker) use the
-  // current env.
-  return { ...current, research: persisted.research, expansion: persisted.expansion };
+  if (current.browser.surferRelatedWidgetSelector !== persisted.browser.surferRelatedWidgetSelector) {
+    throw new ResearchError(
+      'RESUME_CONFIG_MISMATCH',
+      `Run "${runId}" persisted SURFER_RELATED_WIDGET_SELECTOR "${persisted.browser.surferRelatedWidgetSelector}" but the current value is "${current.browser.surferRelatedWidgetSelector}". Start a new run instead; the related widget selector must not change between resume attempts.`,
+    );
+  }
+  // Semantic research settings (including expansion and the related widget
+  // selector) come from the persisted snapshot so a resumed run reproduces the
+  // original expansion behavior; operational settings (connection, timeouts,
+  // retries, breaker) use the current env.
+  return {
+    ...current,
+    research: persisted.research,
+    expansion: persisted.expansion,
+    browser: { ...current.browser, surferRelatedWidgetSelector: persisted.browser.surferRelatedWidgetSelector },
+  };
 }
 
 // Refresh flags name real run keywords (normalized exactly like the queue
@@ -332,6 +343,13 @@ export async function runCli(
       );
     }
 
+    // --expand applies only when starting a fresh run. A resumed run must
+    // reproduce its persisted expansion config and must never silently flip
+    // expansion on for a run that was created without it.
+    if (options.expand && mode === 'fresh') {
+      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
+    }
+
     cacheStore = CacheStore.open(runConfig.cache.path);
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
@@ -364,11 +382,30 @@ export async function runCli(
     // fresh cache hit. The plan also fixes one resolution per keyword so the
     // engine executes exactly the decision made here (no TOCTOU window
     // between the "do we need Chrome?" read and the actual cache reads).
+    // Warm-expansion candidates are derived from the related cache so the plan
+    // engages the browser when an all-hit seed still points at a missing
+    // candidate that only the engine will queue during execution.
+    const relatedCandidates: string[] = [];
+    if (runConfig.expansion.enabled && runConfig.expansion.depth >= 1) {
+      const now = Date.now();
+      for (const normalized of pendingNormalized) {
+        const entry = cacheStore.getRelated?.(buildRelatedCacheKey(normalized, identity));
+        if (entry && entry.status === 'ok' && Date.parse(entry.expiresAt) > now) {
+          for (const row of entry.rows) {
+            if (!relatedCandidates.includes(row.relatedKeyword)) {
+              relatedCandidates.push(row.relatedKeyword);
+            }
+          }
+        }
+      }
+    }
+
     const plan = planRunCache(
       pendingNormalized,
       { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
       cacheStore,
       Date.now(),
+      relatedCandidates,
     );
     const needsBrowser = plan.needsBrowser;
 
@@ -393,10 +430,6 @@ export async function runCli(
       logger: (line) => console.log(line),
       pauseRequested: () => pauseRequested,
     };
-
-    if (options.expand) {
-      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
-    }
 
     const outcome = await executeRun({
       store,

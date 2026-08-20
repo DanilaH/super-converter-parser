@@ -73,7 +73,7 @@ function okResult(keyword: KeywordRecord, serpCount = 2): CollectionResult {
     },
     serpRows: serpRowsFor(keyword.normalizedKeyword, serpCount),
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 

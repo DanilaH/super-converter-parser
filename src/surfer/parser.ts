@@ -133,28 +133,33 @@ export function parseSurferRelatedRows(rows: SurferRelatedTableRow[]): SurferRel
 // main document (the widget is absent from the top-level DOM).
 const RELATED_FRAME_URL = /assets\.keywordsur\.fr/;
 
-async function extractRelatedRowsFromFrame(
-  frame: import('playwright-core').Frame,
-  widgetSelector: string,
-): Promise<SurferRelatedTableRow[] | null> {
-  // Returns null when the widget is genuinely absent (broken selector/frame),
-  // and an array (possibly empty) when the widget is present.
-  const result = await frame.evaluate((widgetSel: string): SurferRelatedTableRow[] | null => {
+// Reads the related-keywords table that Keyword Surfer renders in the main
+// Google DOM inside the keyword-surfer-sidebar element. Each row's direct <td>
+// cells are [checkbox, keyword, overlap, volume]; we take the keyword/overlap/
+// volume cells (indices 1/2/3) and read only the direct cell text so nested
+// <a>/<span>/<div> text is not duplicated.
+async function extractRelatedRows(page: Page, widgetSelector: string): Promise<SurferRelatedTableRow[] | null> {
+  return page.evaluate((widgetSel: string): SurferRelatedTableRow[] | null => {
     const widget = document.querySelector(widgetSel);
     if (!widget) return null;
-    const rowEls = Array.from(widget.querySelectorAll('tr, li, [class*="row"]'));
+    const table = widget.querySelector('table');
+    if (!table) return null;
+    const tbody = table.querySelector('tbody') ?? table;
+    const trs = Array.from(tbody.querySelectorAll(':scope > tr'));
     const out: SurferRelatedTableRow[] = [];
-    for (const rowEl of rowEls) {
-      const cells = Array.from(rowEl.querySelectorAll('td, span, div, a'));
-      const texts = cells.map((c) => (c.textContent ?? '').trim()).filter(Boolean);
-      // Keyword | Overlap | Volume: take the first three populated cells.
-      if (texts.length >= 3) {
-        out.push({ keyword: texts[0]!, overlapText: texts[1]!, volumeText: texts[2]! });
-      }
+    for (const tr of trs) {
+      // Only direct child <td> cells; nested elements are not traversed, so
+      // their text is not duplicated.
+      const tds = Array.from(tr.querySelectorAll(':scope > td'));
+      if (tds.length < 4) continue;
+      out.push({
+        keyword: (tds[1]?.textContent ?? '').trim(),
+        overlapText: (tds[2]?.textContent ?? '').trim(),
+        volumeText: (tds[3]?.textContent ?? '').trim(),
+      });
     }
     return out;
   }, widgetSelector);
-  return result;
 }
 
 export async function readSurferRelated(
@@ -163,37 +168,26 @@ export async function readSurferRelated(
   waitMs: number,
 ): Promise<SurferRelatedKeyword[]> {
   const deadline = Date.now() + waitMs;
-  let frameSeen = false;
   let widgetSeen = false;
 
   while (Date.now() <= deadline) {
-    const frame = page.frames().find((f) => RELATED_FRAME_URL.test(f.url()));
-    if (frame) {
-      frameSeen = true;
-      const rows = await extractRelatedRowsFromFrame(frame, widgetSelector).catch(() => null);
-      if (rows === null) {
-        // Widget not present yet; keep waiting (it may still mount).
-        await page.waitForTimeout(500);
-        continue;
-      }
-      widgetSeen = true;
-      if (rows.length > 0) return parseSurferRelatedRows(rows);
+    const rows = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
+    if (rows === null || rows === undefined) {
+      // Widget not present yet; keep waiting (it may still mount).
+      await page.waitForTimeout(500);
+      continue;
     }
+    widgetSeen = true;
+    if (rows.length > 0) return parseSurferRelatedRows(rows);
     await page.waitForTimeout(500);
   }
 
-  if (!frameSeen) {
-    throw new ResearchError(
-      'SURFER_NOT_DETECTED',
-      `Surfer related-keywords frame (assets.keywordsur.fr) was not found on the page.`,
-    );
-  }
   if (!widgetSeen) {
     throw new ResearchError(
       'SURFER_RELATED_PARSE_ERROR',
-      `Surfer related-keywords widget "${widgetSelector}" was not found inside the frame.`,
+      `Surfer related-keywords widget "${widgetSelector}" was not found in the page.`,
     );
   }
-  // Frame and widget present, but genuinely no related keywords.
+  // Widget present, but genuinely no related keywords.
   return [];
 }

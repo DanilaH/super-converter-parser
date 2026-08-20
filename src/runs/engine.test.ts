@@ -78,7 +78,7 @@ function okResult(keyword: KeywordRecord, serpCount = 2): CollectionResult {
     },
     serpRows: serpRowsFor(keyword.normalizedKeyword, serpCount),
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 
@@ -98,7 +98,7 @@ function googleFailResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 
@@ -113,7 +113,7 @@ function surferFailResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 
@@ -128,7 +128,7 @@ function transientFailResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 
@@ -638,7 +638,7 @@ test('a collector returning a non-terminal status raises DB_ERROR', async () => 
             },
             serpRows: [],
             debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
           }),
         }),
       ),

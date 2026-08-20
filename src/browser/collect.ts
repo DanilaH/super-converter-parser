@@ -22,10 +22,20 @@ import {
 } from '../diagnostics/artifacts.js';
 import { keywordSlug } from '../runs/run.js';
 
+// Structured related-keyword outcome. The status is independent of the main
+// Surfer/Google parse result: a broken related widget is reported as 'error'
+// even when the primary collection succeeded, and a successful primary
+// collection with a broken related widget still preserves the related 'error'.
+export type SurferRelatedOutcome = {
+  status: 'ok' | 'empty' | 'error';
+  error: string | null;
+  rows: SurferRelatedKeyword[];
+};
+
 export type CollectionResult = {
   record: KeywordRecord;
   serpRows: SerpResult[];
-  related: SurferRelatedKeyword[];
+  related: SurferRelatedOutcome;
   debugArtifactPath: string | null;
 };
 
@@ -80,17 +90,26 @@ export async function collectKeyword(
       errors.push({ code, message });
     }
 
-    let related: SurferRelatedKeyword[] = [];
-    if (config.expansion.enabled && config.expansion.depth >= 1) {
+    // The related-keyword reader runs only for root/seed keywords. Expanded
+    // (surfer_related) keywords are themselves collected but never expanded
+    // further, so re-reading their related list would be wasted browser work.
+    let related: SurferRelatedOutcome = { status: 'empty', error: null, rows: [] };
+    const isSeed = keyword.sources.some((source) => source.type === 'seed');
+    if (config.expansion.enabled && config.expansion.depth >= 1 && isSeed) {
       try {
-        related = await readSurferRelated(
+        const parsed = await readSurferRelated(
           page,
           config.browser.surferRelatedWidgetSelector,
           config.browser.surferWaitTimeoutMs,
         );
+        related =
+          parsed.length > 0
+            ? { status: 'ok', error: null, rows: parsed }
+            : { status: 'empty', error: null, rows: [] };
       } catch (error) {
         const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
         errors.push({ code, message });
+        related = { status: 'error', error: code, rows: [] };
       }
     }
 
@@ -178,7 +197,7 @@ export async function collectKeyword(
       error: { code, message },
     };
 
-    return { record, serpRows: [], related: [], debugArtifactPath: null };
+    return { record, serpRows: [], related: { status: 'empty', error: null, rows: [] }, debugArtifactPath: null };
   } finally {
     await page.close().catch(() => undefined);
   }

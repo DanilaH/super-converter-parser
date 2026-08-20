@@ -135,7 +135,7 @@ function okResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 

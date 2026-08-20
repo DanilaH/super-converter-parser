@@ -59,6 +59,7 @@ test('runCli --microsoft builds a real run and preserves every duplicate row', a
       record: { ...record, status: 'completed', surfer: null, google: null, error: null },
       serpRows: [],
       debugArtifactPath: null,
+      related: { status: 'empty', error: null, rows: [] },
     }),
   };
 

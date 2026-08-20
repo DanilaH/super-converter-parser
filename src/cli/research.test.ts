@@ -8,7 +8,7 @@ import { runCli, effectiveConfigForResume, EXIT_PAUSED, EXIT_OK, EXIT_INVALID_IN
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
-import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
+import { buildKeywordCacheKey, buildRelatedCacheKey, keywordCacheIdentity } from '../cache/keys.js';
 import { ResearchError } from '../shared/errors.js';
 import type { CliDeps } from './research.js';
 import type { Browser } from 'playwright-core';
@@ -37,7 +37,7 @@ function okResult(keyword: KeywordRecord): CollectionResult {
     },
     serpRows: [],
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 
@@ -558,6 +558,88 @@ test('an unreadable cache database exits 3 (preflight)', async () => {
     const code = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
     assert.equal(code, EXIT_PREFLIGHT);
     assert.equal(connectCalls, 0, 'no browser work happens before the cache is healthy');
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test('all-hit seed with a cached related list pointing at a missing candidate engages the browser', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-expand-warm-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\ncompare lists', 'utf8');
+
+  const cachePath = join(directory, 'cache', 'cache.sqlite');
+  await mkdir(join(directory, 'cache'), { recursive: true });
+  const identity = keywordCacheIdentity(loadConfig({}));
+  const cacheStore = CacheStore.open(cachePath);
+  // Seed is a completed cache hit.
+  cacheStore.putKeyword(
+    {
+      cacheKey: buildKeywordCacheKey('compare lists', identity),
+      keyword: 'compare lists',
+      normalizedKeyword: 'compare lists',
+      identity,
+      record: {
+        id: 'kw-compare lists',
+        keyword: 'compare lists',
+        normalizedKeyword: 'compare lists',
+        sources: [{ type: 'seed', rowNumbers: [1] }],
+        status: 'completed',
+        surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+        google: { hl: 'en', gl: 'us', pageUrl: 'https://google.com/search?q=x', detectedLocation: null, geoWarning: false },
+        error: null,
+      },
+      serpRows: [],
+      collectedAt: '2026-01-01T00:00:00.000Z',
+      storedAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  );
+  // Related list is cached (ok, still fresh) and points at a candidate that is
+  // NOT in the keyword cache; the browser must be engaged for it.
+  cacheStore.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', identity),
+      normalizedKeyword: 'compare lists',
+      identity,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'list comparison', overlap: 80, volume: 5000 }],
+    },
+    new Date(Date.now() - 1000).toISOString(),
+    7 * 24 * 60 * 60 * 1000,
+  );
+  cacheStore.close();
+
+  const collected: string[] = [];
+  let connectCalls = 0;
+  const deps: CliDeps = {
+    connect: async () => {
+      connectCalls += 1;
+      return {
+        contexts: () => [{}],
+        close: async () => undefined,
+      } as unknown as Browser;
+    },
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => {
+      collected.push(record.normalizedKeyword);
+      return okResult(record);
+    },
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--expand'],
+      deps,
+      { CACHE_DB_PATH: cachePath } as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_OK);
+    // The browser was needed for the missing candidate, not the hit seed.
+    assert.equal(connectCalls, 1);
+    assert.deepEqual([...collected].sort(), ['list comparison']);
   } finally {
     process.chdir(previousCwd);
   }

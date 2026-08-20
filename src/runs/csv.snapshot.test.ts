@@ -63,7 +63,7 @@ function okResult(keyword: KeywordRecord): CollectionResult {
       { keyword: keyword.normalizedKeyword, position: 2, title: 't2', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
     ],
       debugArtifactPath: null,
-      related: [],
+      related: { status: 'empty', error: null, rows: [] },
   };
 }
 

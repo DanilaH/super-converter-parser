@@ -8,7 +8,8 @@ import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { executeRun, type EngineHooks } from './engine.js';
 import { createRunId, type KeywordRecord } from './run.js';
-import type { CollectionResult } from '../browser/collect.js';
+import type { CollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
+import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import type { SerpResult } from '../google/serp.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey } from '../cache/keys.js';
@@ -47,7 +48,10 @@ const GOOGLE_META = {
   geoWarning: false,
 };
 
-function relatedResult(keyword: KeywordRecord, related: CollectionResult['related']): CollectionResult {
+function relatedResult(keyword: KeywordRecord, related: SurferRelatedKeyword[]): CollectionResult {
+  const outcome: SurferRelatedOutcome = related.length > 0
+    ? { status: 'ok', error: null, rows: related }
+    : { status: 'empty', error: null, rows: [] };
   return {
     record: {
       ...keyword,
@@ -58,7 +62,7 @@ function relatedResult(keyword: KeywordRecord, related: CollectionResult['relate
     },
     serpRows: serpRowsFor(keyword.normalizedKeyword, 2),
     debugArtifactPath: null,
-    related,
+    related: outcome,
   };
 }
 
@@ -236,7 +240,10 @@ test('warm cache hit expands from the related cache without the browser', async 
       expiresAt: '2099-01-01T00:00:00.000Z',
     });
   }
-  // The seed's related list is cached (ok) so expansion needs no browser.
+  // The seed's related list is cached (ok, still fresh) so expansion needs no
+  // browser. Use a recent storedAt so the related TTL has not expired (an
+  // expired entry must NOT be used as warm expansion).
+  const relatedStoredAt = new Date(Date.now() - 1000).toISOString();
   cacheStore.putRelated(
     {
       cacheKey: buildRelatedCacheKey('compare lists', identity),
@@ -246,7 +253,7 @@ test('warm cache hit expands from the related cache without the browser', async 
       error: null,
       rows: [{ relatedKeyword: 'list comparison', overlap: 80, volume: 5000 }],
     },
-    storedAt,
+    relatedStoredAt,
     7 * 24 * 60 * 60 * 1000,
   );
 
@@ -280,11 +287,123 @@ test('warm cache hit expands from the related cache without the browser', async 
   cacheStore.close();
 });
 
-// Live acceptance: the real Surfer extension renders the related-keywords widget
-// inside an assets.keywordsur.fr iframe. This requires a connected Research
-// Chrome with the extension injected and cannot run in CI; perform it manually
-// against the spike page and confirm the table rows parse as Keyword | Overlap
-// | Volume with overlap stored as 0..100.
-test.skip('live acceptance: real Surfer iframe related-keywords table parses', () => {
+test('expired related cache entry is NOT used as warm expansion', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-expired-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+  const collected: string[] = [];
+
+  // Seed is a completed cache hit.
+  cacheStore.putKeyword({
+    cacheKey: buildKeywordCacheKey('compare lists', identity),
+    keyword: 'compare lists',
+    normalizedKeyword: 'compare lists',
+    identity,
+    record: {
+      id: 'kw-compare lists',
+      keyword: 'compare lists',
+      normalizedKeyword: 'compare lists',
+      sources: [{ type: 'seed', rowNumbers: [1] }],
+      status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: { ...GOOGLE_META },
+      error: null,
+    },
+    serpRows: serpRowsFor('compare lists', 2),
+    collectedAt: '2026-01-01T00:00:00.000Z',
+    storedAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  // The related list is cached as 'ok' but already expired; it must NOT be
+  // used to expand into a candidate.
+  cacheStore.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', identity),
+      normalizedKeyword: 'compare lists',
+      identity,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'list comparison', overlap: 80, volume: 5000 }],
+    },
+    '2020-01-01T00:00:00.000Z',
+    7 * 24 * 60 * 60 * 1000,
+  );
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      collected.push(keyword.normalizedKeyword);
+      return relatedResult(keyword, []);
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  // Expired related entry => no candidate added, browser never engaged.
+  assert.deepEqual(collected, []);
+  assert.equal(store.loadKeywords(runId).length, 1);
+  store.close();
+  cacheStore.close();
+});
+
+test('related-parser error keeps related status error and suppresses expansion', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-relerr-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => ({
+      record: {
+        ...keyword,
+        status: 'completed',
+        surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+        google: { ...GOOGLE_META },
+        error: null,
+      },
+      serpRows: serpRowsFor(keyword.normalizedKeyword, 2),
+      debugArtifactPath: null,
+      // Primary parse succeeded, but the related widget failed to parse.
+      related: { status: 'error', error: 'SURFER_RELATED_PARSE_ERROR', rows: [] },
+    }),
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  // No expansion (related status is error, not ok), and the error is persisted.
+  assert.equal(store.loadKeywords(runId).length, 1);
+  const entry = cacheStore.getRelated?.(buildRelatedCacheKey('compare lists', identity));
+  assert.ok(entry);
+  assert.equal(entry!.status, 'error');
+  assert.equal(entry!.error, 'SURFER_RELATED_PARSE_ERROR');
+  store.close();
+  cacheStore.close();
+});
+
+// Live acceptance: the real Surfer extension renders the related-keywords table
+// inside the keyword-surfer-sidebar element of the MAIN Google DOM (not an
+// iframe). This requires a connected Research Chrome with the extension
+// injected and cannot run in CI; perform it manually against the spike page and
+// confirm the table rows parse as Keyword | Overlap | Volume with overlap stored
+// as 0..100.
+test.skip('live acceptance: real Surfer related-keywords table parses (keyword-surfer-sidebar)', () => {
   throw new Error('manual acceptance only');
 });

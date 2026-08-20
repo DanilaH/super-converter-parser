@@ -44,12 +44,25 @@ export function planRunCache(
   options: KeywordAccessOptions,
   cache: KeywordCache | null,
   now: number,
+  relatedCandidates: readonly string[] = [],
 ): RunCachePlan {
   const resolutions = new Map<string, CacheResolution>();
   let needsBrowser = false;
   for (const normalizedKeyword of normalizedKeywords) {
     const resolution = resolveKeywordAccess(normalizedKeyword, options, cache, now);
     resolutions.set(normalizedKeyword, resolution);
+    if (resolution.kind !== 'hit') needsBrowser = true;
+  }
+  // Warm-expansion candidates (from the related cache) may require the browser
+  // even when every seed is a cache hit. They are queued by the engine during
+  // execution; planning them here keeps the "needs browser?" decision aligned
+  // with what the engine will actually collect, so an all-hit seed plus a
+  // cached related list that points at a missing candidate still engages the
+  // browser instead of finalizing early.
+  for (const candidate of relatedCandidates) {
+    if (resolutions.has(candidate)) continue;
+    const resolution = resolveKeywordAccess(candidate, options, cache, now);
+    resolutions.set(candidate, resolution);
     if (resolution.kind !== 'hit') needsBrowser = true;
   }
   return { needsBrowser, resolutions };
