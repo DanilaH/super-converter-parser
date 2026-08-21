@@ -396,6 +396,73 @@ test('a fresh domain record is not overwritten by a later cache-hit of the same 
   store.close();
 });
 
+// Contract 13b (Block 2 fix): a fresh Ahrefs lookup that returns an error
+// without throwing still records the returned error code and fresh provenance.
+test('a fresh non-throwing Ahrefs error keeps its returned code and fresh provenance', async () => {
+  const ahrefs: AhrefsClient = async () => ({
+    domain: 'a.com',
+    dr: null,
+    fetchedAt: '2026-01-01T00:00:00.000Z',
+    source: 'ahrefs',
+    status: 'error',
+    error: 'AHREFS_503',
+  });
+  const cache = CacheStore.openInMemory();
+  const serpRows = [serp('k', 1, 'a.com', null, null)];
+  const sourceByDomain = await applyDomainRatings({
+    serpRows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.parse('2026-01-01T00:00:00.000Z'),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(serpRows[0]!.drStatus, 'error');
+  assert.equal(serpRows[0]!.drError, 'AHREFS_503', 'fresh returned error code preserved on the row');
+
+  const store = makeStore();
+  store.recordDomains('run-reg', 0, 'k', serpRows, sourceByDomain);
+  const domains = store.loadDomains('run-reg');
+  assert.equal(domains.length, 1);
+  assert.equal(domains[0]!.status, 'error');
+  assert.equal(domains[0]!.error, 'AHREFS_503', 'fresh returned error persisted to the domains table');
+  assert.equal(domains[0]!.source, 'fresh');
+  store.close();
+});
+
+// Contract 13c (Block 2 fix): when one cached-error domain repeats within a
+// single SERP, every occurrence inherits the cached error code (not just the
+// first lookup).
+test('a repeated cached-error domain in one SERP keeps the error on every row', async () => {
+  const cache = CacheStore.openInMemory();
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  const expiresAt = '2099-01-01T00:00:00.000Z';
+  cache.putDomain('a.com', { dr: null, status: 'error', error: 'AHREFS_429' }, storedAt, Date.parse(expiresAt) - Date.parse(storedAt));
+  // ahrefs present but never consulted (cache hit): must not throw.
+  const ahrefs: AhrefsClient = async () => {
+    throw new ResearchError('AHREFS_ERROR', 'should not be called on a cache hit');
+  };
+  const serpRows = [
+    serp('k', 1, 'a.com', null, null),
+    serp('k', 3, 'a.com', null, null),
+  ];
+  const sourceByDomain = await applyDomainRatings({
+    serpRows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.parse(storedAt),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(serpRows.length, 2);
+  assert.equal(serpRows[0]!.drStatus, 'error');
+  assert.equal(serpRows[0]!.drError, 'AHREFS_429', 'first occurrence gets cached error');
+  assert.equal(serpRows[1]!.drStatus, 'error');
+  assert.equal(serpRows[1]!.drError, 'AHREFS_429', 'repeated occurrence inherits the cached error');
+});
+
 // Contract 14 (Block 1): the manifest is the final artifact; status.json is
 // published first and the manifest is produced last.
 test('writeSnapshots publishes both status.json and manifest.json (manifest-last)', async () => {

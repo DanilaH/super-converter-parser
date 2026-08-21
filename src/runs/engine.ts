@@ -664,7 +664,9 @@ export async function applyDomainRatings(params: {
 }): Promise<Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>> {
   const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
   // Per-domain DR for in-call dedupe (a domain on several rows is fetched once).
-  const resolvedDrs = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error' }>();
+  // Carries the error code too, so a repeated occurrence of the same domain in
+  // one SERP inherits the exact error provenance of the first lookup.
+  const resolvedDrs = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error'; error: string | null }>();
   // Provenance returned to the caller so the run-level domains table can record
   // whether each value came from the domain cache or a fresh Ahrefs lookup.
   const sourceByDomain = new Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>();
@@ -695,6 +697,9 @@ export async function applyDomainRatings(params: {
     if (prior) {
       row.dr = prior.dr;
       row.drStatus = prior.status;
+      // Carry the error code forward so every occurrence of the domain in the
+      // SERP shares the same provenance (not just the first lookup).
+      row.drError = prior.error ?? null;
       continue;
     }
 
@@ -705,7 +710,7 @@ export async function applyDomainRatings(params: {
       // Preserve the cached error code verbatim so a cached Ahrefs error is
       // traceable downstream (the domains table keeps it, not just fresh ones).
       row.drError = cached.error ?? null;
-      resolvedDrs.set(domain, { dr: cached.dr, status: cached.status });
+      resolvedDrs.set(domain, { dr: cached.dr, status: cached.status, error: cached.error ?? null });
       sourceByDomain.set(domain, { source: 'cache', fetchedAt: cached.storedAt });
       continue;
     }
@@ -726,7 +731,10 @@ export async function applyDomainRatings(params: {
       );
       row.dr = rating.dr;
       row.drStatus = rating.status;
-      resolvedDrs.set(domain, { dr: rating.dr, status: rating.status });
+      // A fresh lookup that returns an error (without throwing) must keep its
+      // returned error code, exactly like a thrown failure.
+      row.drError = rating.error ?? null;
+      resolvedDrs.set(domain, { dr: rating.dr, status: rating.status, error: rating.error ?? null });
       sourceByDomain.set(domain, { source: 'fresh', fetchedAt: rating.fetchedAt });
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
@@ -734,7 +742,7 @@ export async function applyDomainRatings(params: {
       row.dr = null;
       row.drStatus = 'error';
       row.drError = code;
-      resolvedDrs.set(domain, { dr: null, status: 'error' });
+      resolvedDrs.set(domain, { dr: null, status: 'error', error: code });
       sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
       // Persistent 429/5xx and unexpected throws are cached as errors so the
       // domain is not re-fetched until domainErrorMs elapses.
