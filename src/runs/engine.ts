@@ -702,6 +702,9 @@ export async function applyDomainRatings(params: {
     if (cached && Date.parse(cached.expiresAt) > now()) {
       row.dr = cached.dr;
       row.drStatus = cached.status;
+      // Preserve the cached error code verbatim so a cached Ahrefs error is
+      // traceable downstream (the domains table keeps it, not just fresh ones).
+      row.drError = cached.error ?? null;
       resolvedDrs.set(domain, { dr: cached.dr, status: cached.status });
       sourceByDomain.set(domain, { source: 'cache', fetchedAt: cached.storedAt });
       continue;

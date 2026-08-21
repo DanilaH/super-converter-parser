@@ -107,14 +107,13 @@ function normalizeLabel(value: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-// Label of a registrable domain with its public suffix (TLD) stripped, then
-// normalized. "example.co.uk" -> "example", "comparelists.com" -> "comparelists".
-// Exact-match compares this to the keyword label so a brand domain matches the
-// bare keyword rather than the keyword-plus-TLD.
+// Label of a registrable domain used for exact-match: the second-level domain
+// (the first label of the registrable domain). For "example.co.uk" this is
+// "example", for "comparelists.com" it is "comparelists". Registrable domains
+// already exclude subdomains, so the first label is the brand label.
 function domainLabel(domain: string): string {
   const labels = domain.split('.');
-  if (labels.length > 1) labels.pop();
-  return normalizeLabel(labels.join('.'));
+  return normalizeLabel(labels[0] ?? domain);
 }
 
 // Split a keyword into token labels (each normalized) of length >= 4, used by
@@ -188,21 +187,25 @@ export function aggregate(input: AggregateInput, thresholds: DrThresholds): Aggr
 
   const normalizedKeyword = normalizeLabel(input.normalizedKeyword);
   let exactMatchDomainCount = 0;
+  let nicheDomainCount = 0;
+  const tokens = keywordTokens(input.keyword);
+  // Exact-match domains (whose brand label equals the keyword) are counted
+  // once and then excluded from the niche heuristic, so a domain that is an
+  // exact match never double-counts as a niche signal for the same keyword.
   for (const domain of representative.keys()) {
     const label = domainLabel(domain);
     if (label.length > 0 && label === normalizedKeyword) {
       exactMatchDomainCount += 1;
+      continue;
     }
-  }
-
-  const tokens = keywordTokens(input.keyword);
-  let nicheDomainCount = 0;
-  if (tokens.length > 0) {
-    for (const domain of representative.keys()) {
+    if (tokens.length > 0) {
       const normalizedDomain = normalizeLabel(domain);
-      if (normalizedDomain.length === 0) continue;
-      if (normalizedDomain === normalizedKeyword) continue; // exact match handled above
-      if (tokens.some((token) => normalizedDomain.includes(token))) nicheDomainCount += 1;
+      if (
+        normalizedDomain.length > 0 &&
+        tokens.some((token) => normalizedDomain.includes(token))
+      ) {
+        nicheDomainCount += 1;
+      }
     }
   }
 

@@ -10,10 +10,14 @@ import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js
 import { createRunId, type RunState } from './run.js';
 import { writeSnapshots, renderReportMd } from './snapshots.js';
 import { applyDomainRatings, executeRun, type EngineHooks, type CollectKeywordFn } from './engine.js';
+import { setRenameForTesting } from './run.js';
 import { resolveDrThresholds, aggregate } from '../scoring/scoring.js';
 import type { SerpResult } from '../google/serp.js';
 import type { AhrefsClient } from '../ahrefs/client.js';
 import { ResearchError } from '../shared/errors.js';
+
+const realRename = async (oldPath: string, newPath: string): Promise<void> =>
+  (await import('node:fs/promises')).rename(oldPath, newPath);
 
 const CONFIG = loadConfig({});
 const INPUT = { kind: 'seeds' as const, path: 'input/seeds.csv' };
@@ -219,7 +223,10 @@ test('report is deterministic and shows the target state', () => {
   const r2 = renderReportMd(ctx);
   assert.equal(r1, r2, 'deterministic: no generated timestamp');
   assert.ok(r1.includes('State: **completed**'));
-  assert.ok(!r1.includes('Updated: ' + new Date().toISOString()));
+  // The report must source its timestamp from the stored run, not a freshly
+  // generated one at render time (proven by r1 === r2 and by emission of the
+  // stored updatedAt).
+  assert.ok(r1.includes(`Updated: ${run.updatedAt ?? run.createdAt}`));
   store.close();
 });
 
@@ -279,9 +286,191 @@ test('a publishing failure does not produce a false terminal run state', async (
 // Contract 8: the domains output carries the real first-seen keyword text.
 test('domains output carries the real first-seen keyword', () => {
   const store = makeStore();
-  store.recordDomains('run-reg', 0, 'compare lists', [serp('k', 1, 'a.com', 50, 'ok')], new Map());
+  store.recordDomains('run-reg', 0, 'compare lists', [serp('x', 1, 'a.com', 50, 'ok')], new Map());
   const domains = store.loadDomains('run-reg');
   assert.equal(domains.length, 1);
   assert.equal(domains[0]!.firstSeenKeyword, 'compare lists');
+  store.close();
+});
+
+// Contract 9 (Block 3): the brand label is the first label of a multi-part
+// suffix registrable domain, so "example.co.uk" matches the keyword "example".
+test('exact-match uses the multi-part suffix brand label (example.co.uk -> example)', () => {
+  const rows = [serp('example', 1, 'example.co.uk', 50, 'ok')];
+  const agg = aggregate(
+    { keyword: 'example', normalizedKeyword: 'example', surfer: null, serpRows: rows },
+    { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 },
+  );
+  assert.equal(agg.exactMatchDomainCount, 1);
+  assert.equal(agg.nicheDomainCount, 0, 'exact-match domain is excluded from niche');
+});
+
+// Contract 10 (Block 3): a domain that is an exact match must not also count as
+// a niche signal for the same keyword.
+test('an exact-match domain is excluded from the niche heuristic', () => {
+  const rows = [serp('compare lists', 1, 'comparelists.com', 50, 'ok')];
+  const agg = aggregate(
+    { keyword: 'compare lists', normalizedKeyword: 'comparelists', surfer: null, serpRows: rows },
+    { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 },
+  );
+  assert.equal(agg.exactMatchDomainCount, 1);
+  assert.equal(agg.nicheDomainCount, 0);
+});
+
+// Contract 11 (Block 3): non-exact domains containing a >=4-char keyword token
+// still count as niche signals.
+test('niche heuristic still counts non-exact domains containing a keyword token', () => {
+  const rows = [serp('compare lists', 1, 'comparetools.com', 50, 'ok')];
+  const agg = aggregate(
+    { keyword: 'compare lists', normalizedKeyword: 'comparelists', surfer: null, serpRows: rows },
+    { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 },
+  );
+  assert.equal(agg.exactMatchDomainCount, 0);
+  assert.equal(agg.nicheDomainCount, 1);
+});
+
+// Contract 12 (Block 2): a cached Ahrefs error keeps its code and cache
+// provenance, and the error code is preserved on the row (not only fresh ones).
+test('cached Ahrefs error preserves its code and cache provenance', async () => {
+  const cache = CacheStore.openInMemory();
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  const expiresAt = '2099-01-01T00:00:00.000Z';
+  cache.putDomain('a.com', { dr: null, status: 'error', error: 'AHREFS_429' }, storedAt, Date.parse(expiresAt) - Date.parse(storedAt));
+  // ahrefs must be present so the cache branch runs; it must NOT be consulted on a hit.
+  const ahrefs: AhrefsClient = async () => {
+    throw new ResearchError('AHREFS_ERROR', 'should not be called on a cache hit');
+  };
+  const serpRows = [serp('k', 1, 'a.com', null, null)];
+  const sourceByDomain = await applyDomainRatings({
+    serpRows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.parse(storedAt),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(serpRows[0]!.drStatus, 'error');
+  assert.equal(serpRows[0]!.drError, 'AHREFS_429', 'cached error code preserved on the row');
+
+  const store = makeStore();
+  store.recordDomains('run-reg', 0, 'k', serpRows, sourceByDomain);
+  const domains = store.loadDomains('run-reg');
+  assert.equal(domains.length, 1);
+  assert.equal(domains[0]!.status, 'error');
+  assert.equal(domains[0]!.error, 'AHREFS_429', 'cached error code persisted to the domains table');
+  assert.equal(domains[0]!.source, 'cache', 'provenance records the cache source');
+  store.close();
+});
+
+// Contract 13 (Block 2): a fresh domain record is never downgraded to 'cache'
+// when the same domain is later seen on a cache-hit run; its source and error
+// provenance are preserved while DR still updates to the latest value.
+test('a fresh domain record is not overwritten by a later cache-hit of the same domain', () => {
+  const store = makeStore();
+  const fresh = new Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>([
+    ['a.com', { source: 'fresh', fetchedAt: '2026-01-01T00:00:00.000Z' }],
+  ]);
+  store.recordDomains(
+    'run-reg',
+    0,
+    'k0',
+    [{ registrableDomain: 'a.com', dr: 50, drStatus: 'ok', position: 2, drError: 'FRESH_ERR' }],
+    fresh,
+  );
+  const cache = new Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>([
+    ['a.com', { source: 'cache', fetchedAt: '2026-02-01T00:00:00.000Z' }],
+  ]);
+  store.recordDomains(
+    'run-reg',
+    1,
+    'k1',
+    [{ registrableDomain: 'a.com', dr: 90, drStatus: 'ok', position: 1, drError: 'CACHE_ERR' }],
+    cache,
+  );
+  const domains = store.loadDomains('run-reg');
+  assert.equal(domains.length, 1);
+  assert.equal(domains[0]!.source, 'fresh', 'fresh source preserved over a later cache-hit');
+  assert.equal(domains[0]!.error, 'FRESH_ERR', 'fresh error preserved over a later cache-hit');
+  assert.equal(domains[0]!.dr, 90, 'DR still updates to the latest value');
+  store.close();
+});
+
+// Contract 14 (Block 1): the manifest is the final artifact; status.json is
+// published first and the manifest is produced last.
+test('writeSnapshots publishes both status.json and manifest.json (manifest-last)', async () => {
+  const store = makeStore();
+  const runId = 'run-reg';
+  const stored = store.loadKeywords(runId) as StoredKeyword[];
+  store.commitKeyword(
+    runId,
+    {
+      ...stored[0]!,
+      status: 'completed',
+      surfer: { volume: 100, cpc: 1, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: { hl: 'en', gl: 'us', pageUrl: 'u', detectedLocation: null, geoWarning: false },
+      error: null,
+      collectedAt: '2026-01-01T00:00:00.000Z',
+    },
+    [serp('compare lists', 1, 'a.com', 80, 'ok')],
+  );
+  store.setRunState(runId, 'completed');
+  const runDirectory = await mkdtemp(join(tmpdir(), 'reg-mani-'));
+  setRenameForTesting(realRename);
+  try {
+    await writeSnapshots(store, runId, runDirectory, 'completed');
+  } finally {
+    setRenameForTesting(realRename);
+  }
+  const statusRaw = await readFile(join(runDirectory, 'status.json'), 'utf8');
+  const manifestRaw = await readFile(join(runDirectory, 'manifest.json'), 'utf8');
+  assert.equal(JSON.parse(statusRaw).status, 'completed');
+  assert.equal(JSON.parse(manifestRaw).state, 'completed');
+  store.close();
+});
+
+// Contract 15 (Block 1): if the manifest write fails, status.json is removed so
+// a false terminal run state is never left behind.
+test('a manifest write failure removes status.json so no false terminal state is left', async () => {
+  const store = makeStore();
+  const runId = 'run-reg';
+  const stored = store.loadKeywords(runId) as StoredKeyword[];
+  store.commitKeyword(
+    runId,
+    {
+      ...stored[0]!,
+      status: 'completed',
+      surfer: { volume: 100, cpc: 1, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: { hl: 'en', gl: 'us', pageUrl: 'u', detectedLocation: null, geoWarning: false },
+      error: null,
+      collectedAt: '2026-01-01T00:00:00.000Z',
+    },
+    [serp('compare lists', 1, 'a.com', 80, 'ok')],
+  );
+  store.setRunState(runId, 'completed');
+  const runDirectory = await mkdtemp(join(tmpdir(), 'reg-manifail-'));
+  const statusPath = join(runDirectory, 'status.json');
+  setRenameForTesting(async (oldPath, newPath) => {
+    if (newPath.endsWith('manifest.json')) {
+      throw new ResearchError('OUTPUT_WRITE_ERROR', 'forced manifest failure');
+    }
+    await realRename(oldPath, newPath);
+  });
+  let threw = false;
+  try {
+    await writeSnapshots(store, runId, runDirectory, 'completed');
+  } catch {
+    threw = true;
+  } finally {
+    setRenameForTesting(realRename);
+  }
+  assert.ok(threw, 'manifest failure surfaces');
+  let statusExists = true;
+  try {
+    await readFile(statusPath, 'utf8');
+  } catch {
+    statusExists = false;
+  }
+  assert.equal(statusExists, false, 'status.json cleaned up; no false terminal state');
   store.close();
 });

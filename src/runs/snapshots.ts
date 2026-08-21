@@ -8,6 +8,7 @@ import {
   type StoredDomain,
 } from '../db/store.js';
 import { writeJsonAtomic, writeTextAtomic, type RunManifest, type RunState } from './run.js';
+import { unlink } from 'node:fs/promises';
 import { renderCsv } from '../exports/csv.js';
 import type { SerpResult } from '../google/serp.js';
 import {
@@ -163,14 +164,19 @@ export async function writeSnapshots(
     'run report',
   );
 
-  // The manifest is published before status.json. status.json is the final
-  // artifact written: if publishing fails mid-way (including the manifest), a
-  // terminal status.json is never emitted, so the run is not mistaken for
-  // complete and stays resumable.
-  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
-
+  // status.json is published first. The manifest is the final artifact: if the
+  // manifest write fails, status.json is removed so a terminal run state is
+  // never emitted without the manifest, and the run stays resumable (not
+  // falsely terminal). A run is only "complete" once both artifacts exist.
   const status = buildRunStatus(store, runId, runDirectory, state);
   await writeJsonAtomic(`${runDirectory}/status.json`, status, 'run status');
+
+  try {
+    await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
+  } catch (error) {
+    await unlink(`${runDirectory}/status.json`).catch(() => {});
+    throw error;
+  }
 }
 
 function organicCounts(runId: string, store: RunStore): Map<number, number> {

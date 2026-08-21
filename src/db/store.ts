@@ -685,8 +685,8 @@ export class RunStore {
        ON CONFLICT(run_id, domain) DO UPDATE SET
          dr = excluded.dr,
          status = excluded.status,
-         error = excluded.error,
-         source = excluded.source,
+         error = CASE WHEN domains.source = 'fresh' THEN domains.error ELSE excluded.error END,
+         source = CASE WHEN domains.source = 'fresh' THEN 'fresh' ELSE excluded.source END,
          fetched_at = excluded.fetched_at`,
     );
 
