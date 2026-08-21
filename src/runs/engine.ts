@@ -312,7 +312,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         sleep: hooks.sleep,
         logger,
       });
-      store.recordDomains(runId, stored.idx, entry.serpRows, hitSourceByDomain);
+      store.recordDomains(runId, stored.idx, stored.keyword, entry.serpRows, hitSourceByDomain);
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
       logger(
         `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
@@ -379,7 +379,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         sleep: hooks.sleep,
         logger,
       });
-      store.recordDomains(runId, idx, serpRows, missSourceByDomain);
+      store.recordDomains(runId, idx, record.keyword, serpRows, missSourceByDomain);
       store.commitKeyword(runId, committed, serpRows, cacheStatus);
       breaker.record(record.status, record.error?.code ?? null);
       samples.push(hooks.now() - startAt);
@@ -661,14 +661,22 @@ export async function applyDomainRatings(params: {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   logger: (line: string) => void;
-}): Promise<Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>> {
+}): Promise<Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>> {
   const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
   // Per-domain DR for in-call dedupe (a domain on several rows is fetched once).
   const resolvedDrs = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error' }>();
   // Provenance returned to the caller so the run-level domains table can record
   // whether each value came from the domain cache or a fresh Ahrefs lookup.
-  const sourceByDomain = new Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>();
-  if (!ahrefs || !domainCache) return sourceByDomain;
+  const sourceByDomain = new Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>();
+  // Ahrefs enrichment intentionally skipped (no client or no domain cache):
+  // mark every observed row as 'not_attempted' so the run-level domains table
+  // still persists the observed domains with honest provenance (source 'none').
+  if (!ahrefs || !domainCache) {
+    for (const row of serpRows) {
+      if (row.registrableDomain && row.drStatus === null) row.drStatus = 'not_attempted';
+    }
+    return sourceByDomain;
+  }
 
   for (const row of serpRows) {
     // Older keyword-cache entries may carry an empty registrable_domain.
@@ -722,6 +730,7 @@ export async function applyDomainRatings(params: {
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
       row.dr = null;
       row.drStatus = 'error';
+      row.drError = code;
       resolvedDrs.set(domain, { dr: null, status: 'error' });
       sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
       // Persistent 429/5xx and unexpected throws are cached as errors so the

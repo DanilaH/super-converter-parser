@@ -61,17 +61,18 @@ test('domains persist uniquely, keep earliest first-seen, and update DR on repla
   const src = new Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>([
     ['a.com', { source: 'fresh', fetchedAt: '2026-01-01T00:00:00.000Z' }],
   ]);
-  store.recordDomains('run-agg', 0, [{ registrableDomain: 'a.com', dr: 50, drStatus: 'ok', position: 2 }], src);
-  store.recordDomains('run-agg', 1, [{ registrableDomain: 'a.com', dr: 80, drStatus: 'ok', position: 1 }], src);
+  store.recordDomains('run-agg', 0, 'parent0', [{ registrableDomain: 'a.com', dr: 50, drStatus: 'ok', position: 2 }], src);
+  store.recordDomains('run-agg', 1, 'parent1', [{ registrableDomain: 'a.com', dr: 80, drStatus: 'ok', position: 1 }], src);
   let loaded = store.loadDomains('run-agg');
   assert.equal(loaded.length, 1, 'unique domain across two keywords');
   const a = loaded[0]!;
   assert.equal(a.dr, 80, 'DR updates to the latest value');
   assert.equal(a.firstSeenKeywordIdx, 0, 'earliest surface keyword preserved');
   assert.equal(a.firstSeenPosition, 2, 'earliest surface position preserved');
+  assert.equal(a.firstSeenKeyword, 'parent0', 'earliest surface keyword text preserved');
 
   // Replay keyword 0: still one row, no duplicate.
-  store.recordDomains('run-agg', 0, [{ registrableDomain: 'a.com', dr: 50, drStatus: 'ok', position: 2 }], src);
+  store.recordDomains('run-agg', 0, 'parent0', [{ registrableDomain: 'a.com', dr: 50, drStatus: 'ok', position: 2 }], src);
   loaded = store.loadDomains('run-agg');
   assert.equal(loaded.length, 1, 'no duplicate after replay');
   assert.equal(a.firstSeenKeywordIdx, 0);

@@ -10,7 +10,12 @@ import {
 import { writeJsonAtomic, writeTextAtomic, type RunManifest, type RunState } from './run.js';
 import { renderCsv } from '../exports/csv.js';
 import type { SerpResult } from '../google/serp.js';
-import { buildCandidates, SCORING_VERSION, type Candidate } from '../scoring/scoring.js';
+import {
+  buildCandidates,
+  resolveDrThresholds,
+  SCORING_VERSION,
+  type Candidate,
+} from '../scoring/scoring.js';
 
 export function countProgress(keywords: StoredKeyword[]): {
   completed: number;
@@ -72,7 +77,12 @@ export async function writeSnapshots(
   );
   const completedDomains = new Set(
     serpRows
-      .filter((row) => row.drStatus !== null && row.registrableDomain !== '')
+      .filter(
+        (row) =>
+          row.drStatus !== null &&
+          row.drStatus !== 'not_attempted' &&
+          row.registrableDomain !== '',
+      )
       .map((row) => row.registrableDomain),
   ).size;
 
@@ -122,7 +132,9 @@ export async function writeSnapshots(
 
   const relatedKeywords = store.loadRelatedKeywords(runId);
   const domains = store.loadDomains(runId);
-  const candidates = buildCandidates(keywords, serpRows, run.configSnapshot.scoring.drThresholds);
+  // Legacy runs may carry a configSnapshot without a scoring section; fall back
+  // to the documented default DR thresholds instead of throwing.
+  const candidates = buildCandidates(keywords, serpRows, resolveDrThresholds(run.configSnapshot));
   await writeTextAtomic(
     `${runDirectory}/related-keywords.csv`,
     renderRelatedKeywordsCsv(relatedKeywords),
@@ -137,6 +149,7 @@ export async function writeSnapshots(
   await writeTextAtomic(
     `${runDirectory}/report.md`,
     renderReportMd({
+      state,
       run,
       keywords,
       candidates,
@@ -150,15 +163,14 @@ export async function writeSnapshots(
     'run report',
   );
 
+  // The manifest is published before status.json. status.json is the final
+  // artifact written: if publishing fails mid-way (including the manifest), a
+  // terminal status.json is never emitted, so the run is not mistaken for
+  // complete and stays resumable.
+  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
+
   const status = buildRunStatus(store, runId, runDirectory, state);
   await writeJsonAtomic(`${runDirectory}/status.json`, status, 'run status');
-
-  // The manifest is the last artifact written: every data file is on disk
-  // before it, so if publishing fails mid-way the previously published
-  // manifest (and data files) remain on disk. The run stays resumable and the
-  // operator can distinguish a real failure from a finished run, instead of
-  // seeing a partial artifact set dressed up as complete.
-  await writeJsonAtomic(`${runDirectory}/manifest.json`, manifest, 'run manifest');
 }
 
 function organicCounts(runId: string, store: RunStore): Map<number, number> {
@@ -343,7 +355,7 @@ export function renderDomainsCsv(rows: StoredDomain[]): string {
       row.error ?? '',
       row.source,
       row.fetchedAt ?? '',
-      String(row.firstSeenKeywordIdx),
+      row.firstSeenKeyword,
       String(row.firstSeenPosition),
     ]);
   }
@@ -406,7 +418,7 @@ export type RunStatus = {
   processedKeywords: number;
   errors: number;
   scoringVersion: string;
-  candidatesReport: string;
+  candidateReport: string;
   report: string;
   statusFile: string;
   artifacts: RunArtifacts;
@@ -451,7 +463,7 @@ export function buildRunStatus(
     processedKeywords: processed,
     errors: progress.errors,
     scoringVersion: SCORING_VERSION,
-    candidatesReport: artifacts.candidatesCsv,
+    candidateReport: artifacts.candidatesCsv,
     report: artifacts.report,
     statusFile: artifacts.statusFile,
     artifacts,
@@ -468,6 +480,7 @@ export function buildRunStatus(
 }
 
 export type ReportContext = {
+  state: RunState;
   run: StoredRun;
   keywords: StoredKeyword[];
   candidates: Candidate[];
@@ -480,15 +493,16 @@ export type ReportContext = {
 };
 
 export function renderReportMd(ctx: ReportContext): string {
-  const { run, keywords, candidates, relatedKeywords, domains, progress, cacheStats } = ctx;
+  const { state, run, keywords, candidates, relatedKeywords, domains, progress, cacheStats } = ctx;
   const processed = progress.completed + progress.partial + progress.failed;
   const hitRate = cacheHitRatePercent(cacheStats.hits, processed);
   const lines: string[] = [];
   lines.push(`# Run Report — ${run.runId}`);
   lines.push('');
-  lines.push(`State: **${ctx.run.state}**  `);
+  lines.push(`State: **${state}**  `);
   lines.push(`Scoring version: ${SCORING_VERSION}  `);
-  lines.push(`Created: ${run.createdAt}  Updated: ${new Date().toISOString()}`);
+  // Deterministic timestamp from the stored run, never a freshly generated one.
+  lines.push(`Created: ${run.createdAt}  Updated: ${run.updatedAt ?? run.createdAt}`);
   lines.push('');
   lines.push('## Overview');
   lines.push('');

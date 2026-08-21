@@ -23,9 +23,14 @@ export type SerpResult = {
   registrableDomain: string;
   dr: number | null;
   // Outcome of the Ahrefs DR lookup for this row: null until enrichment runs,
-  // 'ok' | 'not_found' | 'error' afterwards. Lets completedDomains count every
-  // resolved domain, not only the ones with a numeric DR.
-  drStatus: 'ok' | 'not_found' | 'error' | null;
+  // 'ok' | 'not_found' | 'error' afterwards, and 'not_attempted' when DR
+  // enrichment was intentionally skipped (e.g. AHREFS_API_KEY unset). Lets
+  // completedDomains count every resolved domain, not only the ones with a
+  // numeric DR, while still persisting observed domains when Ahrefs is off.
+  drStatus: 'ok' | 'not_found' | 'error' | 'not_attempted' | null;
+  // Error code captured from a failed Ahrefs lookup (null on success/skip), so
+  // domain-level error provenance is not lost.
+  drError?: string | null;
   resultType: 'organic';
 };
 

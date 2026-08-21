@@ -70,18 +70,18 @@ test('top3 and top5 medians use actual rows in positions 1-3 / 1-5 with known DR
   assert.equal(agg.top5MedianDr, 30); // median([10, 20, 30, 40, 50])
 });
 
-test('exact-match counts a domain whose normalized label equals the normalized keyword', () => {
+test('exact-match counts a domain whose label (suffix stripped) equals the keyword label', () => {
   const rows = [
-    serp('examplecom', 1, 'example.com', 50, 'ok'), // normalized -> "examplecom" (matches keyword)
-    serp('examplecom', 2, 'other.com', 50, 'ok'),
+    serp('example', 1, 'example.com', 50, 'ok'), // "example" (suffix stripped) == keyword label
+    serp('example', 2, 'other.com', 50, 'ok'),
   ];
-  const agg = aggregate({ keyword: 'examplecom', normalizedKeyword: 'examplecom', surfer: null, serpRows: rows }, THRESHOLDS);
+  const agg = aggregate({ keyword: 'example', normalizedKeyword: 'example', surfer: null, serpRows: rows }, THRESHOLDS);
   assert.equal(agg.exactMatchDomainCount, 1);
 });
 
 test('niche-domain heuristic counts non-exact domains containing a >=4-char keyword token', () => {
   const rows = [
-    serp('compare lists', 1, 'comparelists.com', 50, 'ok'), // not exact, but "compare" token present
+    serp('compare lists', 1, 'comparetools.com', 50, 'ok'), // not exact, but "compare" token present
     serp('compare lists', 2, 'unrelated.com', 50, 'ok'),
   ];
   const agg = aggregate(

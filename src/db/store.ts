@@ -13,7 +13,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -114,6 +114,13 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, domain)
   );
   `,
+  // v6: persist the real first-seen keyword text (not only its index) so the
+  // domains output is self-describing, and allow the 'not_attempted' DR status
+  // plus a 'none' source so observed domains survive an Ahrefs skip with honest
+  // provenance.
+  `
+  ALTER TABLE domains ADD COLUMN first_seen_keyword TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export type StoredRun = {
@@ -166,10 +173,11 @@ export type StoredDomain = {
   runId: string;
   domain: string;
   dr: number | null;
-  status: 'ok' | 'not_found' | 'error';
+  status: 'ok' | 'not_found' | 'error' | 'not_attempted';
   error: string | null;
-  source: 'cache' | 'fresh';
+  source: 'cache' | 'fresh' | 'none';
   fetchedAt: string | null;
+  firstSeenKeyword: string;
   firstSeenKeywordIdx: number;
   firstSeenPosition: number;
 };
@@ -653,8 +661,15 @@ export class RunStore {
   recordDomains(
     runId: string,
     keywordIdx: number,
-    serpRows: Array<{ registrableDomain: string; dr: number | null; drStatus: 'ok' | 'not_found' | 'error' | null; position: number }>,
-    sourceByDomain: Map<string, { source: 'cache' | 'fresh'; fetchedAt: string }>,
+    keyword: string,
+    serpRows: Array<{
+      registrableDomain: string;
+      dr: number | null;
+      drStatus: 'ok' | 'not_found' | 'error' | 'not_attempted' | null;
+      drError?: string | null;
+      position: number;
+    }>,
+    sourceByDomain: Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>,
   ): void {
     const firstPosition = new Map<string, number>();
     for (const row of serpRows) {
@@ -665,8 +680,8 @@ export class RunStore {
     }
 
     const upsert = this.db.prepare(
-      `INSERT INTO domains (run_id, domain, dr, status, error, source, fetched_at, first_seen_keyword_idx, first_seen_position)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO domains (run_id, domain, dr, status, error, source, fetched_at, first_seen_keyword, first_seen_keyword_idx, first_seen_position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(run_id, domain) DO UPDATE SET
          dr = excluded.dr,
          status = excluded.status,
@@ -678,6 +693,8 @@ export class RunStore {
     const write = this.db.transaction(() => {
       for (const row of serpRows) {
         const domain = row.registrableDomain;
+        // Persist every observed domain. A null drStatus means the row was never
+        // offered for enrichment; 'not_attempted' means Ahrefs was skipped.
         if (!domain || row.drStatus === null) continue;
         const meta = sourceByDomain.get(domain);
         upsert.run(
@@ -685,9 +702,10 @@ export class RunStore {
           domain,
           row.dr,
           row.drStatus,
-          null,
-          meta?.source ?? 'cache',
+          row.drError ?? null,
+          meta?.source ?? 'none',
           meta?.fetchedAt ?? null,
+          keyword,
           keywordIdx,
           firstPosition.get(domain) ?? row.position,
         );
@@ -708,6 +726,7 @@ export class RunStore {
         error: string | null;
         source: string;
         fetched_at: string | null;
+        first_seen_keyword: string;
         first_seen_keyword_idx: number;
         first_seen_position: number;
       }>
@@ -719,6 +738,7 @@ export class RunStore {
       error: row.error,
       source: row.source as StoredDomain['source'],
       fetchedAt: row.fetched_at,
+      firstSeenKeyword: row.first_seen_keyword,
       firstSeenKeywordIdx: row.first_seen_keyword_idx,
       firstSeenPosition: row.first_seen_position,
     }));

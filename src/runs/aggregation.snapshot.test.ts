@@ -68,12 +68,14 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   store.recordDomains(
     runId,
     0,
+    stored[0]!.keyword,
     [serp('compare lists', 1, 'a.com', 50, 'ok'), serp('compare lists', 2, 'b.com', 20, 'ok')],
     new Map([['a.com', { source: 'cache', fetchedAt: '2026-01-01T00:00:00.000Z' }], ['b.com', { source: 'cache', fetchedAt: '2026-01-01T00:00:00.000Z' }]]),
   );
   store.recordDomains(
     runId,
     1,
+    stored[1]!.keyword,
     [serp('best office chairs', 1, 'c.com', 80, 'ok')],
     new Map([['c.com', { source: 'fresh', fetchedAt: '2026-01-02T00:00:00.000Z' }]]),
   );
@@ -112,8 +114,12 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.equal(status.scoringVersion, SCORING_VERSION);
   assert.ok(typeof status.artifacts.candidatesCsv === 'string');
   assert.ok(status.artifacts.candidatesCsv.endsWith('candidates.csv'));
+  assert.equal(status.candidateReport, status.artifacts.candidatesCsv);
   assert.equal(status.counts.domains, 3);
   assert.equal(status.counts.relatedKeywords, 1);
+
+  // first_seen_keyword carries the real keyword text, not its index.
+  assert.ok(domains.join('\n').includes('compare lists'));
 
   const report = await readFile(join(runDirectory, 'report.md'), 'utf8');
   assert.ok(report.includes('Run Report'));

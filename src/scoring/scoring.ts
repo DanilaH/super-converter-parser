@@ -10,6 +10,31 @@ export type DrThresholds = {
   strongMax: number;
 };
 
+// Documented default DR bands (see SCORING.md). Used whenever a run's
+// configSnapshot predates the scoring section (legacy runs) or omits thresholds.
+export const DEFAULT_DR_THRESHOLDS: DrThresholds = {
+  veryWeakMax: 10,
+  weakMax: 30,
+  strongMin: 60,
+  strongMax: 75,
+};
+
+// Resolves DR thresholds from an arbitrary config snapshot, tolerating legacy
+// snapshots that carry no `scoring` section. Missing individual fields fall
+// back to the documented defaults so scoring never throws on old runs.
+export function resolveDrThresholds(
+  snapshot: { scoring?: { drThresholds?: Partial<DrThresholds> } } | null | undefined,
+): DrThresholds {
+  const fromSnapshot = snapshot?.scoring?.drThresholds;
+  if (!fromSnapshot) return { ...DEFAULT_DR_THRESHOLDS };
+  return {
+    veryWeakMax: fromSnapshot.veryWeakMax ?? DEFAULT_DR_THRESHOLDS.veryWeakMax,
+    weakMax: fromSnapshot.weakMax ?? DEFAULT_DR_THRESHOLDS.weakMax,
+    strongMin: fromSnapshot.strongMin ?? DEFAULT_DR_THRESHOLDS.strongMin,
+    strongMax: fromSnapshot.strongMax ?? DEFAULT_DR_THRESHOLDS.strongMax,
+  };
+}
+
 export type AggregationFeatures = {
   organicResultCount: number;
   uniqueDomains: number;
@@ -80,6 +105,16 @@ function normalizeLabel(value: string): string {
     .normalize('NFKD')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
+}
+
+// Label of a registrable domain with its public suffix (TLD) stripped, then
+// normalized. "example.co.uk" -> "example", "comparelists.com" -> "comparelists".
+// Exact-match compares this to the keyword label so a brand domain matches the
+// bare keyword rather than the keyword-plus-TLD.
+function domainLabel(domain: string): string {
+  const labels = domain.split('.');
+  if (labels.length > 1) labels.pop();
+  return normalizeLabel(labels.join('.'));
 }
 
 // Split a keyword into token labels (each normalized) of length >= 4, used by
@@ -154,8 +189,8 @@ export function aggregate(input: AggregateInput, thresholds: DrThresholds): Aggr
   const normalizedKeyword = normalizeLabel(input.normalizedKeyword);
   let exactMatchDomainCount = 0;
   for (const domain of representative.keys()) {
-    const normalizedDomain = normalizeLabel(domain);
-    if (normalizedDomain.length > 0 && normalizedDomain === normalizedKeyword) {
+    const label = domainLabel(domain);
+    if (label.length > 0 && label === normalizedKeyword) {
       exactMatchDomainCount += 1;
     }
   }
