@@ -22,7 +22,8 @@ export type AhrefsClientConfig = {
 
 // v3 public Domain Rating (free) endpoint. Returns a nested payload:
 //   { "domain_rating": { "domain_rating": <number> } }
-// Authentication is the official bearer token (optional for the free endpoint).
+// Authentication is the official bearer token; the caller is required to supply
+// a key (this tool gates DR enrichment on AHREFS_API_KEY).
 const DEFAULT_ENDPOINT = 'https://api.ahrefs.com/v3/public/domain-rating-free';
 const MAX_ATTEMPTS = 4;
 
