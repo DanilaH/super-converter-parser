@@ -49,7 +49,7 @@ function resultWithDomain(keyword: string): CollectionResult {
   };
 }
 
-test('AHREFS_API_KEY never leaks into artifacts or logs during a run', async () => {
+test('AHREFS_API_KEY never leaks into artifacts, run DB, cache DB, or logs', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cli-secret-leak-'));
   await mkdir(join(directory, 'input'), { recursive: true });
   await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
@@ -91,12 +91,27 @@ test('AHREFS_API_KEY never leaks into artifacts or logs during a run', async () 
     const runsDir = join(directory, 'runs');
     const runId = (await readdir(runsDir))[0] as string;
     const runDir = join(runsDir, runId);
-    const artifactPaths = (await readdir(runDir)).map((name) => join(runDir, name));
+
+    // Every persisted surface must be scanned: the JSON/CSV artifacts AND the
+    // run database (run.sqlite) which lives inside the run dir, plus the shared
+    // cache database (cache.sqlite) under data/. A missing expected file makes
+    // scanFilesForSecret reject, so an absent DB is a hard failure, not "safe".
+    const scanPaths = (await readdir(runDir)).map((name) => join(runDir, name));
+    scanPaths.push(join(directory, 'data', 'cache', 'cache.sqlite'));
+
+    // Debug artifacts are created only on parser failure; include them when
+    // present so the leak guard covers the whole surface area.
+    const debugDir = join(directory, 'debug', runId);
+    if ((await readdir(debugDir).catch(() => [] as string[])).length > 0) {
+      for (const name of await readdir(debugDir)) {
+        scanPaths.push(join(debugDir, name));
+      }
+    }
 
     assert.equal(
-      await scanFilesForSecret(artifactPaths, SENTINEL),
+      await scanFilesForSecret(scanPaths, SENTINEL),
       false,
-      'no artifact may contain the Ahrefs API key',
+      'no artifact, run DB, cache DB, or debug file may contain the Ahrefs API key',
     );
     assert.equal(
       scanTextForSecret(logLines.join('\n'), SENTINEL),

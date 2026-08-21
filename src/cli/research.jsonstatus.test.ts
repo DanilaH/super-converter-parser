@@ -1,0 +1,101 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import process from 'node:process';
+import { runCli, EXIT_OK, type CliDeps } from './research.js';
+import type { Browser } from 'playwright-core';
+import type { KeywordRecord } from '../runs/run.js';
+import type { CollectionResult } from '../browser/collect.js';
+
+function okResult(keyword: KeywordRecord): CollectionResult {
+  return {
+    record: {
+      ...keyword,
+      status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: {
+        hl: 'en',
+        gl: 'us',
+        pageUrl: 'https://google.com/search?q=x',
+        detectedLocation: null,
+        geoWarning: false,
+      },
+      error: null,
+    },
+    serpRows: [],
+    debugArtifactPath: null,
+    related: { status: 'empty', error: null, rows: [] },
+  };
+}
+
+function makeDeps(): CliDeps {
+  return {
+    connect: async () =>
+      ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => okResult(record),
+  };
+}
+
+function parseLastJsonLine(lines: string[]): Record<string, unknown> {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!.trim();
+    if (line.startsWith('{')) {
+      try {
+        return JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        // not this line; keep scanning upward
+      }
+    }
+  }
+  throw new Error('no JSON status line found in output');
+}
+
+test('--json-status emits a single parseable JSON line pointing at real artifacts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-json-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  const logLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logLines.push(args.map(String).join(' '));
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--json-status'],
+      makeDeps(),
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_OK);
+
+    const status = parseLastJsonLine(logLines) as {
+      status: string;
+      runId: string;
+      artifacts: { report: string; candidatesCsv: string };
+    };
+    assert.equal(status.status, 'completed');
+    assert.equal(status.runId, (await readdir(join(directory, 'runs')))[0]);
+
+    assert.ok(status.artifacts.report.endsWith('report.md'), 'report path points at report.md');
+    assert.ok(
+      status.artifacts.candidatesCsv.endsWith('candidates.csv'),
+      'candidates path points at candidates.csv',
+    );
+    const reportExists = await readFile(status.artifacts.report, 'utf8')
+      .then(() => true)
+      .catch(() => false);
+    assert.equal(reportExists, true, 'report path from JSON must actually exist');
+
+    const jsonLine = logLines.filter((line) => line.trim().startsWith('{')).pop()!;
+    assert.equal(/\[[0-9;]*m/.test(jsonLine), false, 'JSON status line must not contain ANSI codes');
+  } finally {
+    console.log = originalLog;
+    process.chdir(previousCwd);
+  }
+});

@@ -180,6 +180,36 @@ test('resuming a fully collected run finalizes without browser work', async () =
   }
 });
 
+test('resuming a terminal (completed) run is rejected with exit code 2', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-resume-terminal-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  const deps: CliDeps = {
+    connect: async () =>
+      ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
+    preflight: async () => undefined,
+    collect: async (_context, _config, record) => okResult(record),
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const first = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(first, EXIT_OK);
+
+    const runsDir = join(directory, 'runs');
+    const runId = (await readdir(runsDir))[0] as string;
+
+    // A completed run is immutable: re-resuming it must be refused, not silently
+    // re-collected or overwritten.
+    const retry = await runCli(['--resume', runId], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(retry, EXIT_INVALID_INPUT);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 test('runCli rejects --seeds and --resume together', async () => {
   const code = await runCli(
     ['--seeds', 'a.csv', '--resume', 'run-1'],

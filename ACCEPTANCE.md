@@ -193,20 +193,20 @@ Legend: `PASS` (verified), `FAIL` (defect), `BLOCKED_BY_ENVIRONMENT` (unaffected
 contract verified, limitation documented). v1 is **not** accepted while any
 mandatory row is `FAIL`.
 
-| # | Check | Result |
-| --- | --- | --- |
-| 1 | Preflight failures early, classified, actionable, non-terminal | PASS |
-| 2 | Invalid inputs/CLI exit with documented code (2) | PASS |
-| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS |
-| 4 | Geo mismatch visible, no false localization | PASS |
-| 5 | Parser failures retain debug evidence; breakers trip | PASS |
-| 6 | Ahrefs isolated, cached, traceable, secret-safe | PASS |
-| 7 | Cold/warm/refresh/identity cache consistent | PASS |
-| 8 | Interrupted work resumes without repeats | PASS |
-| 9 | Terminal historical runs immutable | PASS |
-| 10 | Output atomic, manifest-last, never falsely terminal | PASS |
-| 11 | CSV/JSON/Markdown agree with run DB | PASS |
-| 12 | `--json-status` stable and machine-readable | PASS |
-| 13 | Representative real Google + Surfer e2e | PASS (live) |
-| 14 | Docs reproducible, evidence + limitations honest | PASS |
-| 15 | Typecheck + test suite green | PASS |
+| # | Check | Result | Verified by |
+| --- | --- | --- | --- |
+| 1 | Preflight failures early, classified, actionable, non-terminal | PASS | `src/cli/research.test.ts` (cache DB unreadable → exit 3), `src/browser/preflight.ts` |
+| 2 | Invalid inputs/CLI exit with documented code (2) | PASS | `src/cli/research.input.test.ts`, `src/cli/research.test.ts` |
+| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS | `src/browser/captcha.test.ts` (detection + marker pause), `src/cli/research.test.ts` (SIGINT → 130, resume) |
+| 4 | Geo mismatch visible, no false localization | PASS | `src/cli/research.geo.test.ts` |
+| 5 | Parser failures retain debug evidence; breakers trip | PASS | `src/diagnostics/artifacts.test.ts`, `src/runs/policies.test.ts`, `src/runs/engine.test.ts` |
+| 6 | Ahrefs isolated, cached, traceable, secret-safe | PASS | `src/cli/research.secretLeak.test.ts`, `src/runs/engine.dr.test.ts` |
+| 7 | Cold/warm/refresh/identity cache consistent | PASS | `src/runs/engine.cache.test.ts`, `src/runs/engine.test.ts` |
+| 8 | Interrupted work resumes without repeats | PASS | `src/cli/research.test.ts` (SIGINT resume), `src/runs/engine.test.ts` |
+| 9 | Terminal historical runs immutable | PASS | `src/runs/engine.test.ts` (RESUME_TERMINAL_RUN), `src/cli/research.test.ts` (resume completed → exit 2) |
+| 10 | Output atomic, manifest-last, never falsely terminal | PASS | `src/runs/aggregation.regression.test.ts` (Contracts 7/14/15) |
+| 11 | CSV/JSON/Markdown agree with run DB | PASS | `src/runs/aggregation.regression.test.ts`, `src/runs/csv.snapshot.test.ts` |
+| 12 | `--json-status` stable and machine-readable | PASS | `src/cli/research.jsonstatus.test.ts` |
+| 13 | Representative real Google + Surfer e2e | BLOCKED_BY_ENVIRONMENT | requires operator's interactive Research Chrome + Keyword Surfer + CDP; deterministic contracts above are verified, live path is the operator's manual acceptance |
+| 14 | Docs reproducible, evidence + limitations honest | PASS | `ACCEPTANCE.md`, README acceptance note, `IMPLEMENTATION_PLAN.md` |
+| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 276/0/1 tests pass |

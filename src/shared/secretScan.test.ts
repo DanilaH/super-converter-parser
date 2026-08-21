@@ -34,11 +34,28 @@ test('scanFilesForSecret returns false when no file contains the sentinel', asyn
   assert.equal(await scanFilesForSecret(files, SENTINEL), false);
 });
 
-test('scanFilesForSecret tolerates missing files (no false leak)', async () => {
+test('scanFilesForSecret fails closed on a missing expected file', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'secret-scan-missing-'));
   await writeFile(join(dir, 'a.txt'), 'clean');
   const files = [join(dir, 'a.txt'), join(dir, 'does-not-exist.txt')];
-  assert.equal(await scanFilesForSecret(files, SENTINEL), false);
+  await assert.rejects(
+    () => scanFilesForSecret(files, SENTINEL),
+    /missing or unreadable/i,
+    'a missing expected artifact must fail the check, not be treated as safe',
+  );
+});
+
+test('scanFilesForSecret fails closed on an unreadable expected file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'secret-scan-unreadable-'));
+  const target = join(dir, 'locked.txt');
+  await writeFile(target, 'clean');
+  await writeFile(join(dir, 'dir-as-file'), 'x').catch(() => {});
+  // Point at a directory path to force an EISDIR-style read failure.
+  await assert.rejects(
+    () => scanFilesForSecret([target, dir], SENTINEL),
+    /missing or unreadable/i,
+    'an unreadable expected artifact must fail the check',
+  );
 });
 
 test('scanTextForSecret scans a captured log stream', () => {

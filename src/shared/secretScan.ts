@@ -1,26 +1,32 @@
 import { readFile } from 'node:fs/promises';
 
-// Scans generated text (artifacts, logs, CSV, JSON, Markdown) for a sentinel
-// secret. The Ahrefs API key is only ever held in the process environment and
-// passed to the network client; it must never appear in any persisted artifact,
-// debug file, or operator log. This module is the automated guard for that
-// invariant (see TASK-008 / issue #16, block 6).
+// Scans generated text (artifacts, run DB, cache DB, debug files, logs) for a
+// sentinel secret. The Ahrefs API key is only ever held in the process
+// environment and passed to the network client; it must never appear in any
+// persisted artifact, debug file, database, or operator log. This module is
+// the automated guard for that invariant (see TASK-008 / issue #16, block 6).
 export function containsSecret(text: string, sentinel: string): boolean {
   if (!sentinel) return false;
   return text.includes(sentinel);
 }
 
-// Scans each file for the sentinel. A missing or unreadable file is treated as
-// "nothing leaked there" rather than an error, so a deleted artifact cannot
-// masquerade as a leak.
+// Scans each EXPECTED file for the sentinel. A missing or unreadable file is
+// treated as a FAILED check (throws), never as "safe": an artifact we expect to
+// verify but cannot read must surface, not be silently skipped. The caller is
+// responsible for listing only files that should exist for the given run.
 export async function scanFilesForSecret(paths: string[], sentinel: string): Promise<boolean> {
   for (const path of paths) {
+    let content: string;
     try {
-      const content = await readFile(path, 'utf8');
-      if (containsSecret(content, sentinel)) return true;
-    } catch {
-      // File absent or unreadable: no content to leak from.
+      content = await readFile(path, 'utf8');
+    } catch (error) {
+      throw new Error(
+        `Expected artifact "${path}" is missing or unreadable and cannot be verified for secret leakage: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
+    if (containsSecret(content, sentinel)) return true;
   }
   return false;
 }

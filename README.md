@@ -316,6 +316,16 @@ data/
 4. `AGENTS.md`
 5. `IMPLEMENTATION_PLAN.md`
 
+## Acceptance
+
+The v1 hardening and end-to-end acceptance contract lives in
+[`ACCEPTANCE.md`](./ACCEPTANCE.md). It documents the safe environment (no real
+secrets in the repo), every exit code, the ten produced artifacts, the
+Ctrl+C/resume and CAPTCHA contracts, geo-mismatch visibility, and the mandatory
+live Google + Keyword Surfer run that only the operator can perform in their
+Research Chrome. Deterministic contracts are enforced by the test suite; the live
+path is the operator's manual acceptance step.
+
 ---
 
 ## Proven spike details

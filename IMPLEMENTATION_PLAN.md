@@ -112,6 +112,9 @@ Acceptance: every ranked candidate is traceable to raw keyword, SERP, and domain
 
 Exercise CAPTCHA pause, geo mismatch warning, parser failure evidence, invalid input, Ahrefs failure, secret handling, historical run immutability, partial runs, and representative end-to-end flow.
 
+Delivered as issue #16 (TASK-008). The reproducible acceptance contract and the
+verified result matrix are maintained in [`ACCEPTANCE.md`](./ACCEPTANCE.md).
+
 ## Inputs and decisions still required
 
 These do not block PR 1, but must be resolved before their respective phases:
