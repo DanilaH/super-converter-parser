@@ -69,7 +69,7 @@ export async function writeSnapshots(
   );
   const completedDomains = new Set(
     serpRows
-      .filter((row) => row.dr !== null && row.registrableDomain !== '')
+      .filter((row) => row.drStatus !== null && row.registrableDomain !== '')
       .map((row) => row.registrableDomain),
   ).size;
 

@@ -1,4 +1,4 @@
-﻿import type { Page } from 'playwright-core';
+import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 

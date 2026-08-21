@@ -47,6 +47,7 @@ export type ResearchConfig = {
     };
   };
   ahrefs: {
+    endpoint: string;
     rateLimitMinDelayMs: number;
     rateLimitMaxDelayMs: number;
     timeoutMs: number;
@@ -99,6 +100,7 @@ const DEFAULTS: ResearchConfig = {
     },
   },
   ahrefs: {
+    endpoint: 'https://api.ahrefs.com/v3/public/domain-rating-free',
     rateLimitMinDelayMs: 1000,
     rateLimitMaxDelayMs: 10_000,
     timeoutMs: 15_000,
@@ -245,6 +247,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     circuitBreaker,
     expansion,
     ahrefs: {
+      endpoint: (env.AHREFS_ENDPOINT ?? DEFAULTS.ahrefs.endpoint).trim(),
       rateLimitMinDelayMs: readPositiveNumber(
         'AHREFS_MIN_DELAY_MS',
         env.AHREFS_MIN_DELAY_MS,

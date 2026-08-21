@@ -1,4 +1,4 @@
-﻿import type { BrowserContext, Page } from 'playwright-core';
+import type { BrowserContext, Page } from 'playwright-core';
 import type { ResearchConfig } from '../config/config.js';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import { readSurferResult, readSurferRelated, type SurferRelatedKeyword } from '../surfer/parser.js';

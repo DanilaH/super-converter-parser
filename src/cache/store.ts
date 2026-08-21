@@ -413,6 +413,7 @@ export class CacheStore implements KeywordCache {
         hostname: item.hostname,
         registrableDomain: item.registrable_domain,
         dr: null,
+        drStatus: null,
         resultType: item.result_type as SerpResult['resultType'],
       })),
       collectedAt: row.collected_at,

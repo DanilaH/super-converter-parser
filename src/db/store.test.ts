@@ -95,6 +95,7 @@ test('replaceSerpRows overwrites previous rows for the keyword', () => {
     hostname: 'example.com',
     registrableDomain: 'example.com',
     dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   });
   store.replaceSerpRows(runId, 0, [row(1), row(2)]);
@@ -118,6 +119,7 @@ test('commitKeyword persists keyword and SERP rows in one write and replaces row
       hostname: 'example.com',
       registrableDomain: 'example.com',
       dr: null,
+      drStatus: null,
       resultType: 'organic' as const,
     }));
 
@@ -148,6 +150,7 @@ test('commitKeyword rolls back atomically when the SERP insert fails', () => {
     hostname: 'example.com',
     registrableDomain: 'example.com',
     dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   });
   store.replaceSerpRows(runId, 0, [row(1), row(2)]);

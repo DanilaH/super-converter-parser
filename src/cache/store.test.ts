@@ -40,6 +40,7 @@ function serpRows(count: number): SerpResult[] {
     hostname: 'example.com',
     registrableDomain: 'example.com',
     dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   }));
 }
@@ -920,7 +921,7 @@ test('keywordCacheIdentity comes from config and parser versions', () => {
     hl: 'en',
     gl: 'us',
     topN: 10,
-    surferParserVersion: '2.0.0',
+    surferParserVersion: '1.0.0',
     googleParserVersion: '1.2.0',
   });
 });

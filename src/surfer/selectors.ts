@@ -1,4 +1,4 @@
-export const SURFER_PARSER_VERSION = '2.1.0';
+export const SURFER_PARSER_VERSION = '1.0.0';
 
 export const SURFER_MARKERS = {
   cssMarker: '.keyword-surfer',

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAhrefsClient, type AhrefsClientConfig } from './client.js';
 
-type FetchLike = (url: string) => Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }>;
+type FetchInit = { signal?: unknown; headers?: Record<string, string> };
+type FetchLike = (url: string, init?: FetchInit) => Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }>;
 
 function makeFetch(status: number, body: unknown, opts: { throwNetwork?: boolean } = {}): FetchLike {
   return async () => {
@@ -12,7 +13,7 @@ function makeFetch(status: number, body: unknown, opts: { throwNetwork?: boolean
 }
 
 const baseOverrides: Partial<AhrefsClientConfig> = {
-  endpoint: 'https://apiv2.ahrefs.com/',
+  endpoint: 'https://api.ahrefs.com/v3/public/domain-rating-free',
   timeoutMs: 1000,
   minDelayMs: 1,
   maxDelayMs: 5,
@@ -22,13 +23,47 @@ function makeClient(overrides: Partial<AhrefsClientConfig> = {}): ReturnType<typ
   return createAhrefsClient('key', { ...baseOverrides, ...overrides });
 }
 
-test('returns ok with dr for a successful response', async () => {
-  const client = makeClient({ fetchImpl: makeFetch(200, { domain_rating: 42 }) as unknown as typeof fetch });
+test('returns ok with dr for a successful nested response', async () => {
+  const client = makeClient({
+    fetchImpl: makeFetch(200, { domain_rating: { domain_rating: 42 } }) as unknown as typeof fetch,
+  });
   const res = await client('example.com');
   assert.equal(res.status, 'ok');
   assert.equal(res.dr, 42);
   assert.equal(res.domain, 'example.com');
   assert.equal(res.error, null);
+});
+
+test('falls back to a flat dr field when present', async () => {
+  const client = makeClient({
+    fetchImpl: makeFetch(200, { dr: 7 }) as unknown as typeof fetch,
+  });
+  const res = await client('example.com');
+  assert.equal(res.status, 'ok');
+  assert.equal(res.dr, 7);
+});
+
+test('sends a bearer token when an api key is set', async () => {
+  let captured: FetchInit | undefined;
+  const fetchImpl: FetchLike = async (url, init) => {
+    captured = init;
+    return { status: 200, ok: true, json: async () => ({ domain_rating: { domain_rating: 1 } }) };
+  };
+  const client = makeClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+  await client('example.com');
+  assert.equal(captured?.headers?.Authorization, 'Bearer key');
+  assert.equal(captured?.headers?.Accept, 'application/json');
+});
+
+test('omits the authorization header without an api key', async () => {
+  let captured: FetchInit | undefined;
+  const fetchImpl: FetchLike = async (_url, init) => {
+    captured = init;
+    return { status: 200, ok: true, json: async () => ({ domain_rating: { domain_rating: 1 } }) };
+  };
+  const client = createAhrefsClient('', { ...baseOverrides, fetchImpl: fetchImpl as unknown as typeof fetch });
+  await client('example.com');
+  assert.equal(captured?.headers?.Authorization, undefined);
 });
 
 test('maps 404 to not_found with null dr', async () => {

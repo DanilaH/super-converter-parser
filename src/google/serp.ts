@@ -22,6 +22,10 @@ export type SerpResult = {
   hostname: string;
   registrableDomain: string;
   dr: number | null;
+  // Outcome of the Ahrefs DR lookup for this row: null until enrichment runs,
+  // 'ok' | 'not_found' | 'error' afterwards. Lets completedDomains count every
+  // resolved domain, not only the ones with a numeric DR.
+  drStatus: 'ok' | 'not_found' | 'error' | null;
   resultType: 'organic';
 };
 
@@ -94,6 +98,7 @@ export function buildOrganicResults(
       hostname: url.hostname,
       registrableDomain: registrableDomain(url.hostname) ?? '',
       dr: null,
+      drStatus: null,
       resultType: 'organic',
     });
 

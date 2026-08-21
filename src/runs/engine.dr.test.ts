@@ -31,6 +31,7 @@ function serpRow(url: string, domain: string, dr: number | null = null): SerpRes
     hostname: domain,
     registrableDomain: domain,
     dr,
+    drStatus: null,
     resultType: 'organic',
   };
 }
@@ -162,6 +163,7 @@ function serpRowsFor(keyword: string): SerpResult[] {
       hostname: 'example.com',
       registrableDomain: 'example.com',
       dr: null,
+      drStatus: null,
       resultType: 'organic',
     },
     {
@@ -172,6 +174,7 @@ function serpRowsFor(keyword: string): SerpResult[] {
       hostname: 'other.com',
       registrableDomain: 'other.com',
       dr: null,
+      drStatus: null,
       resultType: 'organic',
     },
   ];

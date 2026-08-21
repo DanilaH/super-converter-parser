@@ -116,6 +116,33 @@ Configuration via environment variables (all optional):
 | `CACHE_TTL_DOMAIN_OK_MS` | `30d` | Cache TTL for successful domain DR lookups |
 | `CACHE_TTL_DOMAIN_NOT_FOUND_MS` | `30d` | Cache TTL for not-found domain DR lookups |
 | `CACHE_TTL_DOMAIN_ERROR_MS` | `1h` | Cache TTL for failed domain DR lookups |
+| `AHREFS_ENDPOINT` | `https://api.ahrefs.com/v3/public/domain-rating-free` | Official Ahrefs v3 free Domain Rating endpoint (Bearer-authenticated, nested `domain_rating.domain_rating`) |
+| `AHREFS_API_KEY` | _(unset)_ | Optional bearer token. The free endpoint works without a key; a key raises rate limits / coverage |
+| `AHREFS_TIMEOUT_MS` | `15000` | Per-lookup timeout; aborts and is treated as an error |
+| `AHREFS_MIN_DELAY_MS` | `1000` | Minimum delay between domain lookups and the exponential-backoff base |
+| `AHREFS_MAX_DELAY_MS` | `10000` | Cap for the bounded exponential backoff between retries |
+
+#### Ahrefs Domain Rating
+
+Domain Rating (DR) is resolved with the official Ahrefs v3 **free** Domain Rating
+endpoint (`/v3/public/domain-rating-free`). It is the only sanctioned,
+non-scraping source of DR in this tool:
+
+- authentication is a bearer token (`Authorization: Bearer <key>`); the free
+  endpoint also answers without a key, so DR enrichment runs even when
+  `AHREFS_API_KEY` is unset (a key only improves rate limits / coverage);
+- the response is nested: `{ "domain_rating": { "domain_rating": <number> } }`;
+- transient failures (429 rate limit, 5xx, network) use **bounded exponential
+  backoff with full jitter** (`min * 2^(attempt-1)`, capped at `AHREFS_MAX_DELAY_MS`);
+- every successful / not-found / error result is cached with its own TTL
+  (`CACHE_TTL_DOMAIN_OK_MS` / `CACHE_TTL_DOMAIN_NOT_FOUND_MS` / `CACHE_TTL_DOMAIN_ERROR_MS`),
+  so repeated domains across keywords trigger a single fresh lookup per TTL window;
+- `completedDomains` counts every resolved domain regardless of outcome
+  (`ok`, `not_found`, `error`), not only those with a numeric DR.
+
+Data source attribution: **Domain Rating and related metrics are © Ahrefs**.
+DR is used strictly as one input to an internal, non-promotional scoring step and
+is not republished as a standalone Ahrefs dataset.
 
 ### Durable run state, checkpoints, and resume
 

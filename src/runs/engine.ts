@@ -1,12 +1,14 @@
-﻿import type { ResearchConfig } from '../config/config.js';
+import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { CollectionResult, RelatedCollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
 import { GOOGLE_PARSER_VERSION, type SerpResult } from '../google/serp.js';
+import { registrableDomain } from '../domains/normalize.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { ResearchError } from '../shared/errors.js';
+import type { AhrefsClient } from '../ahrefs/client.js';
 import {
   RunStore,
   isTerminalKeywordStatus,
@@ -31,8 +33,7 @@ import {
 } from './policies.js';
 import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey, type CacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, resolveKeywordAccess, resolveRelatedAccess, type CacheResolution, type RelatedCacheResolution } from '../cache/resolve.js';
-import { CacheStore, ttlMsForKeywordStatus, ttlMsForRelatedStatus, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
-import type { AhrefsClient } from '../ahrefs/client.js';
+import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, CacheStore, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
 
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
@@ -155,7 +156,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     run = validateResume(store, runId);
     const stale = store.markStaleRunningAsPending(runId);
     if (stale > 0) {
-      logger(`  Γ£ô ${stale} stale running keyword(s) reset to pending`);
+      logger(`  ✓ ${stale} stale running keyword(s) reset to pending`);
     }
     // Refresh semantics persist across pause/resume: merging with the stored
     // values keeps a forced-refresh run forced even if resumed without flags.
@@ -273,7 +274,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             logger,
           });
           for (const name of added) {
-            logger(`  Γå│ expansion (cached): +${name} (parent: ${stored.keyword})`);
+            logger(`  ↳ expansion (cached): +${name} (parent: ${stored.keyword})`);
           }
         } else if (relatedResolution.kind !== 'hit_empty') {
           store.incrementLookups(runId);
@@ -299,7 +300,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
               logger,
             });
             for (const name of added) {
-              logger(`  Γå│ expansion: +${name} (parent: ${stored.keyword})`);
+              logger(`  ↳ expansion: +${name} (parent: ${stored.keyword})`);
             }
           }
         }
@@ -318,7 +319,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       });
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
       logger(
-        `  Γ£ô cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
+        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
       );
     } else {
       const startAt = hooks.now();
@@ -343,7 +344,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
         if (retryable) {
           const delay = retryDelayMs(attempt, config.retry, hooks.random);
-          logger(`  ΓÜá ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
+          logger(`  ⚠ ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
           await hooks.sleep(delay);
           continue;
         }
@@ -389,17 +390,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       if (record.surfer) {
         const volume = formatVolume(record.surfer.volume);
         const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
-        logger(`  Γ£ô volume: ${volume} | cpc: ${cpc} | organic: ${result?.serpRows.length}`);
+        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${result?.serpRows.length}`);
       } else {
-        logger(`  Γ£ù surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
+        logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
       }
 
       if (record.google?.geoWarning) {
-        logger(`  ΓÜá SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
+        logger(`  ⚠ SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
       }
 
       if (result?.debugArtifactPath) {
-        logger(`  ΓÜá parser debug artifacts saved to ${result.debugArtifactPath}`);
+        logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
       }
 
       if (options.cache) {
@@ -421,7 +422,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           });
         } catch (error) {
           logger(
-            `  ΓÜá cache write failed for "${record.normalizedKeyword}": ${error instanceof ResearchError ? error.code : 'CACHE_DB_ERROR'} (run continues)`,
+            `  ⚠ cache write failed for "${record.normalizedKeyword}": ${error instanceof ResearchError ? error.code : 'CACHE_DB_ERROR'} (run continues)`,
           );
         }
       }
@@ -454,7 +455,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           logger,
         });
         for (const name of added) {
-          logger(`  Γå│ expansion: +${name} (parent: ${record.keyword})`);
+          logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
         }
       }
     }
@@ -560,10 +561,10 @@ function reportRelatedOutcome(
 ): void {
   if (result.related.status !== 'error') return;
   logger(
-    `  ΓÜá related keywords failed for "${normalizedKeyword}": ${result.related.error ?? 'SURFER_RELATED_PARSE_ERROR'}`,
+    `  ⚠ related keywords failed for "${normalizedKeyword}": ${result.related.error ?? 'SURFER_RELATED_PARSE_ERROR'}`,
   );
   if (result.debugArtifactPath) {
-    logger(`  ΓÜá related parser debug artifacts saved to ${result.debugArtifactPath}`);
+    logger(`  ⚠ related parser debug artifacts saved to ${result.debugArtifactPath}`);
   }
 }
 
@@ -640,7 +641,9 @@ function applySurferExpansion(params: {
 
 // Resolves an Ahrefs Domain Rating for every distinct registrable domain in the
 // organic SERP, reusing the domain cache so repeated domains across keywords
-// trigger a single fresh lookup per TTL window. Mutates `serpRows` in place.
+// trigger a single fresh lookup per TTL window. Mutates `serpRows` in place,
+// including back-filling `registrableDomain` for older cached rows that were
+// stored before the field existed (so they still get enriched).
 export async function applyDomainRatings(params: {
   serpRows: SerpResult[];
   ahrefs: AhrefsClient | null;
@@ -653,44 +656,64 @@ export async function applyDomainRatings(params: {
   const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
   if (!ahrefs || !domainCache) return;
 
-  const seen = new Set<string>();
+  // Resolved within this call so a domain appearing on multiple SERP rows
+  // (e.g. several subpages of one site) is fetched once yet every row carries
+  // the rating. The domain cache extends this across keywords/runs.
+  const resolved = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error' }>();
   for (const row of serpRows) {
+    // Older keyword-cache entries may carry an empty registrable_domain.
+    // Re-derive it from the hostname (falling back to the URL) so enrichment
+    // still runs for those rows instead of being silently skipped.
+    if (!row.registrableDomain) {
+      const derived =
+        registrableDomain(row.hostname) ??
+        (row.url ? registrableDomain(new URL(row.url).hostname) : null);
+      row.registrableDomain = derived ?? '';
+    }
     const domain = row.registrableDomain;
-    if (!domain || seen.has(domain)) continue;
-    seen.add(domain);
+    if (!domain) continue;
+
+    const prior = resolved.get(domain);
+    if (prior) {
+      row.dr = prior.dr;
+      row.drStatus = prior.status;
+      continue;
+    }
 
     const cached = domainCache.getDomain(domain);
-    let dr: number | null = null;
     if (cached && Date.parse(cached.expiresAt) > now()) {
-      dr = cached.dr;
-    } else {
-      try {
-        const rating = await ahrefs(domain);
-        const ttl =
-          rating.status === 'ok'
-            ? config.cache.ttl.domainOkMs
-            : rating.status === 'not_found'
-              ? config.cache.ttl.domainNotFoundMs
-              : config.cache.ttl.domainErrorMs;
-        domainCache.putDomain(
-          domain,
-          { dr: rating.dr, status: rating.status, error: rating.error ?? null },
-          new Date(now()).toISOString(),
-          ttl,
-        );
-        dr = rating.dr;
-      } catch (error) {
-        logger(
-          `  ΓÜá Ahrefs DR lookup failed for ${domain}: ${error instanceof ResearchError ? error.code : 'AHREFS_ERROR'}`,
-        );
-        dr = null;
-      }
-      await sleep(config.ahrefs.rateLimitMinDelayMs);
+      row.dr = cached.dr;
+      row.drStatus = cached.status;
+      resolved.set(domain, { dr: cached.dr, status: cached.status });
+      continue;
     }
 
-    for (const target of serpRows) {
-      if (target.registrableDomain === domain) target.dr = dr;
+    try {
+      const rating = await ahrefs(domain);
+      const ttl =
+        rating.status === 'ok'
+          ? config.cache.ttl.domainOkMs
+          : rating.status === 'not_found'
+            ? config.cache.ttl.domainNotFoundMs
+            : config.cache.ttl.domainErrorMs;
+      domainCache.putDomain(
+        domain,
+        { dr: rating.dr, status: rating.status, error: rating.error ?? null },
+        new Date(now()).toISOString(),
+        ttl,
+      );
+      row.dr = rating.dr;
+      row.drStatus = rating.status;
+      resolved.set(domain, { dr: rating.dr, status: rating.status });
+    } catch (error) {
+      logger(
+        `  ⚠ Ahrefs DR lookup failed for ${domain}: ${error instanceof ResearchError ? error.code : 'AHREFS_ERROR'}`,
+      );
+      row.dr = null;
+      row.drStatus = 'error';
+      resolved.set(domain, { dr: null, status: 'error' });
     }
+    await sleep(config.ahrefs.rateLimitMinDelayMs);
   }
 }
 

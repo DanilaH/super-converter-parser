@@ -52,6 +52,7 @@ function serpRowsFor(keyword: string, count: number): SerpResult[] {
     hostname: 'example.com',
     registrableDomain: 'example.com',
     dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   }));
 }

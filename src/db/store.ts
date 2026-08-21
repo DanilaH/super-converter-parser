@@ -13,7 +13,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -76,6 +76,11 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE serp_rows ADD COLUMN registrable_domain TEXT NOT NULL DEFAULT '';
   ALTER TABLE serp_rows ADD COLUMN dr REAL;
+  `,
+  // v4: persist the DR lookup outcome so completedDomains counts every resolved
+  // domain (ok / not_found / error), not only the ones with a numeric DR.
+  `
+  ALTER TABLE serp_rows ADD COLUMN dr_status TEXT;
   `,
 ];
 
@@ -329,7 +334,7 @@ export class RunStore {
   loadSerpRows(runId: string): SerpResult[] {
     const rows = this.db
       .prepare(
-        `SELECT keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, result_type
+        `SELECT keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type
          FROM serp_rows WHERE run_id = ? ORDER BY keyword_idx ASC, position ASC`,
       )
       .all(runId) as Array<{
@@ -341,6 +346,7 @@ export class RunStore {
       hostname: string;
       registrable_domain: string;
       dr: number | null;
+      dr_status: string | null;
       result_type: string;
     }>;
     return rows.map((row) => ({
@@ -351,6 +357,7 @@ export class RunStore {
       hostname: row.hostname,
       registrableDomain: row.registrable_domain,
       dr: row.dr,
+      drStatus: (row.dr_status as SerpResult['drStatus']) ?? null,
       resultType: row.result_type as SerpResult['resultType'],
     }));
   }
@@ -389,8 +396,8 @@ export class RunStore {
       'DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?',
     );
     const insertRow = this.db.prepare(
-      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, result_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const write = this.db.transaction(() => {
       deleteRows.run(runId, keywordIdx);
@@ -405,6 +412,7 @@ export class RunStore {
           row.hostname,
           row.registrableDomain,
           row.dr,
+          row.drStatus,
           row.resultType,
         );
       }
@@ -429,8 +437,8 @@ export class RunStore {
       'DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?',
     );
     const insertRow = this.db.prepare(
-      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, result_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const write = this.db.transaction(() => {
       updateKeyword.run(
@@ -455,6 +463,7 @@ export class RunStore {
           row.hostname,
           row.registrableDomain,
           row.dr,
+          row.drStatus,
           row.resultType,
         );
       }
