@@ -116,6 +116,37 @@ Configuration via environment variables (all optional):
 | `CACHE_TTL_DOMAIN_OK_MS` | `30d` | Cache TTL for successful domain DR lookups |
 | `CACHE_TTL_DOMAIN_NOT_FOUND_MS` | `30d` | Cache TTL for not-found domain DR lookups |
 | `CACHE_TTL_DOMAIN_ERROR_MS` | `1h` | Cache TTL for failed domain DR lookups |
+| `AHREFS_ENDPOINT` | `https://api.ahrefs.com/v3/public/domain-rating-free` | Official Ahrefs v3 free Domain Rating endpoint (Bearer-authenticated, nested `domain_rating.domain_rating`) |
+| `AHREFS_API_KEY` | _(unset)_ | **Required** for DR enrichment. When unset, the entire DR phase is skipped (all other stages still run) |
+| `AHREFS_TIMEOUT_MS` | `15000` | Per-lookup timeout; aborts and is treated as an error |
+| `AHREFS_MIN_DELAY_MS` | `1000` | Minimum delay between domain lookups and the exponential-backoff base |
+| `AHREFS_MAX_DELAY_MS` | `10000` | Cap for the bounded exponential backoff between retries |
+
+#### Ahrefs Domain Rating
+
+Domain Rating (DR) is resolved with the official Ahrefs v3 **free** Domain Rating
+endpoint (`/v3/public/domain-rating-free`). It is the only sanctioned,
+non-scraping source of DR in this tool:
+
+- authentication is a bearer token (`Authorization: Bearer <key>`); an
+  `AHREFS_API_KEY` is **required** — when it is unset the entire DR phase is
+  skipped (organic SERP and every other stage still run);
+- the response is nested: `{ "domain_rating": { "domain_rating": <number> } }`;
+- transient failures (429 rate limit, 5xx, network) use **bounded exponential
+  backoff with full jitter** (`min * 2^(attempt-1)`, capped at `AHREFS_MAX_DELAY_MS`),
+  and the abort timer is always released afterwards;
+- persistent 429 / 5xx and unexpected errors are cached as `error` with
+  `CACHE_TTL_DOMAIN_ERROR_MS`, so a failing domain is not re-fetched until the
+  TTL elapses;
+- every successful / not-found / error result is cached with its own TTL
+  (`CACHE_TTL_DOMAIN_OK_MS` / `CACHE_TTL_DOMAIN_NOT_FOUND_MS` / `CACHE_TTL_DOMAIN_ERROR_MS`),
+  so repeated domains across keywords trigger a single fresh lookup per TTL window;
+- `completedDomains` counts every resolved domain regardless of outcome
+  (`ok`, `not_found`, `error`), not only those with a numeric DR.
+
+Domain metrics provided by **[Domain Rating by Ahrefs](https://ahrefs.com/)**.
+DR is used strictly as one input to an internal, non-promotional scoring step and
+is not republished as a standalone Ahrefs dataset.
 
 ### Durable run state, checkpoints, and resume
 

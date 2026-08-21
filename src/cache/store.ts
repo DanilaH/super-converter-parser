@@ -6,7 +6,7 @@ import type { CacheIdentity } from './keys.js';
 import type { SerpResult } from '../google/serp.js';
 import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 
-export const CACHE_SCHEMA_VERSION = 3;
+export const CACHE_SCHEMA_VERSION = 4;
 
 // Rows that expired less than this long ago survive an open-time cleanup so
 // the next run can still classify them as expired (real expired accounting
@@ -81,6 +81,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE related_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'ok';
   ALTER TABLE related_cache ADD COLUMN error TEXT;
   DELETE FROM related_cache;
+  `,
+  // v4: SERP cache rows carry the registrable domain so a cached keyword can be
+  // re-enriched with Ahrefs DR from the domain cache without re-crawling.
+  `
+  ALTER TABLE serp_cache ADD COLUMN registrable_domain TEXT NOT NULL DEFAULT '';
   `,
 ];
 
@@ -193,6 +198,7 @@ type SerpRow = {
   title: string;
   url: string;
   hostname: string;
+  registrable_domain: string;
   result_type: string;
 };
 
@@ -405,6 +411,9 @@ export class CacheStore implements KeywordCache {
         title: item.title,
         url: item.url,
         hostname: item.hostname,
+        registrableDomain: item.registrable_domain,
+        dr: null,
+        drStatus: null,
         resultType: item.result_type as SerpResult['resultType'],
       })),
       collectedAt: row.collected_at,
@@ -422,8 +431,8 @@ export class CacheStore implements KeywordCache {
       );
       const deleteRows = this.db.prepare('DELETE FROM serp_cache WHERE cache_key = ?');
       const insertSerp = this.db.prepare(
-        `INSERT INTO serp_cache (cache_key, position, keyword, title, url, hostname, result_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO serp_cache (cache_key, position, keyword, title, url, hostname, result_type, registrable_domain)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const write = this.db.transaction(() => {
         insertRow.run(
@@ -449,6 +458,7 @@ export class CacheStore implements KeywordCache {
             row.url,
             row.hostname,
             row.resultType,
+            row.registrableDomain,
           );
         }
       });

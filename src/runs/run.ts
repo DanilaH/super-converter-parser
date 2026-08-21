@@ -60,6 +60,8 @@ export type RunManifest = {
     failedKeywords: number;
     errors: number;
     lookups: number;
+    totalDomains: number;
+    completedDomains: number;
     cache: {
       hits: number;
       misses: number;

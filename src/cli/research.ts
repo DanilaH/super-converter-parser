@@ -17,6 +17,7 @@ import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, planRunCache } from '../cache/resolve.js';
+import { createAhrefsClient, type AhrefsClient } from '../ahrefs/client.js';
 
 export const EXIT_OK = 0;
 export const EXIT_INTERNAL = 1;
@@ -361,6 +362,27 @@ export async function runCli(
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
 
+    const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
+    // AHREFS_API_KEY is required for the DR phase: this tool gates Ahrefs
+    // enrichment on a configured key, so without one the whole DR phase is
+    // skipped (organic SERP and all other stages still run).
+    let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
+    if (ahrefsApiKey) {
+      ahrefs = {
+        apiKey: ahrefsApiKey,
+        client: createAhrefsClient(ahrefsApiKey, {
+          endpoint: runConfig.ahrefs.endpoint,
+          timeoutMs: runConfig.ahrefs.timeoutMs,
+          minDelayMs: runConfig.ahrefs.rateLimitMinDelayMs,
+          maxDelayMs: runConfig.ahrefs.rateLimitMaxDelayMs,
+        }),
+      };
+      console.log(`  ✓ Ahrefs DR enrichment enabled (${runConfig.ahrefs.endpoint})`);
+    } else {
+      console.log('  • Ahrefs DR enrichment skipped (AHREFS_API_KEY not set)');
+    }
+    console.log('');
+
     // A fresh run's keywords exist only in the seeds (executeRun inserts them
     // into the store); a resume's pending keywords live in the run store.
     const pendingNormalized =
@@ -468,6 +490,7 @@ export async function runCli(
         resolutions: plan.resolutions,
         relatedResolutions: plan.relatedResolutions,
       },
+      ...(ahrefs ? { ahrefs } : {}),
     });
 
     if (outcome.kind === 'paused') {

@@ -38,6 +38,9 @@ function serpRows(count: number): SerpResult[] {
     title: `title ${index + 1}`,
     url: `https://example.com/${index + 1}`,
     hostname: 'example.com',
+    registrableDomain: 'example.com',
+    dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   }));
 }
@@ -450,7 +453,7 @@ test('a v1 cache database migrates to the current schema and is backed up first'
 
   const migrated = CacheStore.open(path);
   assert.equal(migrated.version, CACHE_SCHEMA_VERSION);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, CACHE_SCHEMA_VERSION);
   // The pre-migration copy is preserved next to the original.
   const backupPath = `${path}.pre-v1.bak`;
   assert.ok(existsSync(backupPath));
@@ -640,7 +643,7 @@ test('a v2 cache database migrates to v3 and invalidates legacy related rows', a
   v2.close();
 
   const migrated = CacheStore.open(path);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, CACHE_SCHEMA_VERSION);
   // Legacy rows were invalidated, never silently pretended to be 'ok'.
   assert.equal(migrated.getRelated('related-legacy'), null);
   // Everything else survived the structural changes.
@@ -918,7 +921,7 @@ test('keywordCacheIdentity comes from config and parser versions', () => {
     hl: 'en',
     gl: 'us',
     topN: 10,
-    surferParserVersion: '2.0.0',
+    surferParserVersion: '1.0.0',
     googleParserVersion: '1.2.0',
   });
 });

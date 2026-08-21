@@ -36,6 +36,9 @@ function serpRowsFor(keyword: string, count: number): SerpResult[] {
     title: `title ${index + 1}`,
     url: `https://example.com/${index + 1}`,
     hostname: 'example.com',
+    registrableDomain: 'example.com',
+    dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   }));
 }

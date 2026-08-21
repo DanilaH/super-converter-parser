@@ -2,11 +2,13 @@ import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import type { MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { CollectionResult, RelatedCollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
-import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
+import { GOOGLE_PARSER_VERSION, type SerpResult } from '../google/serp.js';
+import { registrableDomain } from '../domains/normalize.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { ResearchError } from '../shared/errors.js';
+import type { AhrefsClient } from '../ahrefs/client.js';
 import {
   RunStore,
   isTerminalKeywordStatus,
@@ -31,7 +33,7 @@ import {
 } from './policies.js';
 import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey, type CacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, resolveKeywordAccess, resolveRelatedAccess, type CacheResolution, type RelatedCacheResolution } from '../cache/resolve.js';
-import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
+import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, CacheStore, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
 
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
@@ -86,6 +88,10 @@ export type ExecuteRunOptions = {
   hooks: EngineHooks;
   publishSnapshots?: SnapshotsPublisher;
   cache?: EngineCacheOptions;
+  // Ahrefs Domain Rating enrichment. When present the engine resolves a DR for
+  // every registrable domain in the organic SERP and persists it next to the
+  // SERP row. Domain rating lookups are cached and rate limited.
+  ahrefs?: { apiKey: string | null; client: AhrefsClient };
 };
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
@@ -302,6 +308,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       // Commit the cached primary only after any required related lookup. If
       // the process exits during that lookup, the root remains resumable and
       // expansion cannot be silently skipped on restart.
+      await applyDomainRatings({
+        serpRows: entry.serpRows,
+        ahrefs: options.ahrefs?.client ?? null,
+        domainCache: (options.cache?.store ?? null) as CacheStore | null,
+        config,
+        now: hooks.now,
+        sleep: hooks.sleep,
+        logger,
+      });
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
       logger(
         `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
@@ -358,7 +373,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             ? 'expired'
             : 'miss'
         : null;
-      store.commitKeyword(runId, committed, result?.serpRows ?? [], cacheStatus);
+      const serpRows = result?.serpRows ?? [];
+      await applyDomainRatings({
+        serpRows,
+        ahrefs: options.ahrefs?.client ?? null,
+        domainCache: (options.cache?.store ?? null) as CacheStore | null,
+        config,
+        now: hooks.now,
+        sleep: hooks.sleep,
+        logger,
+      });
+      store.commitKeyword(runId, committed, serpRows, cacheStatus);
       breaker.record(record.status, record.error?.code ?? null);
       samples.push(hooks.now() - startAt);
 
@@ -612,6 +637,91 @@ function applySurferExpansion(params: {
     added.push(candidate.keyword);
   }
   return added;
+}
+
+// Resolves an Ahrefs Domain Rating for every distinct registrable domain in the
+// organic SERP, reusing the domain cache so repeated domains across keywords
+// trigger a single fresh lookup per TTL window. Mutates `serpRows` in place,
+// including back-filling `registrableDomain` for older cached rows that were
+// stored before the field existed (so they still get enriched).
+export async function applyDomainRatings(params: {
+  serpRows: SerpResult[];
+  ahrefs: AhrefsClient | null;
+  domainCache: CacheStore | null;
+  config: ResearchConfig;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  logger: (line: string) => void;
+}): Promise<void> {
+  const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
+  if (!ahrefs || !domainCache) return;
+
+  // Resolved within this call so a domain appearing on multiple SERP rows
+  // (e.g. several subpages of one site) is fetched once yet every row carries
+  // the rating. The domain cache extends this across keywords/runs.
+  const resolved = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error' }>();
+  for (const row of serpRows) {
+    // Older keyword-cache entries may carry an empty registrable_domain.
+    // Re-derive it from the hostname (falling back to the URL) so enrichment
+    // still runs for those rows instead of being silently skipped.
+    if (!row.registrableDomain) {
+      const derived =
+        registrableDomain(row.hostname) ??
+        (row.url ? registrableDomain(new URL(row.url).hostname) : null);
+      row.registrableDomain = derived ?? '';
+    }
+    const domain = row.registrableDomain;
+    if (!domain) continue;
+
+    const prior = resolved.get(domain);
+    if (prior) {
+      row.dr = prior.dr;
+      row.drStatus = prior.status;
+      continue;
+    }
+
+    const cached = domainCache.getDomain(domain);
+    if (cached && Date.parse(cached.expiresAt) > now()) {
+      row.dr = cached.dr;
+      row.drStatus = cached.status;
+      resolved.set(domain, { dr: cached.dr, status: cached.status });
+      continue;
+    }
+
+    try {
+      const rating = await ahrefs(domain);
+      const ttl =
+        rating.status === 'ok'
+          ? config.cache.ttl.domainOkMs
+          : rating.status === 'not_found'
+            ? config.cache.ttl.domainNotFoundMs
+            : config.cache.ttl.domainErrorMs;
+      domainCache.putDomain(
+        domain,
+        { dr: rating.dr, status: rating.status, error: rating.error ?? null },
+        new Date(now()).toISOString(),
+        ttl,
+      );
+      row.dr = rating.dr;
+      row.drStatus = rating.status;
+      resolved.set(domain, { dr: rating.dr, status: rating.status });
+    } catch (error) {
+      const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
+      logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
+      row.dr = null;
+      row.drStatus = 'error';
+      resolved.set(domain, { dr: null, status: 'error' });
+      // Persistent 429/5xx and unexpected throws are cached as errors so the
+      // domain is not re-fetched until domainErrorMs elapses.
+      domainCache.putDomain(
+        domain,
+        { dr: null, status: 'error', error: code },
+        new Date(now()).toISOString(),
+        config.cache.ttl.domainErrorMs,
+      );
+    }
+    await sleep(config.ahrefs.rateLimitMinDelayMs);
+  }
 }
 
 export type { RetrySettings, BreakerSettings };

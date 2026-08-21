@@ -1,4 +1,5 @@
 import type { ResearchConfig } from '../config/config.js';
+import { registrableDomain } from '../domains/normalize.js';
 
 export const GOOGLE_PARSER_VERSION = '1.2.0';
 
@@ -19,6 +20,12 @@ export type SerpResult = {
   title: string;
   url: string;
   hostname: string;
+  registrableDomain: string;
+  dr: number | null;
+  // Outcome of the Ahrefs DR lookup for this row: null until enrichment runs,
+  // 'ok' | 'not_found' | 'error' afterwards. Lets completedDomains count every
+  // resolved domain, not only the ones with a numeric DR.
+  drStatus: 'ok' | 'not_found' | 'error' | null;
   resultType: 'organic';
 };
 
@@ -89,6 +96,9 @@ export function buildOrganicResults(
       title: link.title,
       url: link.href,
       hostname: url.hostname,
+      registrableDomain: registrableDomain(url.hostname) ?? '',
+      dr: null,
+      drStatus: null,
       resultType: 'organic',
     });
 

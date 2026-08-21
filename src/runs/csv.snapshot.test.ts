@@ -59,8 +59,8 @@ function okResult(keyword: KeywordRecord): CollectionResult {
       error: null,
     },
     serpRows: [
-      { keyword: keyword.normalizedKeyword, position: 1, title: 't1', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
-      { keyword: keyword.normalizedKeyword, position: 2, title: 't2', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
+      { keyword: keyword.normalizedKeyword, position: 1, title: 't1', url: 'https://a.com', hostname: 'a.com', registrableDomain: 'a.com', dr: null, drStatus: null, resultType: 'organic' },
+      { keyword: keyword.normalizedKeyword, position: 2, title: 't2', url: 'https://b.com', hostname: 'b.com', registrableDomain: 'b.com', dr: null, drStatus: null, resultType: 'organic' },
     ],
       debugArtifactPath: null,
       related: { status: 'empty', error: null, rows: [] },
@@ -122,8 +122,8 @@ test('keywords.csv follows the operator column contract with zero vs missing val
       collectedAt: '2026-01-01T00:00:00.000Z',
     },
     [
-      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
-      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', registrableDomain: 'a.com', dr: null, drStatus: null, resultType: 'organic' },
+      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', registrableDomain: 'b.com', dr: null, drStatus: null, resultType: 'organic' },
     ],
     'hit',
   );
@@ -202,8 +202,8 @@ test('serp.csv has one row per stored organic result in input and position order
   });
   const keywords = store.loadKeywords(runId);
   const serp: SerpResult[] = [
-    { keyword: 'standing desk', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
-    { keyword: 'standing desk', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
+    { keyword: 'standing desk', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', registrableDomain: 'b.com', dr: null, drStatus: null, resultType: 'organic' },
+    { keyword: 'standing desk', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', registrableDomain: 'a.com', dr: null, drStatus: null, resultType: 'organic' },
   ];
   store.commitKeyword(
     runId,
@@ -285,7 +285,7 @@ test('a CSV snapshot failure leaves the run resumable and a resume republishes a
         error: null,
       },
       serpRows: [
-        { keyword: keyword.normalizedKeyword, position: 1, title: 'cached', url: 'https://cached.com', hostname: 'cached.com', resultType: 'organic' },
+        { keyword: keyword.normalizedKeyword, position: 1, title: 'cached', url: 'https://cached.com', hostname: 'cached.com', registrableDomain: 'cached.com', dr: null, drStatus: null, resultType: 'organic' },
       ],
       collectedAt: '2026-01-01T00:00:00.000Z',
       storedAt: '2026-01-01T00:00:00.000Z',
@@ -373,7 +373,7 @@ test('cached runs serialize through the same CSV contract as fresh runs', async 
         error: null,
       },
       serpRows: [
-        { keyword: keyword.normalizedKeyword, position: 1, title: 'cached title', url: 'https://cached.com', hostname: 'cached.com', resultType: 'organic' },
+        { keyword: keyword.normalizedKeyword, position: 1, title: 'cached title', url: 'https://cached.com', hostname: 'cached.com', registrableDomain: 'cached.com', dr: null, drStatus: null, resultType: 'organic' },
       ],
       collectedAt: '2026-01-01T00:00:00.000Z',
       storedAt: '2026-01-01T00:00:00.000Z',
@@ -421,9 +421,9 @@ test('a partial keyword appears in keywords.csv with its organic count', async (
       collectedAt: '2026-01-01T00:00:00.000Z',
     },
     [
-      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
-      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
-      { keyword: 'compare lists', position: 3, title: 'c', url: 'https://c.com', hostname: 'c.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', registrableDomain: 'a.com', dr: null, drStatus: null, resultType: 'organic' },
+      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', registrableDomain: 'b.com', dr: null, drStatus: null, resultType: 'organic' },
+      { keyword: 'compare lists', position: 3, title: 'c', url: 'https://c.com', hostname: 'c.com', registrableDomain: 'c.com', dr: null, drStatus: null, resultType: 'organic' },
     ],
     'miss',
   );
@@ -470,8 +470,8 @@ test('an atomic snapshot failure preserves the previously published CSV byte-for
       collectedAt: '2026-01-01T00:00:00.000Z',
     },
     [
-      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', resultType: 'organic' },
-      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', resultType: 'organic' },
+      { keyword: 'compare lists', position: 1, title: 'a', url: 'https://a.com', hostname: 'a.com', registrableDomain: 'a.com', dr: null, drStatus: null, resultType: 'organic' },
+      { keyword: 'compare lists', position: 2, title: 'b', url: 'https://b.com', hostname: 'b.com', registrableDomain: 'b.com', dr: null, drStatus: null, resultType: 'organic' },
     ],
     'hit',
   );
@@ -484,7 +484,7 @@ test('an atomic snapshot failure preserves the previously published CSV byte-for
   const previousManifest = await readFile(manifestPath, 'utf8');
 
   // Deterministic failure: force the atomic rename to throw. We do NOT delete
-  // the target first — that would only prove a missing file stays missing.
+  // the target first â€” that would only prove a missing file stays missing.
   // The point is that an existing target must survive the failed replace.
   const { setRenameForTesting } = await import('../runs/run.js');
   setRenameForTesting(async () => {

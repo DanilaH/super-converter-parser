@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RunStore } from '../db/store.js';
+import { RunStore, SCHEMA_VERSION } from '../db/store.js';
 import { CacheStore, type CachedKeywordEntry, type KeywordCache } from '../cache/store.js';
 import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
 import type { CacheResolution } from '../cache/resolve.js';
@@ -47,6 +47,9 @@ function serpRowsFor(keyword: string, count: number): SerpResult[] {
     title: `title ${index + 1}`,
     url: `https://example.com/${index + 1}`,
     hostname: 'example.com',
+    registrableDomain: 'example.com',
+    dr: null,
+    drStatus: null,
     resultType: 'organic' as const,
   }));
 }
@@ -724,7 +727,7 @@ test('a paused v1 run migrates and resumes with complete cache accounting', asyn
   // Opening the store migrates v1 -> v2: terminal keywords gain 'miss'
   // provenance (they were collected fresh), the pending one stays null.
   const store = RunStore.open(runPath);
-  assert.equal(store.version, 2);
+  assert.equal(store.version, SCHEMA_VERSION);
   assert.deepEqual(
     store.loadKeywords('run-1').map((keyword) => keyword.cacheStatus),
     ['miss', 'miss', null],
