@@ -51,8 +51,8 @@ npm run research -- --microsoft input/microsoft.csv
 # Direct seed flow
 npm run research -- --seeds input/seeds.csv
 
-# Expand direct seeds with Keyword Surfer related ideas
-npm run research -- --seeds input/seeds.csv --expand-surfer
+# Expand direct seeds with Keyword Surfer related ideas (depth 1)
+npm run research -- --seeds input/seeds.csv --expand
 
 # Resume an interrupted run
 npm run research -- --resume <run-id>
@@ -77,6 +77,12 @@ npm run probe -- "compare lists"
 
 # Batch research from a seeds CSV (keyword column required)
 npm run research -- --seeds input/seeds.csv
+
+# Expand direct seeds with Keyword Surfer related ideas (depth 1)
+npm run research -- --seeds input/seeds.csv --expand
+
+# Print a compact JSON status line as the final stdout line (for agents/CI)
+npm run research -- --seeds input/seeds.csv --json-status
 
 # Ignore the persistent cache for every keyword of this run
 npm run research -- --seeds input/seeds.csv --force-refresh

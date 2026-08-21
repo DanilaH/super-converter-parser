@@ -222,12 +222,12 @@ test('serp.csv has one row per stored organic result in input and position order
 
   const csv = await readFile(join(runDirectory, 'serp.csv'), 'utf8');
   const lines = csv.slice(1).split('\r\n').filter((line) => line.length > 0);
-  assert.equal(lines[0], 'keyword,position,title,url,hostname,result_type');
+  assert.equal(lines[0], 'keyword,position,title,url,hostname,result_type,registrable_domain,dr,dr_status');
   // Rows are reordered by position, and only keywords with organic results
   // contribute rows (no fabricated rows for the other three keywords).
   assert.deepEqual(lines.slice(1), [
-    'standing desk,1,a,https://a.com,a.com,organic',
-    'standing desk,2,b,https://b.com,b.com,organic',
+    'standing desk,1,a,https://a.com,a.com,organic,a.com,,',
+    'standing desk,2,b,https://b.com,b.com,organic,b.com,,',
   ]);
   store.close();
 });
