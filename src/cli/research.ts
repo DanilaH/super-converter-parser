@@ -525,7 +525,14 @@ export async function runCli(
       console.error(`  ${error.code}: ${error.message}`);
       return exitCodeForError(error);
     }
-    console.error(error);
+    // A genuine internal failure: lead with a clear, actionable message rather
+    // than a raw stack trace (TASK-008 / issue #16: the primary operator
+    // message must never be a stack dump). The stack follows only for debugging.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`  INTERNAL ERROR: ${message}`);
+    if (error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
     return EXIT_INTERNAL;
   } finally {
     store?.close();
