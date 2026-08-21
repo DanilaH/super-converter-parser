@@ -8,8 +8,11 @@ import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { executeRun, type EngineHooks } from './engine.js';
 import { createRunId, type KeywordRecord } from './run.js';
-import type { CollectionResult } from '../browser/collect.js';
+import type { CollectionResult, SurferRelatedOutcome } from '../browser/collect.js';
+import type { SurferRelatedKeyword } from '../surfer/parser.js';
 import type { SerpResult } from '../google/serp.js';
+import { CacheStore } from '../cache/store.js';
+import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey } from '../cache/keys.js';
 
 const BASE_CONFIG = loadConfig({});
 const INPUT = { kind: 'seeds' as const, path: 'input/seeds.csv' };
@@ -47,7 +50,10 @@ const GOOGLE_META = {
   geoWarning: false,
 };
 
-function relatedResult(keyword: KeywordRecord, related: CollectionResult['related']): CollectionResult {
+function relatedResult(keyword: KeywordRecord, related: SurferRelatedKeyword[]): CollectionResult {
+  const outcome: SurferRelatedOutcome = related.length > 0
+    ? { status: 'ok', error: null, rows: related }
+    : { status: 'empty', error: null, rows: [] };
   return {
     record: {
       ...keyword,
@@ -58,7 +64,7 @@ function relatedResult(keyword: KeywordRecord, related: CollectionResult['relate
     },
     serpRows: serpRowsFor(keyword.normalizedKeyword, 2),
     debugArtifactPath: null,
-    related,
+    related: outcome,
   };
 }
 
@@ -168,4 +174,351 @@ test('expansion respects maxCandidatesPerKeyword and minVolume', async () => {
   assert.equal(related.length, 1);
   assert.equal(related[0]!.keyword, 'high volume');
   store.close();
+});
+
+test('expansion candidates are collected within the same run (dynamic queue)', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-queue-'));
+  const collected: string[] = [];
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      collected.push(keyword.normalizedKeyword);
+      // The seed yields one related candidate; the candidate itself must be
+      // collected by the same run (not left pending).
+      return relatedResult(keyword, [
+        { keyword: 'list comparison', normalizedKeyword: 'list comparison', volume: 5000, overlap: 80 },
+      ]);
+    },
+    hooks: makeHooks(),
+  });
+
+  const keywords = store.loadKeywords(runId);
+  assert.equal(keywords.length, 2);
+  // Both the seed and the related candidate finished in one pass.
+  assert.ok(keywords.every((k) => k.status === 'completed'));
+  assert.deepEqual([...collected].sort(), ['compare lists', 'list comparison']);
+  store.close();
+});
+
+test('warm cache hit expands from the related cache without the browser', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-warm-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  const collected: string[] = [];
+
+  // Seed and its related candidate are both cached as completed hits.
+  for (const normalized of ['compare lists', 'list comparison']) {
+    cacheStore.putKeyword({
+      cacheKey: buildKeywordCacheKey(normalized, identity),
+      keyword: normalized,
+      normalizedKeyword: normalized,
+      identity,
+      record: {
+        id: `kw-${normalized}`,
+        keyword: normalized,
+        normalizedKeyword: normalized,
+        sources: [{ type: 'seed', rowNumbers: [1] }],
+        status: 'completed',
+        surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: storedAt },
+        google: { ...GOOGLE_META },
+        error: null,
+      },
+      serpRows: serpRowsFor(normalized, 2),
+      collectedAt: storedAt,
+      storedAt,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+  }
+  // The seed's related list is cached (ok, still fresh) so expansion needs no
+  // browser. Use a recent storedAt so the related TTL has not expired (an
+  // expired entry must NOT be used as warm expansion).
+  const relatedStoredAt = new Date(Date.now() - 1000).toISOString();
+  cacheStore.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', identity),
+      normalizedKeyword: 'compare lists',
+      identity,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'list comparison', overlap: 80, volume: 5000 }],
+    },
+    relatedStoredAt,
+    7 * 24 * 60 * 60 * 1000,
+  );
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      collected.push(keyword.normalizedKeyword);
+      return relatedResult(keyword, []);
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  // No keyword was collected: both served from cache, expansion from related cache.
+  assert.deepEqual(collected, []);
+  const keywords = store.loadKeywords(runId);
+  assert.equal(keywords.length, 2);
+  assert.ok(
+    keywords.some((k) =>
+      k.sources.some((s) => s.type === 'surfer_related' && s.parentKeyword === 'compare lists'),
+    ),
+  );
+  store.close();
+  cacheStore.close();
+});
+
+test('keyword hit with expired related cache performs a fresh related lookup', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-expired-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+  const collected: string[] = [];
+
+  // Seed is a completed cache hit.
+  cacheStore.putKeyword({
+    cacheKey: buildKeywordCacheKey('compare lists', identity),
+    keyword: 'compare lists',
+    normalizedKeyword: 'compare lists',
+    identity,
+    record: {
+      id: 'kw-compare lists',
+      keyword: 'compare lists',
+      normalizedKeyword: 'compare lists',
+      sources: [{ type: 'seed', rowNumbers: [1] }],
+      status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+      google: { ...GOOGLE_META },
+      error: null,
+    },
+    serpRows: serpRowsFor('compare lists', 2),
+    collectedAt: '2026-01-01T00:00:00.000Z',
+    storedAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  // The related list is cached as 'ok' but already expired; it must NOT be
+  // used to expand into a candidate.
+  cacheStore.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey('compare lists', identity),
+      normalizedKeyword: 'compare lists',
+      identity,
+      status: 'ok',
+      error: null,
+      rows: [{ relatedKeyword: 'list comparison', overlap: 80, volume: 5000 }],
+    },
+    '2020-01-01T00:00:00.000Z',
+    7 * 24 * 60 * 60 * 1000,
+  );
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      collected.push(keyword.normalizedKeyword);
+      return relatedResult(keyword, []);
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  // The primary keyword remains a cache hit, but related enrichment is retried.
+  assert.deepEqual(collected, ['compare lists']);
+  assert.equal(store.loadKeywords(runId).length, 1);
+  store.close();
+  cacheStore.close();
+});
+
+test('keyword hit with missing related cache performs a related lookup', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-related-miss-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+  const storedAt = '2026-01-01T00:00:00.000Z';
+  cacheStore.putKeyword({
+    cacheKey: buildKeywordCacheKey('compare lists', identity),
+    keyword: 'compare lists',
+    normalizedKeyword: 'compare lists',
+    identity,
+    record: {
+      id: 'kw-compare-lists', keyword: 'compare lists', normalizedKeyword: 'compare lists',
+      sources: [{ type: 'seed', rowNumbers: [1] }], status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: storedAt },
+      google: { ...GOOGLE_META }, error: null,
+    },
+    serpRows: serpRowsFor('compare lists', 2), collectedAt: storedAt, storedAt,
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  const collected: string[] = [];
+
+  await executeRun({
+    store, runId, mode: 'fresh', keywords: KEYWORDS, config: expansionConfig({}), input: INPUT,
+    runDirectory, debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      collected.push(keyword.normalizedKeyword);
+      return relatedResult(keyword, []);
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  assert.deepEqual(collected, ['compare lists']);
+  assert.equal(cacheStore.getRelated?.(buildRelatedCacheKey('compare lists', identity))?.status, 'empty');
+  store.close();
+  cacheStore.close();
+});
+
+test('fresh related error is retryable even when the keyword is a cache hit', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-related-error-retry-'));
+  const config = expansionConfig({});
+  const identity = keywordCacheIdentity(config);
+  const storedAt = new Date().toISOString();
+  cacheStore.putKeyword({
+    cacheKey: buildKeywordCacheKey('compare lists', identity), keyword: 'compare lists',
+    normalizedKeyword: 'compare lists', identity,
+    record: {
+      id: 'kw-compare-lists', keyword: 'compare lists', normalizedKeyword: 'compare lists',
+      sources: [{ type: 'seed', rowNumbers: [1] }], status: 'completed',
+      surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: storedAt },
+      google: { ...GOOGLE_META }, error: null,
+    },
+    serpRows: [], collectedAt: storedAt, storedAt, expiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  cacheStore.putRelated({
+    cacheKey: buildRelatedCacheKey('compare lists', identity), normalizedKeyword: 'compare lists',
+    identity, status: 'error', error: 'SURFER_RELATED_PARSE_ERROR', rows: [],
+  }, storedAt, config.cache.ttl.relatedErrorMs);
+  let calls = 0;
+
+  await executeRun({
+    store, runId, mode: 'fresh', keywords: KEYWORDS, config, input: INPUT,
+    runDirectory, debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      calls += 1;
+      return relatedResult(keyword, []);
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(cacheStore.getRelated?.(buildRelatedCacheKey('compare lists', identity))?.status, 'empty');
+  store.close();
+  cacheStore.close();
+});
+
+test('surfer_related child with not-attempted outcome does not create false empty cache', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-child-cache-'));
+  const config = expansionConfig({});
+  const identity = keywordCacheIdentity(config);
+
+  await executeRun({
+    store, runId, mode: 'fresh', keywords: KEYWORDS, config, input: INPUT,
+    runDirectory, debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => {
+      if (keyword.normalizedKeyword === 'compare lists') {
+        return relatedResult(keyword, [
+          { keyword: 'child  keyword', normalizedKeyword: 'child keyword', overlap: 50, volume: 10 },
+        ]);
+      }
+      return {
+        ...relatedResult(keyword, []),
+        related: { status: 'not_attempted', error: null, rows: [] },
+      };
+    },
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set() },
+  });
+
+  assert.equal(cacheStore.getRelated?.(buildRelatedCacheKey('child keyword', identity)), null);
+  store.close();
+  cacheStore.close();
+});
+
+test('related-parser error keeps related status error and suppresses expansion', async () => {
+  const cacheStore = CacheStore.openInMemory();
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'engine-expand-relerr-'));
+  const identity = keywordCacheIdentity(expansionConfig({}));
+
+  await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: expansionConfig({}),
+    input: INPUT,
+    runDirectory,
+    debugRoot: join(runDirectory, 'debug'),
+    collect: async (keyword) => ({
+      record: {
+        ...keyword,
+        status: 'completed',
+        surfer: { volume: 100, cpc: 1.5, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' },
+        google: { ...GOOGLE_META },
+        error: null,
+      },
+      serpRows: serpRowsFor(keyword.normalizedKeyword, 2),
+      debugArtifactPath: null,
+      // Primary parse succeeded, but the related widget failed to parse.
+      related: { status: 'error', error: 'SURFER_RELATED_PARSE_ERROR', rows: [] },
+    }),
+    hooks: makeHooks(),
+    cache: { store: cacheStore, forceRefresh: false, refreshKeywords: new Set(), resolutions: new Map() },
+  });
+
+  // No expansion (related status is error, not ok), and the error is persisted.
+  assert.equal(store.loadKeywords(runId).length, 1);
+  const entry = cacheStore.getRelated?.(buildRelatedCacheKey('compare lists', identity));
+  assert.ok(entry);
+  assert.equal(entry!.status, 'error');
+  assert.equal(entry!.error, 'SURFER_RELATED_PARSE_ERROR');
+  store.close();
+  cacheStore.close();
+});
+
+// Live acceptance: the real Surfer extension renders the related-keywords table
+// inside the keyword-surfer-sidebar element of the MAIN Google DOM (not an
+// iframe). This requires a connected Research Chrome with the extension
+// injected and cannot run in CI; perform it manually against the spike page and
+// confirm the table rows parse as Keyword | Overlap | Volume with overlap stored
+// as 0..100.
+test.skip('live acceptance: real Surfer related-keywords table parses (keyword-surfer-sidebar)', () => {
+  throw new Error('manual acceptance only');
 });

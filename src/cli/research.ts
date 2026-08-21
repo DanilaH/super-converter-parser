@@ -7,8 +7,10 @@ import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
 import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
-import { collectKeyword, type CollectionResult } from '../browser/collect.js';
-import { executeRun, validateResume, type EngineHooks, type ExecuteRunOptions } from '../runs/engine.js';
+import { loadMicrosoftRows } from '../input/microsoft/load.js';
+import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
+import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
+import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
@@ -26,6 +28,7 @@ export const EXIT_PAUSED = 130;
 
 type CliOptions = {
   seedsPath: string | null;
+  microsoftPath: string | null;
   resumeRunId: string | null;
   forceRefresh: boolean;
   refreshKeywords: string[];
@@ -43,17 +46,25 @@ export type CliDeps = {
     record: KeywordRecord,
     debugRoot: string,
   ) => Promise<CollectionResult>;
+  collectRelated?: (
+    context: BrowserContext,
+    config: ResearchConfig,
+    record: KeywordRecord,
+    debugRoot: string,
+  ) => Promise<RelatedCollectionResult>;
 };
 
 export const DEFAULT_CLI_DEPS: CliDeps = {
   connect: connectResearchChrome,
   preflight: preflightGoogleAndSurfer,
   collect: collectKeyword,
+  collectRelated: collectRelatedKeyword,
 };
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     seedsPath: null,
+    microsoftPath: null,
     resumeRunId: null,
     forceRefresh: false,
     refreshKeywords: [],
@@ -63,6 +74,9 @@ function parseArgs(argv: string[]): CliOptions {
     const arg = argv[index] as string;
     if (arg === '--seeds') {
       options.seedsPath = argv[index + 1] ?? null;
+      index += 1;
+    } else if (arg === '--microsoft') {
+      options.microsoftPath = argv[index + 1] ?? null;
       index += 1;
     } else if (arg === '--resume') {
       options.resumeRunId = argv[index + 1] ?? null;
@@ -93,10 +107,12 @@ function printUsage(): void {
   console.log('  npm run research -- --seeds <path>');
   console.log('  npm run research -- --seeds <path> --force-refresh');
   console.log('  npm run research -- --seeds <path> --refresh-keyword "json diff"');
+  console.log('  npm run research -- --microsoft <path>');
   console.log('  npm run research -- --resume <run-id>');
   console.log('');
   console.log('Options:');
   console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
+  console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
@@ -151,9 +167,22 @@ export function effectiveConfigForResume(
       `Run "${runId}" persisted SURFER_WIDGET_SELECTOR "${persisted.browser.surferWidgetSelector}" but the current value is "${current.browser.surferWidgetSelector}". Start a new run instead; the widget selector must not change between resume attempts.`,
     );
   }
-  // Semantic research settings come from the persisted snapshot; operational
-  // settings (connection, timeouts, retries, breaker) use the current env.
-  return { ...current, research: persisted.research };
+  if (current.browser.surferRelatedWidgetSelector !== persisted.browser.surferRelatedWidgetSelector) {
+    throw new ResearchError(
+      'RESUME_CONFIG_MISMATCH',
+      `Run "${runId}" persisted SURFER_RELATED_WIDGET_SELECTOR "${persisted.browser.surferRelatedWidgetSelector}" but the current value is "${current.browser.surferRelatedWidgetSelector}". Start a new run instead; the related widget selector must not change between resume attempts.`,
+    );
+  }
+  // Semantic research settings (including expansion and the related widget
+  // selector) come from the persisted snapshot so a resumed run reproduces the
+  // original expansion behavior; operational settings (connection, timeouts,
+  // retries, breaker) use the current env.
+  return {
+    ...current,
+    research: persisted.research,
+    expansion: persisted.expansion,
+    browser: { ...current.browser, surferRelatedWidgetSelector: persisted.browser.surferRelatedWidgetSelector },
+  };
 }
 
 // Refresh flags name real run keywords (normalized exactly like the queue
@@ -211,7 +240,15 @@ export async function runCli(
     console.error('--seeds and --resume are mutually exclusive.');
     return EXIT_INVALID_INPUT;
   }
-  if (!options.seedsPath && !options.resumeRunId) {
+  if (options.microsoftPath && options.resumeRunId) {
+    console.error('--microsoft and --resume are mutually exclusive.');
+    return EXIT_INVALID_INPUT;
+  }
+  if (options.seedsPath && options.microsoftPath) {
+    console.error('--seeds and --microsoft are mutually exclusive.');
+    return EXIT_INVALID_INPUT;
+  }
+  if (!options.seedsPath && !options.microsoftPath && !options.resumeRunId) {
     printUsage();
     return EXIT_INVALID_INPUT;
   }
@@ -243,8 +280,8 @@ export async function runCli(
     let runDirectory: string;
     let debugRoot: string;
     let mode: 'fresh' | 'resume';
-    let keywords: SeedKeyword[] = [];
-    let input: { kind: 'seeds'; path: string };
+    let keywords: SeedKeyword[] | MicrosoftKeyword[] = [];
+    let input: { kind: 'seeds' | 'microsoft'; path: string };
     let refreshKeywords: string[] = [];
     let runConfig = config;
 
@@ -278,7 +315,9 @@ export async function runCli(
       runDirectory = `runs/${runId}`;
       debugRoot = `debug/${runId}`;
       mode = 'fresh';
-      input = { kind: 'seeds', path: options.seedsPath as string };
+      input = options.microsoftPath
+        ? { kind: 'microsoft', path: options.microsoftPath as string }
+        : { kind: 'seeds', path: options.seedsPath as string };
 
       console.log('Utility Research Runner');
       console.log('');
@@ -292,9 +331,15 @@ export async function runCli(
     }
 
     if (mode === 'fresh') {
-      const rows = await loadSeedRows(options.seedsPath as string);
-      keywords = buildSeedKeywords(rows);
-      console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
+      if (options.microsoftPath) {
+        const rows = await loadMicrosoftRows(options.microsoftPath);
+        keywords = buildMicrosoftKeywords(rows);
+        console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords (Microsoft)`);
+      } else {
+        const rows = await loadSeedRows(options.seedsPath as string);
+        keywords = buildSeedKeywords(rows);
+        console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
+      }
       refreshKeywords = validateRefreshKeywords(
         options.refreshKeywords,
         keywords.map((item) => item.normalizedKeyword),
@@ -304,6 +349,13 @@ export async function runCli(
         options.refreshKeywords,
         store.loadKeywords(runId).map((item) => item.normalizedKeyword),
       );
+    }
+
+    // --expand applies only when starting a fresh run. A resumed run must
+    // reproduce its persisted expansion config and must never silently flip
+    // expansion on for a run that was created without it.
+    if (options.expand && mode === 'fresh') {
+      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
     }
 
     cacheStore = CacheStore.open(runConfig.cache.path);
@@ -344,15 +396,31 @@ export async function runCli(
     );
     const refreshSet = new Set(effective.refreshKeywords);
 
-    // The browser is needed unless every pending keyword will be served as a
-    // fresh cache hit. The plan also fixes one resolution per keyword so the
-    // engine executes exactly the decision made here (no TOCTOU window
-    // between the "do we need Chrome?" read and the actual cache reads).
+    // Expansion has an independent cache decision. A keyword-cache hit still
+    // needs Chrome when its root keyword has no fresh successful/empty related
+    // lookup. Related children are intentionally excluded (depth is fixed at 1).
+    const expandableKeywords = new Set(
+      mode === 'fresh'
+        ? pendingNormalized
+        : store
+            .loadKeywords(runId)
+            .filter(
+              (item) =>
+                !isTerminalKeywordStatus(item.status) &&
+                !item.sources.some((source) => source.type === 'surfer_related'),
+            )
+            .map((item) => item.normalizedKeyword),
+    );
+
     const plan = planRunCache(
       pendingNormalized,
       { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
       cacheStore,
       Date.now(),
+      {
+        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
+        expandableKeywords,
+      },
     );
     const needsBrowser = plan.needsBrowser;
 
@@ -378,11 +446,8 @@ export async function runCli(
       pauseRequested: () => pauseRequested,
     };
 
-    if (options.expand) {
-      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
-    }
-
-    const engineArgs: ExecuteRunOptions = {
+const relatedCollector = deps.collectRelated;
+    const outcome = await executeRun({
       store,
       runId,
       mode,
@@ -395,19 +460,27 @@ export async function runCli(
       // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
         deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
+      ...(relatedCollector
+        ? {
+            collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
+              relatedCollector(
+                context as BrowserContext,
+                runConfig,
+                record,
+                debugRootForKeyword,
+              ),
+          }
+        : {}),
       hooks,
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
+        relatedResolutions: plan.relatedResolutions,
       },
-    };
-    if (ahrefs) {
-      engineArgs.ahrefs = ahrefs;
-    }
-
-    const outcome = await executeRun(engineArgs);
+      ...(ahrefs ? { ahrefs } : {}),
+    });
 
     if (outcome.kind === 'paused') {
       console.log('');
@@ -418,7 +491,9 @@ export async function runCli(
     }
     console.log('');
     console.log(`Run completed: ${outcome.state}`);
-    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json)`);
+    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv)`);
+    console.log(`  CSV: runs/${runId}/keywords.csv`);
+    console.log(`  CSV: runs/${runId}/serp.csv`);
     return EXIT_OK;
   } catch (error) {
     console.error('');

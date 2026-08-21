@@ -188,7 +188,7 @@ function okCollect(record: KeywordRecord): CollectionResult {
     },
     serpRows: serpRowsFor(record.normalizedKeyword),
     debugArtifactPath: null,
-    related: [],
+    related: { status: 'empty', error: null, rows: [] },
   };
 }
 

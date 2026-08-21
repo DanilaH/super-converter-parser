@@ -1,0 +1,201 @@
+﻿Ad group,Keyword,Average monthly searches,Competition,Suggested Bid,Ad impr. share
+Pdf Page,add page numbers to pdf,"100 - 1K","0.85","0.11",-
+Pdf Page,extract pages from pdf,"100 - 1K","0.95","0.67",-
+Pdf Page,pdf page count,"0 - 10",-,-,-
+Pdf Page,remove blank pages from pdf,"10 - 100","0.59","0.47",-
+Pdf Page,reorder pdf pages,"10 - 100","0.91","0.17",-
+Pdf Page,rotate pdf pages,"10 - 100","0.76","0.22",-
+Pdf Page,split pdf by pages,"10 - 100",-,-,-
+Filename,add prefix to filenames,-,-,-,-
+Filename,add suffix to filenames,-,-,-,-
+Filename,filename sanitizer,-,-,-,-
+Filename,remove spaces from filenames,-,-,-,-
+Filename,replace text in filenames,-,-,-,-
+Filename,sort filenames naturally,-,-,-,-
+Calculator,age calculator,"10K - 100K","0.98","0.12",-
+Calculator,aspect ratio calculator,"1K - 10K","0.55","0.58",-
+Calculator,business days calculator,"1K - 10K","0.33","0.05",-
+Calculator,date difference calculator,"1K - 10K","0.33","0.05",-
+Calculator,percentage change calculator,"1K - 10K","0.59","0.05",-
+Calculator,percentage difference calculator,"1K - 10K","0.33","0.05",-
+Calculator,ratio calculator,"1K - 10K","0.85","0.44",-
+Calculator,time difference calculator,"1K - 10K",-,-,-
+Calculator,week number calculator,"10 - 100",-,-,-
+Checker,alphabetical order checker,"0 - 10",-,-,-
+Checker,anagram checker,"10 - 100",-,-,-
+Checker,canonical url checker,"0 - 10",-,-,-
+Checker,email subject line length checker,-,-,-,-
+Checker,image dimensions checker,"0 - 10",-,-,-
+Checker,keyword density checker,"10 - 100",-,-,-
+Checker,meta description length checker,"0 - 10",-,-,-
+Checker,pdf paper size checker,"0 - 10",-,-,-
+Checker,title tag length checker,"0 - 10",-,-,-
+Keyword Like: base64 decode,base64 decode,"1K - 10K",-,-,-
+Keyword Like: base64 decode,base64 encode,"1K - 10K",-,-,-
+Keyword Like: base64 decode,count unique values,"10 - 100",-,-,-
+Keyword Like: base64 decode,decimal to fraction,"1K - 10K","0.35","0.13",-
+Keyword Like: base64 decode,jwt decoder,"1K - 10K",-,-,-
+Keyword Like: base64 decode,keep only letters,-,-,-,-
+Keyword Like: base64 decode,open graph preview,"10 - 100",-,-,-
+Keyword Like: base64 decode,regex escape,"10 - 100",-,-,-
+Keyword Like: base64 decode,regex tester,"1K - 10K",-,-,-
+Keyword Like: base64 decode,serp snippet preview,"0 - 10",-,-,-
+Keyword Like: base64 decode,twitter card preview,"10 - 100",-,-,-
+Keyword Like: base64 decode,utm builder,"100 - 1K",-,-,-
+Keyword Like: base64 decode,utm campaign builder,"10 - 100",-,-,-
+Keyword Like: base64 decode,utm remover,"0 - 10",-,-,-
+Keyword Like: base64 decode,uuid validator,"10 - 100",-,-,-
+Keyword Like: base64 decode,webp to png,"10K - 100K","0.98","0.07",-
+Keyword Like: base64 decode,fraction to decimal,"1K - 10K","0.33","0.30",-
+Keyword Like: base64 decode,add days to date,"1K - 10K",-,-,-
+Keyword Like: base64 decode,convert jpg to png,"100 - 1K","0.96","0.62",-
+Keyword Like: base64 decode,css minifier,"10 - 100",-,-,-
+Keyword Like: base64 decode,date to timestamp,"10 - 100",-,-,-
+Keyword Like: base64 decode,duplicate word finder,"10 - 100",-,-,-
+Keyword Like: base64 decode,extract domains from urls,-,-,-,-
+Keyword Like: base64 decode,javascript minifier,"10 - 100",-,-,-
+Keyword Like: base64 decode,keep only numbers,-,-,-,-
+Keyword Like: base64 decode,keyword grouper online,-,-,-,-
+Keyword Like: base64 decode,normalize urls,-,-,-,-
+Keyword Like: base64 decode,remove duplicate urls,"0 - 10",-,-,-
+Keyword Like: base64 decode,remove extra spaces,"10 - 100",-,-,-
+Keyword Like: base64 decode,remove pdf metadata,"10 - 100","0.39",-,-
+Keyword Like: base64 decode,remove punctuation,"10 - 100",-,-,-
+Keyword Like: base64 decode,remove special characters,"10 - 100",-,-,-
+Keyword Like: base64 decode,round number online,-,-,-,-
+Keyword Like: base64 decode,sort urls online,-,-,-,-
+Keyword Like: base64 decode,subtract days from date,"10 - 100",-,-,-
+Keyword Like: base64 decode,view pdf metadata,"10 - 100",-,-,-
+Keyword Like: base64 decode,xml minifier,"10 - 100",-,-,-
+Keyword Like: base64 decode,xml validator,"1K - 10K",-,-,-
+Keyword Like: base64 decode,convert png to jpg,"1K - 10K","0.96","0.75",-
+Keyword Like: base64 decode,timestamp to date,"100 - 1K",-,-,-
+Url,build url query string,-,-,-,-
+Url,decode url,"100 - 1K",-,-,-
+Url,encode url,"100 - 1K",-,-,-
+Url,get domain from url,-,-,-,-
+Url,get path from url,"0 - 10",-,-,-
+Url,get query parameters from url,-,-,-,-
+Url,parse url online,"0 - 10",-,-,-
+Url,remove query parameters from url,-,-,-,-
+Url,sitemap url extractor,"0 - 10",-,-,-
+Generator,bulk filename generator,-,-,-,-
+Generator,hreflang generator,"0 - 10",-,-,-
+Generator,markdown table generator,"100 - 1K",-,-,-
+Generator,meta tag generator,"10 - 100",-,-,-
+Generator,number range generator,"0 - 10",-,-,-
+Generator,random number generator,"10K - 100K","0.93","0.19",-
+Generator,robots txt generator,"10 - 100",-,-,-
+Generator,schema markup generator,"10 - 100",-,-,-
+Generator,url slug generator,"0 - 10",-,-,-
+Generator,uuid generator,"1K - 10K",-,-,-
+Converter,bytes to megabytes converter,"10 - 100",-,-,-
+Converter,case converter,"1K - 10K",-,-,-
+Converter,csv delimiter converter,-,-,-,-
+Converter,lowercase converter,"10 - 100",-,-,-
+Converter,scientific notation converter,"100 - 1K",-,-,-
+Converter,time zone converter,"10K - 100K","0.33","0.35",-
+Converter,title case converter,"100 - 1K","0.33","0.11",-
+Converter,unix timestamp converter,"100 - 1K",-,-,-
+Converter,uppercase converter,"100 - 1K",-,-,-
+File,calculate file size,"0 - 10",-,-,-
+File,compare csv files,"10 - 100",-,-,-
+File,compare file lists,-,-,-,-
+File,extract file extension,-,-,-,-
+File,file hash calculator,"0 - 10",-,-,-
+File,generate file list,-,-,-,-
+File,merge pdf files,"1K - 10K","1.00","1.23",-
+File,remove file extension,"10 - 100",-,-,-
+File,rename files online,"0 - 10",-,-,-
+Image,change image dpi,"10 - 100",-,-,-
+Image,image color picker,"1K - 10K",-,-,-
+Image,merge images horizontally,"0 - 10",-,-,-
+Image,merge images vertically,"0 - 10",-,-,-
+Image,view image metadata,"10 - 100",-,-,-
+Image,add padding to image,"10 - 100",-,-,-
+Image,convert image to webp,"10 - 100","0.33",-,-
+Image,extract colors from image,"10 - 100",-,-,-
+Image,images to pdf,"100 - 1K","0.96","0.56",-
+Image,remove image metadata,"10 - 100",-,-,-
+Image,pdf to images,"100 - 1K","0.87","0.56",-
+Counter,character counter,"10K - 100K","0.93","0.19",-
+Counter,character frequency counter,"10 - 100","0.33",-,-
+Counter,line counter,"100 - 1K","0.77",-,-
+Counter,sentence counter,"1K - 10K","0.57","0.36",-
+Counter,social media character counter,"0 - 10",-,-,-
+Counter,word counter,"100K - 1M","0.99","0.38",-
+Counter,word frequency counter,"10 - 100",-,-,-
+Text,columns to text,"10 - 100",-,-,-
+Text,compare pdf text,"0 - 10","0.33",-,-
+Text,compare text,"100 - 1K",-,-,-
+Text,slug to text,-,-,-,-
+Text,transpose text rows columns,-,-,-,-
+Text,text diff online,"10 - 100",-,-,-
+Text,text to columns online,"0 - 10",-,-,-
+List,compare lists,"1K - 10K",-,-,-
+List,domain list cleaner,-,-,-,-
+List,find duplicates in list,"10 - 100",-,-,-
+List,keyword list cleaner,-,-,-,-
+List,merge lists,"0 - 10",-,-,-
+List,randomize list,"100 - 1K",-,-,-
+List,reverse list,"10 - 100",-,-,-
+List,shuffle list,"10 - 100",-,-,-
+List,sort list alphabetically,"10 - 100",-,-,-
+List,split list into chunks,-,-,-,-
+List,convert lines to comma separated list,-,-,-,-
+Image Online,compress image online,"10 - 100","0.93","0.11",-
+Image Online,crop image online,"100 - 1K","0.98","0.06",-
+Image Online,flip image online,"10 - 100","0.33","0.13",-
+Image Online,resize image online,"100 - 1K","0.98","0.35",-
+Image Online,rotate image online,"10 - 100",-,-,-
+Image Online,split image online,"10 - 100",-,-,-
+Line,convert comma separated list to lines,-,-,-,-
+Line,keep lines containing text,-,-,-,-
+Line,remove duplicate lines,"10 - 100",-,-,-
+Line,remove empty lines,"10 - 100",-,-,-
+Line,remove line breaks,"100 - 1K",-,-,-
+Line,remove lines containing text,-,-,-,-
+Line,replace line breaks with commas,-,-,-,-
+Line,trim whitespace from lines,-,-,-,-
+Line,add prefix to each line,-,-,-,-
+Line,add suffix to each line,-,-,-,-
+Line,number lines online,"0 - 10",-,-,-
+Html,convert urls to html links,-,-,-,-
+Html,extract href from html,-,-,-,-
+Html,extract links from html,"0 - 10",-,-,-
+Html,html decode,"100 - 1K",-,-,-
+Html,html encode,"100 - 1K",-,-,-
+Html,html formatter,"100 - 1K",-,-,-
+Html,html minifier,"10 - 100",-,-,-
+Html,html to markdown,"100 - 1K",-,-,-
+Html,markdown to html,"100 - 1K","0.33","0.06",-
+Formatter,css formatter,"10 - 100",-,-,-
+Formatter,javascript formatter,"100 - 1K",-,-,-
+Formatter,json formatter,"10K - 100K","0.36",-,-
+Formatter,sql formatter,"1K - 10K",-,-,-
+Formatter,xml formatter,"1K - 10K",-,-,-
+Csv,csv formatter,"10 - 100",-,-,-
+Csv,csv to json,"100 - 1K","0.59","0.05",-
+Csv,csv to tsv,"10 - 100",-,-,-
+Csv,csv validator,"10 - 100",-,-,-
+Csv,remove duplicate rows csv,-,-,-,-
+Csv,json to csv,"100 - 1K","0.59","0.05",-
+Csv,tsv to csv,"10 - 100",-,-,-
+Json,escape json string,"10 - 100",-,-,-
+Json,flatten json,"10 - 100",-,-,-
+Json,json diff,"100 - 1K",-,-,-
+Json,json minifier,"10 - 100",-,-,-
+Json,json to xml,"100 - 1K","0.59","0.08",-
+Json,json to yaml,"100 - 1K","0.33","0.05",-
+Json,json validator,"1K - 10K","0.33","0.10",-
+Json,sort json keys,"0 - 10",-,-,-
+Json,unflatten json,"0 - 10",-,-,-
+Json,xml to json,"100 - 1K","0.58",-,-
+Json,yaml to json,"100 - 1K","0.33","0.06",-
+Json,extract values from json,"0 - 10",-,-,-
+Json,remove json duplicates,-,-,-,-
+Extract Text,extract emails from text,"0 - 10","0.41",-,-
+Extract Text,extract hashtags from text,-,-,-,-
+Extract Text,extract numbers from text,"0 - 10",-,-,-
+Extract Text,extract text from pdf,"100 - 1K","0.90","0.68",-
+Extract Text,extract urls from text,"10 - 100",-,-,-

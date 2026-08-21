@@ -920,7 +920,7 @@ test('keywordCacheIdentity comes from config and parser versions', () => {
     hl: 'en',
     gl: 'us',
     topN: 10,
-    surferParserVersion: '1.0.0',
+    surferParserVersion: '2.0.0',
     googleParserVersion: '1.2.0',
   });
 });

@@ -1,9 +1,14 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename as fsRename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
+import type {
+  MicrosoftAggregate,
+  MicrosoftKeyword,
+  MicrosoftOccurrence,
+} from '../input/microsoft/normalize.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 
@@ -39,7 +44,7 @@ export type RunManifest = {
   updatedAt: string;
   state: RunState;
   input: {
-    kind: 'seeds';
+    kind: 'seeds' | 'microsoft';
     path: string;
   };
   configSnapshot: ResearchConfig;
@@ -69,15 +74,22 @@ export type RunManifest = {
   };
 };
 
+// One preserved Microsoft source row. It carries the full occurrence (not just
+// the row number), so duplicate keywords keep every contributing row's ad
+// group, volume, competition, and CPC provenance.
+export type MicrosoftSource = { type: 'microsoft' } & MicrosoftOccurrence;
+
 export type KeywordSource =
   | { type: 'seed'; rowNumbers: number[] }
-  | { type: 'surfer_related'; parentKeyword: string; overlap?: number | null };
+  | MicrosoftSource
+  | { type: 'surfer_related'; parentKeyword: string; overlap?: number | null; rowNumbers?: number[] };
 
 export type KeywordRecord = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
   sources: KeywordSource[];
+  microsoft?: MicrosoftAggregate | null;
   surfer: {
     volume: number | null;
     cpc: number | null;
@@ -116,17 +128,39 @@ export function keywordSlug(keyword: string): string {
   return slug.slice(0, 60) || 'keyword';
 }
 
-export function buildKeywordRecords(keywords: SeedKeyword[]): KeywordRecord[] {
-  return keywords.map((seed, index) => ({
-    id: `kw-${String(index + 1).padStart(4, '0')}`,
-    keyword: seed.keyword,
-    normalizedKeyword: seed.normalizedKeyword,
-    sources: [{ type: 'seed', rowNumbers: seed.sourceRows }],
-    surfer: null,
-    google: null,
-    status: 'pending',
-    error: null,
-  }));
+export function buildKeywordRecords(
+  keywords: SeedKeyword[] | MicrosoftKeyword[],
+  kind: 'seeds' | 'microsoft',
+): KeywordRecord[] {
+  return keywords.map((item, index) => {
+    if (kind === 'microsoft') {
+      const microsoft = item as MicrosoftKeyword;
+      return {
+        id: `kw-${String(index + 1).padStart(4, '0')}`,
+        keyword: microsoft.keyword,
+        normalizedKeyword: microsoft.normalizedKeyword,
+        sources: microsoft.occurrences.map((occurrence) => ({ type: 'microsoft', ...occurrence })),
+        microsoft: microsoft.microsoft,
+        surfer: null,
+        google: null,
+        status: 'pending',
+        error: null,
+      };
+    }
+
+    const seed = item as SeedKeyword;
+    return {
+      id: `kw-${String(index + 1).padStart(4, '0')}`,
+      keyword: seed.keyword,
+      normalizedKeyword: seed.normalizedKeyword,
+      sources: [{ type: 'seed', rowNumbers: seed.sourceRows }],
+      microsoft: null,
+      surfer: null,
+      google: null,
+      status: 'pending',
+      error: null,
+    };
+  });
 }
 
 export async function ensureWritableDirectory(directory: string): Promise<void> {
@@ -178,11 +212,31 @@ export async function writeJsonAtomic(
   data: unknown,
   description: string,
 ): Promise<void> {
+  let content: string;
+  try {
+    content = `${JSON.stringify(data, null, 2)}\n`;
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to serialize ${description} for "${path}".`,
+      { cause: error },
+    );
+  }
+  await writeTextAtomic(path, content, description);
+}
+
+// Atomic text publication with the same recoverable semantics as JSON: write
+// to a temp file, rename over the target, and clean the temp file up on
+// failure, so a crash or an error never exposes a partially-written target.
+export async function writeTextAtomic(
+  path: string,
+  content: string,
+  description: string,
+): Promise<void> {
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
-    const serialized = `${JSON.stringify(data, null, 2)}\n`;
-    await writeFile(tempPath, serialized, 'utf8');
-    await rename(tempPath, path);
+    await writeFile(tempPath, content, 'utf8');
+    await renameImpl(tempPath, path);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw new ResearchError(
@@ -191,4 +245,12 @@ export async function writeJsonAtomic(
       { cause: error },
     );
   }
+}
+
+// Test seam: lets tests force a deterministic rename failure without deleting
+// the target file first (which would not prove the existing file is preserved).
+let renameImpl: (oldPath: string, newPath: string) => Promise<void> = fsRename;
+
+export function setRenameForTesting(fn: (oldPath: string, newPath: string) => Promise<void>): void {
+  renameImpl = fn;
 }

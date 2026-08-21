@@ -203,10 +203,13 @@ type SerpRow = {
 };
 
 // The narrow surface the engine depends on, so tests can substitute a fake
-// without opening a real database.
+// without opening a real database. Related-cache methods are optional: runs
+// without expansion never touch them, and lightweight fakes can omit them.
 export interface KeywordCache {
   getKeyword(cacheKey: string): CachedKeywordEntry | null;
   putKeyword(entry: CachedKeywordEntry): void;
+  getRelated?(cacheKey: string): CachedRelatedEntry | null;
+  putRelated?(entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>, storedAt: string, ttlMs: number): void;
 }
 
 // Validates the related-entry contract enforced by putRelated: status, rows,

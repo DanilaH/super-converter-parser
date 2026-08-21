@@ -6,8 +6,8 @@ import {
   planRunCache,
   type KeywordAccessOptions,
 } from './resolve.js';
-import { buildKeywordCacheKey, type CacheIdentity } from './keys.js';
-import { type CachedKeywordEntry, type KeywordCache } from './store.js';
+import { buildKeywordCacheKey, buildRelatedCacheKey, type CacheIdentity } from './keys.js';
+import { type CachedKeywordEntry, type CachedRelatedEntry, type KeywordCache } from './store.js';
 import type { SerpResult } from '../google/serp.js';
 
 const IDENTITY: CacheIdentity = {
@@ -53,6 +53,34 @@ function fakeCache(entries: Array<{ key: string; expiresAt: string }>): KeywordC
   return {
     getKeyword: (key) => map.get(key) ?? null,
     putKeyword: () => undefined,
+  };
+}
+
+function cacheWithRelated(
+  related: CachedRelatedEntry | null,
+): KeywordCache {
+  const cache = fakeCache([
+    {
+      key: buildKeywordCacheKey('compare lists', IDENTITY),
+      expiresAt: '2026-02-01T00:00:00.000Z',
+    },
+  ]);
+  return { ...cache, getRelated: () => related };
+}
+
+function relatedEntry(
+  status: CachedRelatedEntry['status'],
+  expiresAt = '2026-02-01T00:00:00.000Z',
+): CachedRelatedEntry {
+  return {
+    cacheKey: buildRelatedCacheKey('compare lists', IDENTITY),
+    normalizedKeyword: 'compare lists',
+    identity: IDENTITY,
+    status,
+    error: status === 'error' ? 'SURFER_RELATED_PARSE_ERROR' : null,
+    rows: status === 'ok' ? [{ relatedKeyword: '  List   comparison ', overlap: 80, volume: 5000 }] : [],
+    storedAt: '2026-01-01T00:00:00.000Z',
+    expiresAt,
   };
 }
 
@@ -183,4 +211,46 @@ test('planRunCache with no pending keywords needs no browser', () => {
   const plan = planRunCache([], OPTIONS, null, Date.now());
   assert.equal(plan.needsBrowser, false);
   assert.equal(plan.resolutions.size, 0);
+});
+
+test('keyword hit plus related miss still needs the browser', () => {
+  const plan = planRunCache(
+    ['compare lists'], OPTIONS, cacheWithRelated(null),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+  );
+  assert.equal(plan.resolutions.get('compare lists')?.kind, 'hit');
+  assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'miss');
+  assert.equal(plan.needsBrowser, true);
+});
+
+test('expired related entry needs a retry', () => {
+  const plan = planRunCache(
+    ['compare lists'], OPTIONS,
+    cacheWithRelated(relatedEntry('ok', '2026-01-01T00:00:00.000Z')),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+  );
+  assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'expired');
+  assert.equal(plan.needsBrowser, true);
+});
+
+test('cached related error remains retryable', () => {
+  const plan = planRunCache(
+    ['compare lists'], OPTIONS, cacheWithRelated(relatedEntry('error')),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+  );
+  assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'retry_error');
+  assert.equal(plan.needsBrowser, true);
+});
+
+test('fresh related empty needs no browser for a keyword hit', () => {
+  const plan = planRunCache(
+    ['compare lists'], OPTIONS, cacheWithRelated(relatedEntry('empty')),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+  );
+  assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'hit_empty');
+  assert.equal(plan.needsBrowser, false);
 });

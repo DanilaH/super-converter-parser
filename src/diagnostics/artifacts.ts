@@ -15,6 +15,7 @@ export type ParserFailureContext = {
   };
   selectors: {
     surferMainWidget: string;
+    surferRelatedWidget: string;
     surferCssMarker: string;
     organicResults: string;
     detectedLocation: string;
@@ -61,6 +62,7 @@ export function buildParserFailureContext(
     },
     selectors: {
       surferMainWidget: config.browser.surferWidgetSelector,
+      surferRelatedWidget: config.browser.surferRelatedWidgetSelector,
       surferCssMarker: SURFER_MARKERS.cssMarker,
       organicResults: GOOGLE_SELECTORS.organicResults,
       detectedLocation: GOOGLE_SELECTORS.detectedLocation,
@@ -71,5 +73,10 @@ export function buildParserFailureContext(
 }
 
 export function isParserErrorCode(code: ResearchErrorCode): boolean {
-  return code === 'SURFER_NOT_DETECTED' || code === 'SURFER_PARSE_ERROR' || code === 'GOOGLE_SERP_PARSE_ERROR';
+  return (
+    code === 'SURFER_NOT_DETECTED' ||
+    code === 'SURFER_PARSE_ERROR' ||
+    code === 'SURFER_RELATED_PARSE_ERROR' ||
+    code === 'GOOGLE_SERP_PARSE_ERROR'
+  );
 }

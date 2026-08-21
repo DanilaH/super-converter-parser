@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename as fsRename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug } from './run.js';
+import { buildKeywordRecords, createRunDirectory, createRunId, keywordSlug, writeTextAtomic } from './run.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
+import { buildMicrosoftKeywords } from '../input/microsoft/normalize.js';
 import { ResearchError } from '../shared/errors.js';
 
 test('buildKeywordRecords persists seed provenance in output records', () => {
@@ -13,7 +14,7 @@ test('buildKeywordRecords persists seed provenance in output records', () => {
     { keyword: 'compare lists', rowNumber: 3 },
     { keyword: 'zip code lookup', rowNumber: 2 },
   ]);
-  const records = buildKeywordRecords(keywords);
+  const records = buildKeywordRecords(keywords, 'seeds');
 
   assert.equal(records.length, 2);
   assert.deepEqual(records[0]!.sources, [{ type: 'seed', rowNumbers: [1, 3] }]);
@@ -21,10 +22,13 @@ test('buildKeywordRecords persists seed provenance in output records', () => {
 });
 
 test('buildKeywordRecords emits deterministic ids and pending state', () => {
-  const records = buildKeywordRecords([
-    { keyword: 'a', normalizedKeyword: 'a', sourceRows: [1] },
-    { keyword: 'b', normalizedKeyword: 'b', sourceRows: [2] },
-  ]);
+  const records = buildKeywordRecords(
+    [
+      { keyword: 'a', normalizedKeyword: 'a', sourceRows: [1] },
+      { keyword: 'b', normalizedKeyword: 'b', sourceRows: [2] },
+    ],
+    'seeds',
+  );
 
   assert.equal(records[0]!.id, 'kw-0001');
   assert.equal(records[1]!.id, 'kw-0002');
@@ -32,6 +36,42 @@ test('buildKeywordRecords emits deterministic ids and pending state', () => {
   assert.equal(records[0]!.surfer, null);
   assert.equal(records[0]!.google, null);
   assert.equal(records[0]!.error, null);
+});
+
+test('buildKeywordRecords preserves every Microsoft occurrence as a source', () => {
+  const keywords = buildMicrosoftKeywords([
+    {
+      adGroup: 'A',
+      keyword: 'dup keyword',
+      volumeBucket: '1K - 10K',
+      competition: null,
+      cpc: null,
+      rowNumber: 1,
+    },
+    {
+      adGroup: 'B',
+      keyword: 'dup keyword',
+      volumeBucket: null,
+      competition: '0.50',
+      cpc: 0.2,
+      rowNumber: 5,
+    },
+  ]);
+  const records = buildKeywordRecords(keywords, 'microsoft');
+
+  assert.equal(records.length, 1);
+  const sources = records[0]!.sources.filter((s) => s.type === 'microsoft');
+  assert.equal(sources.length, 2);
+  assert.deepEqual(
+    sources.map((s) => (s.type === 'microsoft' ? s.sourceRow : -1)),
+    [1, 5],
+  );
+  assert.equal(
+    sources[1]!.type === 'microsoft' && sources[1]!.cpc,
+    0.2,
+  );
+  // Aggregated signal is chosen deterministically, not from sourceRows[0].
+  assert.equal(records[0]!.microsoft?.volumeBucket, '1K - 10K');
 });
 
 test('keywordSlug produces stable artifact names', () => {
@@ -75,4 +115,37 @@ test('createRunDirectory refuses to reuse an existing run without modifying it',
       error.message.includes('refusing to overwrite'),
   );
   assert.equal(await readFile(markerPath, 'utf8'), marker);
+});
+
+test('writeTextAtomic publishes content and cleans up its temp file', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'urr-text-atomic-'));
+  const target = join(parent, 'keywords.csv');
+  await writeTextAtomic(target, '\uFEFFa,b\r\n', 'keywords CSV');
+  assert.equal(await readFile(target, 'utf8'), '\uFEFFa,b\r\n');
+  const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(leftovers, []);
+});
+
+test('a failing rename preserves an existing target file and leaves no temp file behind', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'urr-text-fail-'));
+  const target = join(parent, 'keywords.csv');
+  // Existing target with known content; we must prove it survives, not that a
+  // missing file stays missing.
+  await writeFile(target, '\uFEFForiginal\r\n', 'utf8');
+  const { setRenameForTesting } = await import('./run.js');
+  setRenameForTesting(async () => {
+    throw new Error('rename blocked');
+  });
+  try {
+    await assert.rejects(
+      writeTextAtomic(target, '\uFEFFnew,content\r\n', 'keywords CSV'),
+      (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+    );
+    // The existing target is byte-for-byte unchanged and the temp file is gone.
+    assert.equal(await readFile(target, 'utf8'), '\uFEFForiginal\r\n');
+    const leftovers = (await readdir(parent)).filter((name) => name.includes('.tmp-'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    setRenameForTesting(fsRename);
+  }
 });

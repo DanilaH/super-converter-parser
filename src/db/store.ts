@@ -2,11 +2,13 @@ import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
+import { aggregateMicrosoft, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { SerpResult } from '../google/serp.js';
 import {
   TERMINAL_KEYWORD_STATUSES,
   type KeywordRecord,
   type KeywordSource,
+  type MicrosoftSource,
   type KeywordStatus,
   type RunState,
 } from '../runs/run.js';
@@ -82,7 +84,7 @@ export type StoredRun = {
   state: RunState;
   createdAt: string;
   updatedAt: string;
-  input: { kind: 'seeds'; path: string };
+  input: { kind: 'seeds' | 'microsoft'; path: string };
   configSnapshot: ResearchConfig;
   parserVersions: { surfer: string; google: string };
   lookups: number;
@@ -98,7 +100,7 @@ export type StoredKeyword = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
-  sources: KeywordRecord['sources'];
+sources: KeywordSource[];
   status: KeywordStatus;
   surfer: KeywordRecord['surfer'];
   google: KeywordRecord['google'];
@@ -209,8 +211,8 @@ export class RunStore {
     runId: string;
     configSnapshot: ResearchConfig;
     parserVersions: { surfer: string; google: string };
-    input: { kind: 'seeds'; path: string };
-    keywords: SeedKeyword[];
+    input: { kind: 'seeds' | 'microsoft'; path: string };
+    keywords: SeedKeyword[] | MicrosoftKeyword[];
     forceRefresh?: boolean;
     refreshKeywords?: string[];
   }): void {
@@ -236,14 +238,25 @@ export class RunStore {
         input.forceRefresh === true ? 1 : 0,
         JSON.stringify(input.refreshKeywords ?? []),
       );
-      input.keywords.forEach((seed, index) => {
+      input.keywords.forEach((item, index) => {
+        const id = `kw-${String(index + 1).padStart(4, '0')}`;
+        let sourcesJson: string;
+        if (input.input.kind === 'microsoft') {
+          const microsoft = item as MicrosoftKeyword;
+          sourcesJson = JSON.stringify(
+            microsoft.occurrences.map((occurrence) => ({ type: 'microsoft', ...occurrence })),
+          );
+        } else {
+          const seed = item as SeedKeyword;
+          sourcesJson = JSON.stringify([{ type: 'seed', rowNumbers: seed.sourceRows }]);
+        }
         insertKeyword.run(
           input.runId,
           index,
-          `kw-${String(index + 1).padStart(4, '0')}`,
-          seed.keyword,
-          seed.normalizedKeyword,
-          JSON.stringify([{ type: 'seed', rowNumbers: seed.sourceRows }]),
+          id,
+          item.keyword,
+          item.normalizedKeyword,
+          sourcesJson,
         );
       });
     });
@@ -260,7 +273,7 @@ export class RunStore {
       state: row.state as RunState,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      input: { kind: row.input_kind as 'seeds', path: row.input_path },
+      input: { kind: row.input_kind as 'seeds' | 'microsoft', path: row.input_path },
       configSnapshot: JSON.parse(row.config_snapshot) as ResearchConfig,
       parserVersions: JSON.parse(row.parser_versions) as { surfer: string; google: string },
       lookups: row.lookups,
@@ -340,6 +353,17 @@ export class RunStore {
       dr: row.dr,
       resultType: row.result_type as SerpResult['resultType'],
     }));
+  }
+
+  // Organic result counts per keyword, read from the run checkpoint (the
+  // same rows that serp.json/serp.csv publish), never from cache state.
+  loadSerpRowCounts(runId: string): Array<{ keywordIdx: number; count: number }> {
+    return this.db
+      .prepare(
+        `SELECT keyword_idx AS keywordIdx, COUNT(*) AS count
+         FROM serp_rows WHERE run_id = ? GROUP BY keyword_idx`,
+      )
+      .all(runId) as Array<{ keywordIdx: number; count: number }>;
   }
 
   updateKeyword(runId: string, keyword: StoredKeyword): void {
@@ -482,7 +506,7 @@ function mapKeywordRow(row: KeywordRow): StoredKeyword {
     id: row.id,
     keyword: row.keyword,
     normalizedKeyword: row.normalized_keyword,
-    sources: JSON.parse(row.sources) as StoredKeyword['sources'],
+    sources: JSON.parse(row.sources) as KeywordSource[],
     status: row.status as KeywordStatus,
     surfer: row.surfer === null ? null : JSON.parse(row.surfer),
     google: row.google === null ? null : JSON.parse(row.google),
@@ -493,11 +517,19 @@ function mapKeywordRow(row: KeywordRow): StoredKeyword {
 }
 
 export function storedKeywordToRecord(keyword: StoredKeyword): KeywordRecord {
+  const microsoftSources = keyword.sources.filter(
+    (source): source is MicrosoftSource => source.type === 'microsoft',
+  );
+  // The aggregated Microsoft signal is derived deterministically from the
+  // preserved occurrences, so a load/resume round-trip reproduces the same
+  // value without storing a separate aggregate column.
+  const microsoft = microsoftSources.length > 0 ? aggregateMicrosoft(microsoftSources) : null;
   return {
     id: keyword.id,
     keyword: keyword.keyword,
     normalizedKeyword: keyword.normalizedKeyword,
     sources: keyword.sources,
+    microsoft,
     surfer: keyword.surfer,
     google: keyword.google,
     status: keyword.status,
