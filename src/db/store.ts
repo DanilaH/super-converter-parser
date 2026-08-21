@@ -13,7 +13,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 6;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -82,6 +82,45 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE serp_rows ADD COLUMN dr_status TEXT;
   `,
+  // v5: persist run-level provenance for observed related keywords and unique
+  // domains so aggregation, scoring, and the full output suite are reproducible
+  // from run.sqlite alone (not from the mutable cross-run cache). Replaying a
+  // completed keyword must not duplicate rows: related_keywords is keyed on
+  // (run_id, parent_idx, related_keyword) and domains on (run_id, domain).
+  `
+  CREATE TABLE related_keywords (
+    run_id TEXT NOT NULL,
+    parent_idx INTEGER NOT NULL,
+    parent_keyword TEXT NOT NULL,
+    related_keyword TEXT NOT NULL,
+    overlap INTEGER,
+    volume INTEGER,
+    selected_for_expansion INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    error TEXT,
+    PRIMARY KEY (run_id, parent_idx, related_keyword)
+  );
+
+  CREATE TABLE domains (
+    run_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    dr REAL,
+    status TEXT NOT NULL,
+    error TEXT,
+    source TEXT NOT NULL,
+    fetched_at TEXT,
+    first_seen_keyword_idx INTEGER NOT NULL,
+    first_seen_position INTEGER NOT NULL,
+    PRIMARY KEY (run_id, domain)
+  );
+  `,
+  // v6: persist the real first-seen keyword text (not only its index) so the
+  // domains output is self-describing, and allow the 'not_attempted' DR status
+  // plus a 'none' source so observed domains survive an Ahrefs skip with honest
+  // provenance.
+  `
+  ALTER TABLE domains ADD COLUMN first_seen_keyword TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export type StoredRun = {
@@ -112,6 +151,35 @@ export type StoredKeyword = {
   error: { code: ResearchErrorCode; message: string } | null;
   collectedAt: string | null;
   cacheStatus: CacheStatus | null;
+};
+
+// One observed related keyword for a parent keyword. Persisted at the run level
+// so expansion provenance survives without the cross-run related cache.
+export type StoredRelatedKeyword = {
+  runId: string;
+  parentIdx: number;
+  parentKeyword: string;
+  relatedKeyword: string;
+  overlap: number | null;
+  volume: number | null;
+  selectedForExpansion: boolean;
+  status: 'ok' | 'empty' | 'error';
+  error: string | null;
+};
+
+// One unique domain observed across the run, with its Ahrefs DR outcome and
+// provenance (whether the value came from the domain cache or a fresh lookup).
+export type StoredDomain = {
+  runId: string;
+  domain: string;
+  dr: number | null;
+  status: 'ok' | 'not_found' | 'error' | 'not_attempted';
+  error: string | null;
+  source: 'cache' | 'fresh' | 'none';
+  fetchedAt: string | null;
+  firstSeenKeyword: string;
+  firstSeenKeywordIdx: number;
+  firstSeenPosition: number;
 };
 
 type RunRow = {
@@ -506,6 +574,174 @@ export class RunStore {
     this.db
       .prepare('UPDATE runs SET force_refresh = ?, refresh_keywords = ? WHERE run_id = ?')
       .run(forceRefresh ? 1 : 0, JSON.stringify(refreshKeywords), runId);
+  }
+
+  // Persists the observed related keywords for one parent keyword. Idempotent:
+  // replaying a completed keyword deletes its prior rows and re-inserts, so no
+  // duplicates accumulate (PK also guards against double inserts).
+  recordRelatedKeywords(
+    runId: string,
+    parentIdx: number,
+    parentKeyword: string,
+    outcome: {
+      status: 'ok' | 'empty' | 'error' | 'not_attempted';
+      error: string | null;
+      rows: Array<{ keyword: string; overlap: number | null; volume: number | null }>;
+    },
+    selected: ReadonlySet<string>,
+  ): void {
+    // 'not_attempted' is a collection-internal state, never a persisted verdict.
+    if (outcome.status === 'not_attempted') return;
+    const deleteRows = this.db.prepare(
+      'DELETE FROM related_keywords WHERE run_id = ? AND parent_idx = ?',
+    );
+    const insertRow = this.db.prepare(
+      `INSERT OR REPLACE INTO related_keywords
+         (run_id, parent_idx, parent_keyword, related_keyword, overlap, volume, selected_for_expansion, status, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const write = this.db.transaction(() => {
+      deleteRows.run(runId, parentIdx);
+      if (outcome.status === 'ok') {
+        for (const row of outcome.rows) {
+          insertRow.run(
+            runId,
+            parentIdx,
+            parentKeyword,
+            row.keyword,
+            row.overlap,
+            row.volume,
+            selected.has(row.keyword) ? 1 : 0,
+            'ok',
+            null,
+          );
+        }
+      } else {
+        insertRow.run(runId, parentIdx, parentKeyword, '', null, null, 0, outcome.status, outcome.error);
+      }
+    });
+    write();
+  }
+
+  loadRelatedKeywords(runId: string): StoredRelatedKeyword[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT * FROM related_keywords WHERE run_id = ? ORDER BY parent_idx ASC, related_keyword ASC',
+        )
+        .all(runId) as Array<{
+        run_id: string;
+        parent_idx: number;
+        parent_keyword: string;
+        related_keyword: string;
+        overlap: number | null;
+        volume: number | null;
+        selected_for_expansion: number;
+        status: string;
+        error: string | null;
+      }>
+    ).map((row) => ({
+      runId: row.run_id,
+      parentIdx: row.parent_idx,
+      parentKeyword: row.parent_keyword,
+      relatedKeyword: row.related_keyword,
+      overlap: row.overlap,
+      volume: row.volume,
+      selectedForExpansion: row.selected_for_expansion === 1,
+      status: row.status as StoredRelatedKeyword['status'],
+      error: row.error,
+    }));
+  }
+
+  // Persists the unique domains observed in one keyword's SERP rows. The first
+  // occurrence (lowest position) for a domain within this keyword is its
+  // representative DR source. On conflict the original first-seen
+  // keyword/position is preserved while DR/status/source/fetched_at are updated,
+  // so a domain keeps the earliest keyword that surfaced it.
+  recordDomains(
+    runId: string,
+    keywordIdx: number,
+    keyword: string,
+    serpRows: Array<{
+      registrableDomain: string;
+      dr: number | null;
+      drStatus: 'ok' | 'not_found' | 'error' | 'not_attempted' | null;
+      drError?: string | null;
+      position: number;
+    }>,
+    sourceByDomain: Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>,
+  ): void {
+    const firstPosition = new Map<string, number>();
+    for (const row of serpRows) {
+      const domain = row.registrableDomain;
+      if (!domain) continue;
+      const existing = firstPosition.get(domain);
+      if (existing === undefined || row.position < existing) firstPosition.set(domain, row.position);
+    }
+
+    const upsert = this.db.prepare(
+      `INSERT INTO domains (run_id, domain, dr, status, error, source, fetched_at, first_seen_keyword, first_seen_keyword_idx, first_seen_position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(run_id, domain) DO UPDATE SET
+         dr = excluded.dr,
+         status = excluded.status,
+         error = CASE WHEN domains.source = 'fresh' AND excluded.source IN ('cache', 'none') THEN domains.error ELSE excluded.error END,
+         source = CASE WHEN domains.source = 'fresh' AND excluded.source IN ('cache', 'none') THEN 'fresh' ELSE excluded.source END,
+         fetched_at = excluded.fetched_at`,
+    );
+
+    const write = this.db.transaction(() => {
+      for (const row of serpRows) {
+        const domain = row.registrableDomain;
+        // Persist every observed domain. A null drStatus means the row was never
+        // offered for enrichment; 'not_attempted' means Ahrefs was skipped.
+        if (!domain || row.drStatus === null) continue;
+        const meta = sourceByDomain.get(domain);
+        upsert.run(
+          runId,
+          domain,
+          row.dr,
+          row.drStatus,
+          row.drError ?? null,
+          meta?.source ?? 'none',
+          meta?.fetchedAt ?? null,
+          keyword,
+          keywordIdx,
+          firstPosition.get(domain) ?? row.position,
+        );
+      }
+    });
+    write();
+  }
+
+  loadDomains(runId: string): StoredDomain[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM domains WHERE run_id = ? ORDER BY domain ASC')
+        .all(runId) as Array<{
+        run_id: string;
+        domain: string;
+        dr: number | null;
+        status: string;
+        error: string | null;
+        source: string;
+        fetched_at: string | null;
+        first_seen_keyword: string;
+        first_seen_keyword_idx: number;
+        first_seen_position: number;
+      }>
+    ).map((row) => ({
+      runId: row.run_id,
+      domain: row.domain,
+      dr: row.dr,
+      status: row.status as StoredDomain['status'],
+      error: row.error,
+      source: row.source as StoredDomain['source'],
+      fetchedAt: row.fetched_at,
+      firstSeenKeyword: row.first_seen_keyword,
+      firstSeenKeywordIdx: row.first_seen_keyword_idx,
+      firstSeenPosition: row.first_seen_position,
+    }));
   }
 }
 

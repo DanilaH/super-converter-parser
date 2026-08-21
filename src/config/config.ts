@@ -52,6 +52,17 @@ export type ResearchConfig = {
     rateLimitMaxDelayMs: number;
     timeoutMs: number;
   };
+  // Centralized DR classification thresholds for candidate scoring. See
+  // SCORING.md: very weak < veryWeakMax <= weak < weakMax <= neutral
+  // < strongMin <= strong < strongMax <= very strong.
+  scoring: {
+    drThresholds: {
+      veryWeakMax: number;
+      weakMax: number;
+      strongMin: number;
+      strongMax: number;
+    };
+  };
 };
 
 const DEFAULTS: ResearchConfig = {
@@ -104,6 +115,14 @@ const DEFAULTS: ResearchConfig = {
     rateLimitMinDelayMs: 1000,
     rateLimitMaxDelayMs: 10_000,
     timeoutMs: 15_000,
+  },
+  scoring: {
+    drThresholds: {
+      veryWeakMax: 10,
+      weakMax: 30,
+      strongMin: 60,
+      strongMax: 75,
+    },
   },
 };
 
@@ -212,6 +231,47 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
   };
 
+  const drThresholds = {
+    veryWeakMax: readPositiveNumber(
+      'SCORING_DR_VERY_WEAK_MAX',
+      env.SCORING_DR_VERY_WEAK_MAX,
+      DEFAULTS.scoring.drThresholds.veryWeakMax,
+    ),
+    weakMax: readPositiveNumber(
+      'SCORING_DR_WEAK_MAX',
+      env.SCORING_DR_WEAK_MAX,
+      DEFAULTS.scoring.drThresholds.weakMax,
+    ),
+    strongMin: readPositiveNumber(
+      'SCORING_DR_STRONG_MIN',
+      env.SCORING_DR_STRONG_MIN,
+      DEFAULTS.scoring.drThresholds.strongMin,
+    ),
+    strongMax: readPositiveNumber(
+      'SCORING_DR_STRONG_MAX',
+      env.SCORING_DR_STRONG_MAX,
+      DEFAULTS.scoring.drThresholds.strongMax,
+    ),
+  };
+  if (drThresholds.veryWeakMax >= drThresholds.weakMax) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Invalid SCORING_DR_VERY_WEAK_MAX: must be less than SCORING_DR_WEAK_MAX (${drThresholds.weakMax}), got ${drThresholds.veryWeakMax}.`,
+    );
+  }
+  if (drThresholds.weakMax >= drThresholds.strongMin) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Invalid SCORING_DR_WEAK_MAX: must be less than SCORING_DR_STRONG_MIN (${drThresholds.strongMin}), got ${drThresholds.weakMax}.`,
+    );
+  }
+  if (drThresholds.strongMin >= drThresholds.strongMax) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Invalid SCORING_DR_STRONG_MIN: must be less than SCORING_DR_STRONG_MAX (${drThresholds.strongMax}), got ${drThresholds.strongMin}.`,
+    );
+  }
+
   const config: ResearchConfig = {
     research: {
       market: (env.RESEARCH_MARKET ?? DEFAULTS.research.market).trim(),
@@ -259,6 +319,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
         DEFAULTS.ahrefs.rateLimitMaxDelayMs,
       ),
       timeoutMs: readPositiveNumber('AHREFS_TIMEOUT_MS', env.AHREFS_TIMEOUT_MS, DEFAULTS.ahrefs.timeoutMs),
+    },
+    scoring: {
+      drThresholds,
     },
     cache: {
       path: (env.CACHE_DB_PATH ?? DEFAULTS.cache.path).trim(),

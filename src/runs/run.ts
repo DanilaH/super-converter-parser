@@ -52,6 +52,7 @@ export type RunManifest = {
     surfer: string;
     google: string;
   };
+  scoringVersion: string;
   pauseReason: string | null;
   progress: {
     totalKeywords: number;

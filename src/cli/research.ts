@@ -11,6 +11,7 @@ import { loadMicrosoftRows } from '../input/microsoft/load.js';
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
+import { buildRunStatus } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
@@ -33,6 +34,7 @@ type CliOptions = {
   forceRefresh: boolean;
   refreshKeywords: string[];
   expand: boolean;
+  jsonStatus: boolean;
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -69,6 +71,7 @@ function parseArgs(argv: string[]): CliOptions {
     forceRefresh: false,
     refreshKeywords: [],
     expand: false,
+    jsonStatus: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -85,6 +88,8 @@ function parseArgs(argv: string[]): CliOptions {
       options.forceRefresh = true;
     } else if (arg === '--expand') {
       options.expand = true;
+    } else if (arg === '--json-status') {
+      options.jsonStatus = true;
     } else if (arg === '--refresh-keyword') {
       const value = argv[index + 1];
       if (value === undefined) {
@@ -116,6 +121,7 @@ function printUsage(): void {
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
+  console.log('  --json-status       Print a single compact JSON status line as the final stdout line.');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
   console.log('Environment:');
@@ -498,13 +504,19 @@ export async function runCli(
       console.log(`Run paused: ${outcome.reason}`);
       console.log('Resume with:');
       console.log(`  npm run research -- --resume ${runId}`);
+      if (options.jsonStatus && store) {
+        console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused')));
+      }
       return EXIT_PAUSED;
     }
     console.log('');
     console.log(`Run completed: ${outcome.state}`);
-    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv)`);
+    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv, related-keywords.csv, domains.csv, candidates.csv, report.md, status.json)`);
     console.log(`  CSV: runs/${runId}/keywords.csv`);
     console.log(`  CSV: runs/${runId}/serp.csv`);
+    if (options.jsonStatus && store) {
+      console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state)));
+    }
     return EXIT_OK;
   } catch (error) {
     console.error('');

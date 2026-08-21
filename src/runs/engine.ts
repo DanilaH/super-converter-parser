@@ -263,20 +263,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             options.cache?.store ?? null,
             hooks.now(),
           );
+        let outcome: SurferRelatedOutcome;
         if (relatedResolution.kind === 'hit_ok') {
-          const added = applySurferExpansion({
-            runId,
-            store,
-            parentKeyword: stored.keyword,
-            related: relatedRowsToSurferKeywords(relatedResolution.entry.rows),
-            config,
-            seenNormalized,
-            logger,
-          });
-          for (const name of added) {
-            logger(`  ↳ expansion (cached): +${name} (parent: ${stored.keyword})`);
-          }
-        } else if (relatedResolution.kind !== 'hit_empty') {
+          outcome = { status: 'ok', error: null, rows: relatedRowsToSurferKeywords(relatedResolution.entry.rows) };
+        } else if (relatedResolution.kind === 'hit_empty') {
+          outcome = { status: 'empty', error: null, rows: [] };
+        } else {
           store.incrementLookups(runId);
           const relatedResult = await collectRelated(storedKeywordToRecord(stored), debugRoot);
           const collectedAt = new Date(hooks.now()).toISOString();
@@ -289,26 +281,29 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             collectedAt,
           });
           reportRelatedOutcome(relatedResult, stored.normalizedKeyword, logger);
-          if (relatedResult.related.status === 'ok') {
-            const added = applySurferExpansion({
-              runId,
-              store,
-              parentKeyword: stored.keyword,
-              related: relatedResult.related.rows,
-              config,
-              seenNormalized,
-              logger,
-            });
-            for (const name of added) {
-              logger(`  ↳ expansion: +${name} (parent: ${stored.keyword})`);
-            }
+          outcome = relatedResult.related;
+        }
+        let added: string[] = [];
+        if (outcome.status === 'ok') {
+          added = applySurferExpansion({
+            runId,
+            store,
+            parentKeyword: stored.keyword,
+            related: outcome.rows,
+            config,
+            seenNormalized,
+            logger,
+          });
+          for (const name of added) {
+            logger(`  ↳ expansion: +${name} (parent: ${stored.keyword})`);
           }
         }
+        store.recordRelatedKeywords(runId, stored.idx, stored.keyword, outcome, new Set(added));
       }
       // Commit the cached primary only after any required related lookup. If
       // the process exits during that lookup, the root remains resumable and
       // expansion cannot be silently skipped on restart.
-      await applyDomainRatings({
+      const hitSourceByDomain = await applyDomainRatings({
         serpRows: entry.serpRows,
         ahrefs: options.ahrefs?.client ?? null,
         domainCache: (options.cache?.store ?? null) as CacheStore | null,
@@ -317,6 +312,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         sleep: hooks.sleep,
         logger,
       });
+      store.recordDomains(runId, stored.idx, stored.keyword, entry.serpRows, hitSourceByDomain);
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
       logger(
         `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
@@ -374,7 +370,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             : 'miss'
         : null;
       const serpRows = result?.serpRows ?? [];
-      await applyDomainRatings({
+      const missSourceByDomain = await applyDomainRatings({
         serpRows,
         ahrefs: options.ahrefs?.client ?? null,
         domainCache: (options.cache?.store ?? null) as CacheStore | null,
@@ -383,6 +379,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         sleep: hooks.sleep,
         logger,
       });
+      store.recordDomains(runId, idx, record.keyword, serpRows, missSourceByDomain);
       store.commitKeyword(runId, committed, serpRows, cacheStatus);
       breaker.record(record.status, record.error?.code ?? null);
       samples.push(hooks.now() - startAt);
@@ -443,20 +440,32 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
       // Expansion runs only for seed keywords; depth-one related candidates are
       // queued for collection but never expanded themselves. It triggers only
-      // when the related outcome is 'ok' (i.e. rows were actually parsed).
-      if (config.expansion.enabled && config.expansion.depth >= 1 && result && result.related.status === 'ok' && isExpandableKeyword(stored)) {
-        const added = applySurferExpansion({
-          runId,
-          store,
-          parentKeyword: record.keyword,
-          related: result.related.rows,
-          config,
-          seenNormalized,
-          logger,
-        });
-        for (const name of added) {
-          logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
+      // when the related outcome is 'ok' (i.e. rows were actually parsed). The
+      // structured related outcome is also persisted at the run level so it is
+      // reproducible from run.sqlite (not the cross-run cache).
+      if (
+        config.expansion.enabled &&
+        config.expansion.depth >= 1 &&
+        result &&
+        result.related.status !== 'not_attempted' &&
+        isExpandableKeyword(stored)
+      ) {
+        let added: string[] = [];
+        if (result.related.status === 'ok') {
+          added = applySurferExpansion({
+            runId,
+            store,
+            parentKeyword: record.keyword,
+            related: result.related.rows,
+            config,
+            seenNormalized,
+            logger,
+          });
+          for (const name of added) {
+            logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
+          }
         }
+        store.recordRelatedKeywords(runId, idx, record.keyword, result.related, new Set(added));
       }
     }
 
@@ -652,14 +661,25 @@ export async function applyDomainRatings(params: {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   logger: (line: string) => void;
-}): Promise<void> {
+}): Promise<Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>> {
   const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
-  if (!ahrefs || !domainCache) return;
+  // Per-domain DR for in-call dedupe (a domain on several rows is fetched once).
+  // Carries the error code too, so a repeated occurrence of the same domain in
+  // one SERP inherits the exact error provenance of the first lookup.
+  const resolvedDrs = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error'; error: string | null }>();
+  // Provenance returned to the caller so the run-level domains table can record
+  // whether each value came from the domain cache or a fresh Ahrefs lookup.
+  const sourceByDomain = new Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>();
+  // Ahrefs enrichment intentionally skipped (no client or no domain cache):
+  // mark every observed row as 'not_attempted' so the run-level domains table
+  // still persists the observed domains with honest provenance (source 'none').
+  if (!ahrefs || !domainCache) {
+    for (const row of serpRows) {
+      if (row.registrableDomain && row.drStatus === null) row.drStatus = 'not_attempted';
+    }
+    return sourceByDomain;
+  }
 
-  // Resolved within this call so a domain appearing on multiple SERP rows
-  // (e.g. several subpages of one site) is fetched once yet every row carries
-  // the rating. The domain cache extends this across keywords/runs.
-  const resolved = new Map<string, { dr: number | null; status: 'ok' | 'not_found' | 'error' }>();
   for (const row of serpRows) {
     // Older keyword-cache entries may carry an empty registrable_domain.
     // Re-derive it from the hostname (falling back to the URL) so enrichment
@@ -673,10 +693,13 @@ export async function applyDomainRatings(params: {
     const domain = row.registrableDomain;
     if (!domain) continue;
 
-    const prior = resolved.get(domain);
+    const prior = resolvedDrs.get(domain);
     if (prior) {
       row.dr = prior.dr;
       row.drStatus = prior.status;
+      // Carry the error code forward so every occurrence of the domain in the
+      // SERP shares the same provenance (not just the first lookup).
+      row.drError = prior.error ?? null;
       continue;
     }
 
@@ -684,7 +707,11 @@ export async function applyDomainRatings(params: {
     if (cached && Date.parse(cached.expiresAt) > now()) {
       row.dr = cached.dr;
       row.drStatus = cached.status;
-      resolved.set(domain, { dr: cached.dr, status: cached.status });
+      // Preserve the cached error code verbatim so a cached Ahrefs error is
+      // traceable downstream (the domains table keeps it, not just fresh ones).
+      row.drError = cached.error ?? null;
+      resolvedDrs.set(domain, { dr: cached.dr, status: cached.status, error: cached.error ?? null });
+      sourceByDomain.set(domain, { source: 'cache', fetchedAt: cached.storedAt });
       continue;
     }
 
@@ -704,13 +731,19 @@ export async function applyDomainRatings(params: {
       );
       row.dr = rating.dr;
       row.drStatus = rating.status;
-      resolved.set(domain, { dr: rating.dr, status: rating.status });
+      // A fresh lookup that returns an error (without throwing) must keep its
+      // returned error code, exactly like a thrown failure.
+      row.drError = rating.error ?? null;
+      resolvedDrs.set(domain, { dr: rating.dr, status: rating.status, error: rating.error ?? null });
+      sourceByDomain.set(domain, { source: 'fresh', fetchedAt: rating.fetchedAt });
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
       row.dr = null;
       row.drStatus = 'error';
-      resolved.set(domain, { dr: null, status: 'error' });
+      row.drError = code;
+      resolvedDrs.set(domain, { dr: null, status: 'error', error: code });
+      sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
       // Persistent 429/5xx and unexpected throws are cached as errors so the
       // domain is not re-fetched until domainErrorMs elapses.
       domainCache.putDomain(
@@ -722,6 +755,8 @@ export async function applyDomainRatings(params: {
     }
     await sleep(config.ahrefs.rateLimitMinDelayMs);
   }
+
+  return sourceByDomain;
 }
 
 export type { RetrySettings, BreakerSettings };
