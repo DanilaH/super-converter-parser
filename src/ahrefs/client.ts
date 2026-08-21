@@ -28,11 +28,12 @@ const MAX_ATTEMPTS = 4;
 
 // Bounded exponential backoff with full jitter: base doubles per attempt and is
 // capped at maxDelayMs, then a random fraction [0, 0.25 * base] is added so
-// concurrent retries do not synchronize.
-function backoffMs(attempt: number, min: number, max: number, random: () => number): number {
+// concurrent retries do not synchronize. The total (base + jitter) is clamped
+// to maxDelayMs so the delay never exceeds the configured ceiling.
+export function backoffMs(attempt: number, min: number, max: number, random: () => number): number {
   const base = Math.min(max, min * Math.pow(2, attempt - 1));
   const jitter = base * 0.25 * random();
-  return Math.floor(base + jitter);
+  return Math.floor(Math.min(max, base + jitter));
 }
 
 // Endpoint, auth header and response shape are isolated here so the exact

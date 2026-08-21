@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAhrefsClient, type AhrefsClientConfig } from './client.js';
+import { createAhrefsClient, backoffMs, type AhrefsClientConfig } from './client.js';
 
 type FetchInit = { signal?: unknown; headers?: Record<string, string> };
 type FetchLike = (url: string, init?: FetchInit) => Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }>;
@@ -94,4 +94,30 @@ test('network failure yields error status after retries', async () => {
   const res = await client('x.com');
   assert.equal(res.status, 'error');
   assert.equal(res.error, 'network');
+});
+
+test('backoff with jitter never exceeds maxDelayMs', () => {
+  const min = 1000;
+  const max = 5000;
+  // Worst case for the cap: base fully grown to max and jitter at its max.
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    assert.ok(
+      backoffMs(attempt, min, max, () => 1) <= max,
+      `attempt ${attempt} (jitter=max) must not exceed maxDelayMs`,
+    );
+    assert.ok(
+      backoffMs(attempt, min, max, () => 0) >= Math.min(max, min * Math.pow(2, attempt - 1)),
+      `attempt ${attempt} (jitter=0) must keep the exponential base`,
+    );
+  }
+});
+
+test('backoff base doubles and is capped at maxDelayMs', () => {
+  const min = 1000;
+  const max = 5000;
+  assert.equal(backoffMs(1, min, max, () => 0), 1000);
+  assert.equal(backoffMs(2, min, max, () => 0), 2000);
+  assert.equal(backoffMs(3, min, max, () => 0), 4000);
+  // 4th attempt would be 8000 but is capped at maxDelayMs before jitter.
+  assert.equal(backoffMs(4, min, max, () => 0), 5000);
 });

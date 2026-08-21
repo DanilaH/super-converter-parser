@@ -363,9 +363,9 @@ export async function runCli(
     console.log('');
 
     const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
-    // AHREFS_API_KEY is required: the official Ahrefs DR endpoint needs a
-    // bearer token, so without one the whole DR phase is skipped (organic SERP
-    // and all other stages still run).
+    // AHREFS_API_KEY is required for the DR phase: this tool gates Ahrefs
+    // enrichment on a configured key, so without one the whole DR phase is
+    // skipped (organic SERP and all other stages still run).
     let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
     if (ahrefsApiKey) {
       ahrefs = {
@@ -457,7 +457,7 @@ export async function runCli(
       pauseRequested: () => pauseRequested,
     };
 
-const relatedCollector = deps.collectRelated;
+    const relatedCollector = deps.collectRelated;
     const outcome = await executeRun({
       store,
       runId,

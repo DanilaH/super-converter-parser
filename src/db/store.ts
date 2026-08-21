@@ -105,7 +105,7 @@ export type StoredKeyword = {
   id: string;
   keyword: string;
   normalizedKeyword: string;
-sources: KeywordSource[];
+  sources: KeywordSource[];
   status: KeywordStatus;
   surfer: KeywordRecord['surfer'];
   google: KeywordRecord['google'];
