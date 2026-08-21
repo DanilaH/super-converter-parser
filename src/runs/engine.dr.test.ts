@@ -19,6 +19,7 @@ import type { CollectionResult } from '../browser/collect.js';
 import type { KeywordRecord } from './run.js';
 import type { SerpResult } from '../google/serp.js';
 import type { AhrefsClient, DomainRatingResult } from '../ahrefs/client.js';
+import { ResearchError } from '../shared/errors.js';
 
 const CONFIG = loadConfig({});
 
@@ -134,6 +135,71 @@ test('records not_found ratings as null DR without throwing', async () => {
   });
   assert.equal(calls.length, 1);
   assert.equal(serpRows[0]!.dr, null);
+});
+
+test('caches a non-ok response error status by domainErrorMs', async () => {
+  const calls: string[] = [];
+  const ahrefs: AhrefsClient = async (domain: string) => {
+    calls.push(domain);
+    return { domain, dr: null, fetchedAt: new Date().toISOString(), source: 'ahrefs', status: 'error', error: 'status 500' };
+  };
+  const cache = CacheStore.openInMemory();
+  const rows = [serpRow('https://x.com/1', 'x.com')];
+  await applyDomainRatings({
+    serpRows: rows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.now(),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(rows[0]!.drStatus, 'error');
+
+  // A second pass for the same domain must be served from the error cache,
+  // not re-fetched.
+  await applyDomainRatings({
+    serpRows: [serpRow('https://x.com/2', 'x.com')],
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.now(),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(calls.length, 1, 'error outcome was cached, not re-fetched');
+});
+
+test('caches a thrown lookup error as error status so it is not re-fetched within TTL', async () => {
+  const calls: string[] = [];
+  const ahrefs: AhrefsClient = async (domain: string) => {
+    calls.push(domain);
+    throw new ResearchError('AHREFS_RATE_LIMIT', 'rate limited');
+  };
+  const cache = CacheStore.openInMemory();
+  const rows = [serpRow('https://x.com/1', 'x.com')];
+  await applyDomainRatings({
+    serpRows: rows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.now(),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(rows[0]!.drStatus, 'error');
+
+  await applyDomainRatings({
+    serpRows: [serpRow('https://x.com/2', 'x.com')],
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.now(),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(calls.length, 1, 'thrown error was cached as error, not re-fetched');
 });
 
 // --- End-to-end path through executeRun ---

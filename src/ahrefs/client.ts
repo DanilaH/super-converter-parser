@@ -53,25 +53,27 @@ export function createAhrefsClient(
   return async (domain: string): Promise<DomainRatingResult> => {
     const fetchedAt = new Date().toISOString();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (config.apiKey) {
+        headers.Authorization = `Bearer ${config.apiKey}`;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), config.timeoutMs);
       let response: Response;
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-        const headers: Record<string, string> = { Accept: 'application/json' };
-        if (config.apiKey) {
-          headers.Authorization = `Bearer ${config.apiKey}`;
-        }
         response = await fetchImpl(
           `${config.endpoint}?target=${encodeURIComponent(domain)}`,
           { signal: controller.signal, headers },
         );
-        clearTimeout(timer);
       } catch {
         if (attempt < MAX_ATTEMPTS) {
           await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
           continue;
         }
         return { domain, dr: null, fetchedAt, source: 'ahrefs', status: 'error', error: 'network' };
+      } finally {
+        // Always release the abort timer, including on network/abort throws.
+        clearTimeout(timer);
       }
 
       if (response.status === 404) {

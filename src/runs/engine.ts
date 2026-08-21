@@ -706,12 +706,19 @@ export async function applyDomainRatings(params: {
       row.drStatus = rating.status;
       resolved.set(domain, { dr: rating.dr, status: rating.status });
     } catch (error) {
-      logger(
-        `  ⚠ Ahrefs DR lookup failed for ${domain}: ${error instanceof ResearchError ? error.code : 'AHREFS_ERROR'}`,
-      );
+      const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
+      logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
       row.dr = null;
       row.drStatus = 'error';
       resolved.set(domain, { dr: null, status: 'error' });
+      // Persistent 429/5xx and unexpected throws are cached as errors so the
+      // domain is not re-fetched until domainErrorMs elapses.
+      domainCache.putDomain(
+        domain,
+        { dr: null, status: 'error', error: code },
+        new Date(now()).toISOString(),
+        config.cache.ttl.domainErrorMs,
+      );
     }
     await sleep(config.ahrefs.rateLimitMinDelayMs);
   }

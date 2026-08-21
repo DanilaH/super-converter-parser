@@ -363,23 +363,24 @@ export async function runCli(
     console.log('');
 
     const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
-    // The v3 Domain Rating endpoint is free, so enrichment runs with or without
-    // a key. A key only upgrades rate limits / coverage; the bearer token is
-    // attached conditionally inside the client.
-    const ahrefs: { apiKey: string | null; client: AhrefsClient } = {
-      apiKey: ahrefsApiKey,
-      client: createAhrefsClient(ahrefsApiKey ?? '', {
-        endpoint: runConfig.ahrefs.endpoint,
-        timeoutMs: runConfig.ahrefs.timeoutMs,
-        minDelayMs: runConfig.ahrefs.rateLimitMinDelayMs,
-        maxDelayMs: runConfig.ahrefs.rateLimitMaxDelayMs,
-      }),
-    };
-    console.log(
-      ahrefsApiKey
-        ? `  ✓ Ahrefs DR enrichment enabled (${runConfig.ahrefs.endpoint})`
-        : `  • Ahrefs DR enrichment enabled (free endpoint ${runConfig.ahrefs.endpoint}, no API key)`,
-    );
+    // AHREFS_API_KEY is required: the official Ahrefs DR endpoint needs a
+    // bearer token, so without one the whole DR phase is skipped (organic SERP
+    // and all other stages still run).
+    let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
+    if (ahrefsApiKey) {
+      ahrefs = {
+        apiKey: ahrefsApiKey,
+        client: createAhrefsClient(ahrefsApiKey, {
+          endpoint: runConfig.ahrefs.endpoint,
+          timeoutMs: runConfig.ahrefs.timeoutMs,
+          minDelayMs: runConfig.ahrefs.rateLimitMinDelayMs,
+          maxDelayMs: runConfig.ahrefs.rateLimitMaxDelayMs,
+        }),
+      };
+      console.log(`  ✓ Ahrefs DR enrichment enabled (${runConfig.ahrefs.endpoint})`);
+    } else {
+      console.log('  • Ahrefs DR enrichment skipped (AHREFS_API_KEY not set)');
+    }
     console.log('');
 
     // A fresh run's keywords exist only in the seeds (executeRun inserts them
