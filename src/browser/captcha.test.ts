@@ -67,3 +67,31 @@ test('pauseForManualCaptcha (non-TTY) waits for the marker file and removes it',
   assert.ok(Date.now() - start >= 150, 'should have waited for the marker before resuming');
   assert.equal(existsSync(marker), false, 'marker must be consumed/removed after resume');
 });
+
+test('pauseForManualCaptcha (non-TTY) returns on the first Ctrl+C instead of waiting for the marker', async () => {
+  const marker = join(await mkdtemp(join(tmpdir(), 'captcha-marker-int-')), 'done.txt');
+  rmSync(marker, { force: true });
+
+  const originalTty = (process.stdin as { isTTY?: boolean }).isTTY;
+  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
+  process.env.CAPTCHA_DONE_MARKER = marker;
+
+  const page = { waitForLoadState: async () => undefined } as unknown as Page;
+  const timer = setTimeout(() => {
+    process.emit('SIGINT');
+  }, 300);
+
+  const start = Date.now();
+  try {
+    await pauseForManualCaptcha(page);
+  } finally {
+    clearTimeout(timer);
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalTty, configurable: true });
+    if (originalMarker === undefined) delete process.env.CAPTCHA_DONE_MARKER;
+    else process.env.CAPTCHA_DONE_MARKER = originalMarker;
+  }
+
+  assert.ok(Date.now() - start < 5000, 'must not wait for the (absent) marker or the timeout');
+  assert.equal(existsSync(marker), false, 'no marker was created, so nothing to remove');
+});

@@ -51,6 +51,13 @@ test('geo mismatch surfaces in keywords.csv and report.md without false localiza
 
   const previousCwd = process.cwd();
   process.chdir(directory);
+
+  const logLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logLines.push(args.map(String).join(' '));
+  };
+
   try {
     const code = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
     assert.equal(code, EXIT_OK);
@@ -64,12 +71,21 @@ test('geo mismatch surfaces in keywords.csv and report.md without false localiza
     assert.ok(keywordsCsv.includes('geo_warning'), 'keywords.csv must expose geo_warning');
     assert.ok(keywordsCsv.includes('Moscow, Russia'), 'detected location must be persisted');
 
+    const keywordsJson = await readFile(join(runDir, 'keywords.json'), 'utf8');
+    assert.ok(keywordsJson.includes('Moscow, Russia'), 'keywords.json must persist the detected location');
+    assert.ok(keywordsJson.includes('geoWarning'), 'keywords.json must persist the geo warning flag');
+
     const report = await readFile(join(runDir, 'report.md'), 'utf8');
     assert.ok(report.includes('## Geo warnings'), 'report must have a geo warnings section');
     assert.ok(report.includes('Moscow, Russia'), 'report must name the detected location');
     assert.ok(report.includes('`k1`'), 'report must identify the mismatched keyword');
     assert.ok(report.includes('geo-mismatched'), 'report must list geo as a next manual check');
+
+    const joinedLogs = logLines.join('\n');
+    assert.ok(joinedLogs.includes('GEO WARNING'), 'CLI must print a geo warning during the run');
+    assert.ok(joinedLogs.includes('Moscow, Russia'), 'CLI geo warning must name the detected location');
   } finally {
+    console.log = originalLog;
     process.chdir(previousCwd);
   }
 });

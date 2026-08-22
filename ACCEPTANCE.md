@@ -197,8 +197,8 @@ mandatory row is `FAIL`.
 | --- | --- | --- | --- |
 | 1 | Preflight failures early, classified, actionable, non-terminal | PASS | `src/cli/research.test.ts` (cache DB unreadable → exit 3; preflight failure → exit 3), `src/browser/preflight.ts` |
 | 2 | Invalid inputs/CLI exit with documented code (2) | PASS | `src/cli/research.input.test.ts`, `src/cli/research.test.ts` |
-| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS | `src/browser/captcha.test.ts` (detection + marker pause), `src/browser/collect.captcha.test.ts` (real collect wiring waitForManualCaptcha → pauseForManualCaptcha), `src/cli/research.test.ts` (SIGINT → 130, resume) |
-| 4 | Geo mismatch visible, no false localization | PASS | `src/cli/research.geo.test.ts` (keywords.csv `detected_google_location` + `geo_warning`, report.md) |
+| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS | `src/browser/captcha.test.ts` (detection + marker pause + first Ctrl+C interrupt), `src/browser/collect.captcha.test.ts` (real collect wiring waitForManualCaptcha → pauseForManualCaptcha), `src/cli/research.captcha.test.ts` (first Ctrl+C during marker-wait via runCli → paused/130), `src/cli/research.test.ts` (SIGINT → 130, resume) |
+| 4 | Geo mismatch visible, no false localization | PASS | `src/cli/research.geo.test.ts` (keywords.csv `detected_google_location` + `geo_warning`, keywords.json geo fields, report.md, CLI `GEO WARNING` log naming the detected location) |
 | 5 | Parser failures retain debug evidence; breakers trip | PASS | `src/diagnostics/artifacts.test.ts`, `src/runs/policies.test.ts`, `src/runs/engine.test.ts` |
 | 6 | Ahrefs isolated, cached, traceable, secret-safe | PASS | `src/cli/research.secretLeak.test.ts`, `src/runs/engine.dr.test.ts` |
 | 7 | Cold/warm/refresh/identity cache consistent | PASS | `src/runs/engine.cache.test.ts`, `src/runs/engine.test.ts` |
@@ -206,7 +206,7 @@ mandatory row is `FAIL`.
 | 9 | Terminal historical runs immutable | PASS | `src/runs/engine.test.ts` (RESUME_TERMINAL_RUN), `src/cli/research.test.ts` (resume completed → exit 2) |
 | 10 | Output atomic, manifest-last, never falsely terminal | PASS | `src/runs/aggregation.regression.test.ts` (Contracts 7/14/15) |
 | 11 | CSV/JSON/Markdown agree with run DB | PASS | `src/runs/aggregation.regression.test.ts`, `src/runs/csv.snapshot.test.ts` |
-| 12 | `--json-status` stable and machine-readable | PASS | `src/cli/research.jsonstatus.test.ts` (completed / completed_with_errors / paused) |
+| 12 | `--json-status` stable and machine-readable | PASS | `src/cli/research.jsonstatus.test.ts` (completed / completed_with_errors / paused; JSON asserted as the single, final stdout line with no other JSON/ANSI noise) |
 | 13 | Representative real Google + Surfer e2e | BLOCKED_BY_ENVIRONMENT | attempted automated run: CDP at 127.0.0.1:9222 and :9333 unreachable from the agent environment; the mandatory flow also needs interactive CAPTCHA solving, which a non-interactive agent cannot perform. Deterministic contracts above are verified; the live path is the operator's manual acceptance |
 | 14 | Docs reproducible, evidence + limitations honest | PASS | `ACCEPTANCE.md`, README acceptance note, `IMPLEMENTATION_PLAN.md` |
-| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 294 pass / 0 fail / 1 skipped |
+| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 296 pass / 0 fail / 1 skipped |

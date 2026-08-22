@@ -60,18 +60,19 @@ function makeDeps(): CliDeps {
   };
 }
 
-function parseLastJsonLine(lines: string[]): Record<string, unknown> {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]!.trim();
-    if (line.startsWith('{')) {
-      try {
-        return JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        // not this line; keep scanning upward
-      }
-    }
-  }
-  throw new Error('no JSON status line found in output');
+function expectSingleFinalJson(lines: string[]): Record<string, unknown> {
+  const jsonLines = lines.filter((line) => line.trim().startsWith('{'));
+  assert.equal(
+    jsonLines.length,
+    1,
+    `stdout must contain exactly one JSON line (found ${jsonLines.length})`,
+  );
+  assert.equal(
+    lines[lines.length - 1],
+    jsonLines[0],
+    'the JSON status line must be the last stdout line',
+  );
+  return JSON.parse(jsonLines[0]!) as Record<string, unknown>;
 }
 
 test('--json-status emits a single parseable JSON line pointing at real artifacts', async () => {
@@ -95,7 +96,7 @@ test('--json-status emits a single parseable JSON line pointing at real artifact
     );
     assert.equal(code, EXIT_OK);
 
-    const status = parseLastJsonLine(logLines) as {
+    const status = expectSingleFinalJson(logLines) as {
       status: string;
       runId: string;
       artifacts: { report: string; candidatesCsv: string };
@@ -148,7 +149,7 @@ test('--json-status final line reports completed_with_errors when a keyword fail
     );
     assert.equal(code, EXIT_OK, 'completed_with_errors still exits 0');
 
-    const status = parseLastJsonLine(logLines) as { status: string };
+    const status = expectSingleFinalJson(logLines) as { status: string };
     assert.equal(status.status, 'completed_with_errors', 'final JSON status must reflect the error');
   } finally {
     console.log = originalLog;
@@ -185,7 +186,7 @@ test('--json-status final line reports paused when interrupted with Ctrl+C', asy
     );
     assert.equal(code, EXIT_PAUSED, 'interrupted run exits 130');
 
-    const status = parseLastJsonLine(logLines) as { status: string };
+    const status = expectSingleFinalJson(logLines) as { status: string };
     assert.equal(status.status, 'paused', 'final JSON status must reflect the pause');
   } finally {
     console.log = originalLog;
