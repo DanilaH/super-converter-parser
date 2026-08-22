@@ -343,9 +343,14 @@ export async function collectRelatedKeyword(
         debugArtifactPath,
       };
     }
-  } catch {
+  } catch (error) {
     // Navigation/CAPTCHA failures happen before the related reader has a
     // truthful result, so they must not be cached as a genuine empty list.
+    // A cancellation (Ctrl+C) must propagate to the engine so it can leave the
+    // active keyword resumable and record the run as paused.
+    if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+      throw error;
+    }
     return {
       related: { status: 'not_attempted', error: null, rows: [] },
       debugArtifactPath: null,

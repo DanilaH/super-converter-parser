@@ -8,6 +8,7 @@ import {
   type CollectKeywordFn,
   type CollectRelatedFn,
   type EngineHooks,
+  type SnapshotsPublisher,
 } from './engine.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
@@ -512,4 +513,84 @@ test('geo mismatch remains unchanged and is preserved across outputs', async () 
   assert.ok(keywords.every((k) => k.google?.geoWarning === true));
   assert.ok(keywords.every((k) => k.google?.detectedLocation === 'Chelyabinsk Oblast, Russia'));
   store.close();
+});
+
+test('systemic 401/403 → pause → resume makes exactly one API call total', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'task009-systemic-resume-'));
+  const debugRoot = join(runDirectory, 'debug');
+  await createRunDirectory(runDirectory).catch(() => undefined);
+  await createRunDirectory(debugRoot).catch(() => undefined);
+  const cache = CacheStore.openInMemory();
+
+  let apiCalls = 0;
+  const ahrefs: AhrefsClient = async (domain: string) => {
+    apiCalls += 1;
+    throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (401) for "${domain}".`, { httpStatus: 401 });
+  };
+
+  const collect: CollectKeywordFn = async (record) => okCollect(record);
+
+  // Pause after the first keyword completes (publishSnapshots fires per keyword).
+  let keywordsCompleted = 0;
+  const pauseHooks: EngineHooks = {
+    ...makeHooks(),
+    pauseRequested: () => keywordsCompleted >= 1,
+  };
+  const countingPublish: SnapshotsPublisher = async (...args) => {
+    await writeSnapshots(...args);
+    keywordsCompleted += 1;
+  };
+
+  // First run: first keyword triggers systemic failure, then pause before second.
+  const firstOutcome = await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: BASE_CONFIG,
+    input: { kind: 'seeds', path: 'input/seeds.csv' },
+    runDirectory,
+    debugRoot,
+    collect,
+    hooks: pauseHooks,
+    publishSnapshots: countingPublish,
+    requireAhrefs: true,
+    ahrefs: { apiKey: 'invalid-key', client: ahrefs },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
+  });
+
+  assert.equal(firstOutcome.kind, 'paused', 'run should pause after first keyword');
+  assert.equal(apiCalls, 1, 'exactly 1 API call during first run');
+
+  // Resume: second keyword must not make any API calls (global lock restored from persisted state).
+  const resumeOutcome = await executeRun({
+    store,
+    runId,
+    mode: 'resume',
+    keywords: KEYWORDS,
+    config: BASE_CONFIG,
+    input: { kind: 'seeds', path: 'input/seeds.csv' },
+    runDirectory,
+    debugRoot,
+    collect,
+    hooks: makeHooks(),
+    requireAhrefs: true,
+    ahrefs: { apiKey: 'invalid-key', client: ahrefs },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
+  });
+
+  assert.equal(resumeOutcome.kind, 'finished');
+  assert.equal(resumeOutcome.ahrefs.state, 'failed');
+  assert.equal(apiCalls, 1, `total API calls across pause/resume must be exactly 1, got ${apiCalls}`);
+
+  // Verify the systemic marker is persisted: at least one domain has a 'systemic' error.
+  const domains = store.loadDomains(runId);
+  assert.ok(domains.some((d) => d.error?.startsWith('systemic')), 'systemic marker must be persisted');
+  // The first domain has the systemic marker; remaining unique domains are not_attempted.
+  const notAttempted = domains.filter((d) => d.status === 'not_attempted').length;
+  assert.ok(notAttempted >= 1, 'remaining unique domains must be not_attempted');
+  store.close();
+  cache.close();
 });

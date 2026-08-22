@@ -1026,19 +1026,21 @@ export async function applyDomainRatings(params: {
       }
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
+      const reason = `systemic ${error instanceof ResearchError && error.httpStatus ? error.httpStatus : 'unknown'}: ${code}`;
       // Systemic auth failure: a 401/403 before any successful lookup means the
-      // key is unusable. Record this domain as a fresh error, then mark every
-      // remaining domain as not_attempted and stop all further Ahrefs calls.
+      // key is unusable. The first real domain gets the systemic marker; duplicates
+      // of it inherit the plain error; all remaining unique domains are marked
+      // not_attempted and no further Ahrefs calls are made.
       if (!tracker?.hasSuccess && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
         tracker?.recordSystemicFailure(code);
         row.dr = null;
         row.drStatus = 'error';
-        row.drError = code;
+        row.drError = reason;
         resolvedDrs.set(domain, { dr: null, status: 'error', error: code });
         sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
         logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopping DR stage.`);
         // Mark remaining domains as not_attempted and stop.
-        tracker?.stopAllDomains(serpRows, `systemic ${error.httpStatus}: ${code}`);
+        tracker?.stopAllDomains(serpRows, reason);
         break;
       }
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}${error instanceof ResearchError && error.httpStatus ? ` (${error.httpStatus})` : ''}`);
