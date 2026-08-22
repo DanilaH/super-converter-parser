@@ -1036,9 +1036,24 @@ export async function applyDomainRatings(params: {
         row.dr = null;
         row.drStatus = 'error';
         row.drError = reason;
-        resolvedDrs.set(domain, { dr: null, status: 'error', error: code });
+        // All rows of this domain (including duplicates in the same SERP) get
+        // the systemic marker. Remaining unique domains are marked not_attempted
+        // by stopAllDomains below.
+        resolvedDrs.set(domain, { dr: null, status: 'error', error: reason });
         sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
         logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopping DR stage.`);
+        // Apply resolvedDrs to all rows first so stopAllDomains sees terminal
+        // statuses for duplicates of the failing domain (otherwise they would
+        // appear as drStatus === null and be wrongly marked not_attempted).
+        for (const r of serpRows) {
+          if (r.drStatus !== null || !r.registrableDomain) continue;
+          const prior = resolvedDrs.get(r.registrableDomain);
+          if (prior) {
+            r.dr = prior.dr;
+            r.drStatus = prior.status;
+            r.drError = prior.error;
+          }
+        }
         // Mark remaining domains as not_attempted and stop.
         tracker?.stopAllDomains(serpRows, reason);
         break;

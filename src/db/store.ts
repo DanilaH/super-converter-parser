@@ -1,5 +1,21 @@
 import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
+
+// Helper: add a column to a table only if it does not already exist.
+// SQLite's ALTER TABLE ADD COLUMN does not support IF NOT EXISTS in the
+// better-sqlite3 build, so we check pragma table_info first.
+function addColumnIfMissingLocal(
+  db: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  const exists = rows.some((r) => r.name === column);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import { aggregateMicrosoft, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
@@ -13,7 +29,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -56,6 +72,10 @@ const MIGRATIONS: string[] = [
     url TEXT NOT NULL,
     hostname TEXT NOT NULL,
     result_type TEXT NOT NULL,
+    registrable_domain TEXT NOT NULL DEFAULT '',
+    dr REAL,
+    dr_status TEXT,
+    dr_error TEXT,
     PRIMARY KEY (run_id, keyword_idx, position)
   );
   `,
@@ -74,13 +94,12 @@ const MIGRATIONS: string[] = [
   // v3: persist registrable domain and Ahrefs DR alongside each SERP row so
   // domain-level analysis survives without re-crawling the SERP.
   `
-  ALTER TABLE serp_rows ADD COLUMN registrable_domain TEXT NOT NULL DEFAULT '';
-  ALTER TABLE serp_rows ADD COLUMN dr REAL;
+  SELECT 1;
   `,
   // v4: persist the DR lookup outcome so completedDomains counts every resolved
   // domain (ok / not_found / error), not only the ones with a numeric DR.
   `
-  ALTER TABLE serp_rows ADD COLUMN dr_status TEXT;
+  SELECT 1;
   `,
   // v5: persist run-level provenance for observed related keywords and unique
   // domains so aggregation, scoring, and the full output suite are reproducible
@@ -120,6 +139,11 @@ const MIGRATIONS: string[] = [
   // provenance.
   `
   ALTER TABLE domains ADD COLUMN first_seen_keyword TEXT NOT NULL DEFAULT '';
+  `,
+  // v7: persist the per-row Ahrefs error code (incl. the systemic marker) so
+  // SERP rows carry the exact error provenance after a systemic auth failure.
+  `
+  SELECT 1;
   `,
 ];
 
@@ -270,6 +294,18 @@ export class RunStore {
         );
       }
     }
+    // v3/v4/v7 columns are now part of the CREATE TABLE for fresh databases,
+    // but existing databases (user_version < 7) may still be missing them.
+    // addColumnIfMissing is idempotent and safe to run after migrations.
+    const _serpDynamic: Array<[string, string]> = [
+      ['registrable_domain', "TEXT NOT NULL DEFAULT ''"],
+      ['dr', 'REAL'],
+      ['dr_status', 'TEXT'],
+      ['dr_error', 'TEXT'],
+    ];
+    for (const [column, definition] of _serpDynamic) {
+      addColumnIfMissingLocal(this.db, 'serp_rows', column, definition);
+    }
   }
 
   get version(): number {
@@ -402,7 +438,7 @@ export class RunStore {
   loadSerpRows(runId: string): SerpResult[] {
     const rows = this.db
       .prepare(
-        `SELECT keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type
+        `SELECT keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, dr_error, result_type
          FROM serp_rows WHERE run_id = ? ORDER BY keyword_idx ASC, position ASC`,
       )
       .all(runId) as Array<{
@@ -415,6 +451,7 @@ export class RunStore {
       registrable_domain: string;
       dr: number | null;
       dr_status: string | null;
+      dr_error: string | null;
       result_type: string;
     }>;
     return rows.map((row) => ({
@@ -426,6 +463,7 @@ export class RunStore {
       registrableDomain: row.registrable_domain,
       dr: row.dr,
       drStatus: (row.dr_status as SerpResult['drStatus']) ?? null,
+      drError: row.dr_error ?? null,
       resultType: row.result_type as SerpResult['resultType'],
     }));
   }
@@ -464,8 +502,8 @@ export class RunStore {
       'DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?',
     );
     const insertRow = this.db.prepare(
-      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, dr_error, result_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const write = this.db.transaction(() => {
       deleteRows.run(runId, keywordIdx);
@@ -481,6 +519,7 @@ export class RunStore {
           row.registrableDomain,
           row.dr,
           row.drStatus,
+          row.drError ?? null,
           row.resultType,
         );
       }
@@ -505,8 +544,8 @@ export class RunStore {
       'DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?',
     );
     const insertRow = this.db.prepare(
-      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, result_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, dr_error, result_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const write = this.db.transaction(() => {
       updateKeyword.run(
@@ -532,6 +571,7 @@ export class RunStore {
           row.registrableDomain,
           row.dr,
           row.drStatus,
+          row.drError ?? null,
           row.resultType,
         );
       }

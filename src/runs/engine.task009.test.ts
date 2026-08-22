@@ -594,3 +594,82 @@ test('systemic 401/403 → pause → resume makes exactly one API call total', a
   store.close();
   cache.close();
 });
+
+test('systemic 401/403 marks all rows of the failing domain with the systemic marker (duplicates included)', async () => {
+  const store = RunStore.openInMemory();
+  const runId = createRunId();
+  const runDirectory = await mkdtemp(join(tmpdir(), 'task009-systemic-dup-'));
+  const debugRoot = join(runDirectory, 'debug');
+  await createRunDirectory(runDirectory).catch(() => undefined);
+  await createRunDirectory(debugRoot).catch(() => undefined);
+  const cache = CacheStore.openInMemory();
+
+  let apiCalls = 0;
+  const ahrefs: AhrefsClient = async (domain: string) => {
+    apiCalls += 1;
+    throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (401) for "${domain}".`, { httpStatus: 401 });
+  };
+
+  // The first keyword's SERP has 'repeat.com' at positions 1 and 3 (duplicate
+  // registrable domain) plus 'other.com' at position 2. When 'repeat.com' triggers
+  // a systemic 401, BOTH rows of 'repeat.com' must end up error + systemic marker,
+  // and 'other.com' must be not_attempted.
+  const collect: CollectKeywordFn = async (record) => {
+    if (record.normalizedKeyword === 'compare lists') {
+      return {
+        ...okCollect(record),
+        serpRows: serpRowsFor(record.normalizedKeyword, ['repeat.com', 'other.com', 'repeat.com']),
+      };
+    }
+    return okCollect(record);
+  };
+
+  const outcome = await executeRun({
+    store,
+    runId,
+    mode: 'fresh',
+    keywords: KEYWORDS,
+    config: BASE_CONFIG,
+    input: { kind: 'seeds', path: 'input/seeds.csv' },
+    runDirectory,
+    debugRoot,
+    collect,
+    hooks: makeHooks(),
+    requireAhrefs: true,
+    ahrefs: { apiKey: 'invalid-key', client: ahrefs },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
+  });
+
+  assert.equal(outcome.kind, 'finished');
+  assert.equal(outcome.ahrefs.state, 'failed');
+  // Exactly one API call: 'repeat.com' is looked up once; the second occurrence
+  // is a duplicate and inherits the result; 'other.com' is never looked up.
+  assert.equal(apiCalls, 1, `expected exactly 1 API call, got ${apiCalls}`);
+
+  const serpRows = store.loadSerpRows(runId).filter(r => r.keyword === 'compare lists');
+  const repeatRows = serpRows.filter((r) => r.registrableDomain === 'repeat.com');
+  const otherRows = serpRows.filter((r) => r.registrableDomain === 'other.com');
+
+  // Both 'repeat.com' rows must be error + systemic marker.
+  assert.equal(repeatRows.length, 2, 'repeat.com appears twice in SERP');
+  assert.ok(
+    repeatRows.every((r) => r.drStatus === 'error' && r.drError?.startsWith('systemic')),
+    'all rows of the failing domain must carry the systemic marker',
+  );
+
+  // 'other.com' must be not_attempted (never looked up due to global lock).
+  assert.equal(otherRows.length, 1);
+  assert.equal(otherRows[0]?.drStatus, 'not_attempted', 'other.com must be not_attempted');
+
+  // Domains table: repeat.com is one unique domain with systemic error, other.com is not_attempted.
+  const domains = store.loadDomains(runId);
+  const repeatDomain = domains.find((d) => d.domain === 'repeat.com');
+  const otherDomain = domains.find((d) => d.domain === 'other.com');
+  assert.ok(repeatDomain, 'repeat.com persisted');
+  assert.equal(repeatDomain?.status, 'error');
+  assert.ok(repeatDomain?.error?.startsWith('systemic'), 'repeat.com has systemic marker');
+  assert.ok(otherDomain, 'other.com persisted');
+  assert.equal(otherDomain?.status, 'not_attempted', 'other.com is not_attempted');
+  store.close();
+  cache.close();
+});
