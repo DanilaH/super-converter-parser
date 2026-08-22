@@ -17,3 +17,6 @@ test-results/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local scripts with secrets
+scripts/set-ahrefs-key.bat

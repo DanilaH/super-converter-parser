@@ -570,7 +570,7 @@ export async function runCli(
         relatedResolutions: plan.relatedResolutions,
       },
       ...(ahrefs ? { ahrefs } : {}),
-      requireAhrefs: config.ahrefs.requireAhrefs,
+      requireAhrefs: runConfig.ahrefs.requireAhrefs,
     });
 
     if (outcome.kind === 'paused') {
