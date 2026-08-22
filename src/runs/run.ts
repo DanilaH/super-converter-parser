@@ -54,6 +54,25 @@ export type RunManifest = {
   };
   scoringVersion: string;
   pauseReason: string | null;
+  ahrefs: {
+    mode: 'required' | 'optional';
+    state: 'complete' | 'degraded' | 'skipped' | 'failed';
+    discovered: number;
+    attempted: number;
+    notAttempted: number;
+    cache: number;
+    fresh: number;
+    ok: number;
+    notFound: number;
+    error: number;
+    numericCoverage: number;
+    requireAhrefs: boolean;
+  };
+  scoringCompleteness: {
+    status: 'complete' | 'degraded';
+    numericDrCoverage: number;
+    missingDrDomains: number;
+  };
   progress: {
     totalKeywords: number;
     completedKeywords: number;

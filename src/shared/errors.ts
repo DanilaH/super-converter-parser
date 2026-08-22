@@ -7,6 +7,7 @@ export type ResearchErrorCode =
   | 'AHREFS_RATE_LIMIT'
   | 'AHREFS_ERROR'
   | 'AHREFS_NOT_CONFIGURED'
+  | 'AHREFS_REQUIRE_CONFIG'
   | 'GOOGLE_UNAVAILABLE'
   | 'CAPTCHA_REQUIRED'
   | 'RUN_PAUSED'
@@ -17,7 +18,8 @@ export type ResearchErrorCode =
   | 'RESUME_NOT_FOUND'
   | 'RESUME_TERMINAL_RUN'
   | 'RESUME_PARSER_MISMATCH'
-  | 'RESUME_CONFIG_MISMATCH';
+  | 'RESUME_CONFIG_MISMATCH'
+  | 'RESUME_REQUIRE_AHREFS_MISMATCH';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

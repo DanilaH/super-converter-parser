@@ -178,6 +178,15 @@ export async function readSurferRelated(
 ): Promise<SurferRelatedKeyword[]> {
   const deadline = Date.now() + waitMs;
   let lastSnapshot: RelatedDomSnapshot = { state: 'widget_missing' };
+  // Fast-fail for a genuinely missing widget: if it hasn't appeared after the
+  // first two polls (~1s), it is not going to mount lazily. This avoids a full
+  // waitMs wait (60s default) in environments where the related sidebar does not
+  // render (e.g. copied Surfer profiles), while still giving a legitimately
+  // lazy widget ~1s to appear. A missing widget returns an empty list (the
+  // keyword still completes with its main volume/SERP data); only a present-but
+  // broken widget throws.
+  let widgetMissingPolls = 0;
+  const WIDGET_MISSING_FAST_FAIL_POLLS = 2;
 
   while (Date.now() <= deadline) {
     const snapshot = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
@@ -189,15 +198,16 @@ export async function readSurferRelated(
         `Surfer related-keywords table contains malformed rows; expected exactly 4 direct <td> cells, got ${snapshot.cellCounts.join(', ')}.`,
       );
     }
+    if (snapshot?.state === 'widget_missing' || lastSnapshot.state === 'widget_missing') {
+      widgetMissingPolls += 1;
+      if (widgetMissingPolls >= WIDGET_MISSING_FAST_FAIL_POLLS) return [];
+    }
     await page.waitForTimeout(500);
   }
 
   if (lastSnapshot.state === 'empty') return [];
   if (lastSnapshot.state === 'widget_missing') {
-    throw new ResearchError(
-      'SURFER_RELATED_PARSE_ERROR',
-      `Surfer related-keywords widget "${widgetSelector}" was not found in the page.`,
-    );
+    return [];
   }
   throw new ResearchError(
     'SURFER_RELATED_PARSE_ERROR',

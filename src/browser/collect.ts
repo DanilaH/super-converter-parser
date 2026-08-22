@@ -110,13 +110,15 @@ export async function collectKeyword(
       errors.push({ code, message });
     }
 
-    // The related-keyword reader runs only for root/seed keywords. Expanded
-    // (surfer_related) keywords are themselves collected but never expanded
-    // further, so re-reading their related list would be wasted browser work.
+    // The related-keyword reader runs for every root/seed keyword regardless of
+    // expansion.enabled. --expand only controls whether observed rows are queued
+    // for depth-one Google lookups (handled by the engine). Expanded
+    // (surfer_related) keywords are collected but never expanded further, so
+    // re-reading their related list would be wasted browser work.
     let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
     let relatedParserError: ComponentError | null = null;
     const isRoot = !keyword.sources.some((source) => source.type === 'surfer_related');
-    if (config.expansion.enabled && config.expansion.depth >= 1 && isRoot) {
+    if (isRoot) {
       // The related-keywords widget can mount lazily after the main Surfer
       // widget; scroll the results so Surfer renders it before we read.
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
@@ -132,7 +134,7 @@ export async function collectKeyword(
             ? { status: 'ok', error: null, rows: parsed }
             : { status: 'empty', error: null, rows: [] };
       } catch (error) {
-        // Related-keyword expansion is optional enrichment: a missing/broken
+        // Related-keyword observation is optional enrichment: a missing/broken
         // widget must not downgrade an otherwise-successful keyword. The error
         // is preserved in the structured related outcome for traceability.
         const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');

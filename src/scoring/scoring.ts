@@ -82,6 +82,10 @@ export type Candidate = {
   tier: 'A' | 'B' | 'C' | 'D' | null;
   scoringVersion: string;
   rationale: string;
+  // Completeness metadata: whether the numeric score is based on full DR data.
+  // 'complete' when every SERP domain has numeric DR; 'degraded' otherwise.
+  // This does not change the score — it only records evidence completeness.
+  scoringCompleteness: 'complete' | 'degraded';
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -235,6 +239,7 @@ export type ScoreResult = {
   score: number | null;
   tier: 'A' | 'B' | 'C' | 'D' | null;
   rationale: string;
+  scoringCompleteness: 'complete' | 'degraded';
 };
 
 export function score(
@@ -245,7 +250,7 @@ export function score(
 ): ScoreResult {
   // Failed / non-terminal keywords remain observable but unscored.
   if (status !== 'completed' && status !== 'partial') {
-    return { score: null, tier: null, rationale: '' };
+    return { score: null, tier: null, rationale: '', scoringCompleteness: 'degraded' };
   }
 
   const volume = surferVolume ?? 0;
@@ -287,7 +292,14 @@ export function score(
     `medianDr=${features.medianDr ?? '-'}`,
   ].join(' ');
 
-  return { score: rounded, tier, rationale };
+  // Scoring completeness: 'complete' only when every SERP domain has numeric DR.
+  // Missing DR stays missing — it never becomes zero. A degraded score is still
+  // deterministic under the existing formula but must not be presented as fully
+  // evidenced without this adjacent status.
+  const scoringCompleteness: 'complete' | 'degraded' =
+    features.missingDrCount === 0 && known > 0 ? 'complete' : 'degraded';
+
+  return { score: rounded, tier, rationale, scoringCompleteness };
 }
 
 export function buildCandidates(
@@ -338,6 +350,7 @@ export function buildCandidates(
       tier: result.tier,
       scoringVersion: SCORING_VERSION,
       rationale: result.rationale,
+      scoringCompleteness: result.scoringCompleteness,
     };
   });
 

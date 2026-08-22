@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { RunStore, SCHEMA_VERSION } from '../db/store.js';
 import { CacheStore, type CachedKeywordEntry, type KeywordCache } from '../cache/store.js';
 import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
-import type { CacheResolution } from '../cache/resolve.js';
+import type { CacheResolution, RelatedCacheResolution } from '../cache/resolve.js';
+import { buildRelatedCacheKey } from '../cache/keys.js';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
@@ -118,6 +119,45 @@ function cachedEntryFor(
   };
 }
 
+// Primes a related-cache entry for one keyword so related observation is a
+// cache hit (no browser work) in tests that exercise the cache-hit path.
+function primeRelatedCache(cache: CacheStore, normalizedKeyword: string, status: 'ok' | 'empty' | 'error', ttlMs: number, rows: Array<{ relatedKeyword: string; overlap: number | null; volume: number | null }> = []): void {
+  cache.putRelated(
+    {
+      cacheKey: buildRelatedCacheKey(normalizedKeyword, IDENTITY),
+      normalizedKeyword,
+      identity: IDENTITY,
+      status,
+      error: null,
+      rows,
+    },
+    new Date(Date.now() - 60_000).toISOString(),
+    ttlMs,
+  );
+}
+
+// Builds a map of relatedResolutions (all hit) for the given keywords, so the
+// engine's related-observation path is served from the plan without browser work.
+function relatedResolutionsFor(keywords: SeedKeyword[], kind: 'hit_ok' | 'hit_empty' = 'hit_empty'): Map<string, RelatedCacheResolution> {
+  const resolutions = new Map<string, RelatedCacheResolution>();
+  for (const keyword of keywords) {
+    resolutions.set(keyword.normalizedKeyword, {
+      kind,
+      entry: {
+        cacheKey: buildRelatedCacheKey(keyword.normalizedKeyword, IDENTITY),
+        normalizedKeyword: keyword.normalizedKeyword,
+        identity: IDENTITY,
+        status: kind === 'hit_ok' ? 'ok' : 'empty',
+        error: null,
+        rows: [],
+        storedAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+  }
+  return resolutions;
+}
+
 // Primes a cache entry for one keyword, mirroring what the engine writes.
 function primeCache(
   cache: CacheStore,
@@ -148,7 +188,7 @@ function baseOptions(
     debugRoot: join(runDirectory, 'debug'),
     collect: async (keyword) => okResult(keyword),
     hooks: makeHooks(),
-    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set(), relatedResolutions: relatedResolutionsFor(KEYWORDS) },
     ...extra,
   };
 }
@@ -273,7 +313,7 @@ test('refreshKeywords refresh only the listed keyword', async () => {
   const calls: string[] = [];
   const outcome = await executeRun(
     baseOptions(store, runId, await mkdtemp(join(tmpdir(), 'cache-selective-')), cache, {
-      cache: { store: cache, forceRefresh: false, refreshKeywords: new Set(['standing desk']) },
+      cache: { store: cache, forceRefresh: false, refreshKeywords: new Set(['standing desk']), relatedResolutions: relatedResolutionsFor(KEYWORDS) },
       collect: async (keyword) => {
         calls.push(keyword.normalizedKeyword);
         return okResult(keyword);
@@ -601,6 +641,7 @@ test('precomputed resolutions are authoritative: the engine never re-reads the c
         forceRefresh: false,
         refreshKeywords: new Set(),
         resolutions,
+        relatedResolutions: relatedResolutionsFor(KEYWORDS),
       },
       collect: async (keyword) => {
         collectCalls += 1;
@@ -696,6 +737,7 @@ test('a paused v1 run migrates and resumes with complete cache accounting', asyn
   const ttl = BASE_CONFIG.cache.ttl.completedMs;
   // The one pending keyword will be served from the cache after the resume.
   primeCache(cache, 'standing desk', 'completed', ttl);
+  primeRelatedCache(cache, 'standing desk', 'empty', ttl);
 
   // A real pre-cache (v1) paused run: two terminal keywords collected fresh,
   // one pending keyword left over.

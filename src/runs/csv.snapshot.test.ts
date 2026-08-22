@@ -11,7 +11,8 @@ import { writeSnapshots } from './snapshots.js';
 import type { SerpResult } from '../google/serp.js';
 import { executeRun, type EngineHooks, type ExecuteRunOptions } from './engine.js';
 import { CacheStore, type KeywordCache } from '../cache/store.js';
-import { buildKeywordCacheKey, keywordCacheIdentity } from '../cache/keys.js';
+import { buildKeywordCacheKey, buildRelatedCacheKey, keywordCacheIdentity } from '../cache/keys.js';
+import type { RelatedCacheResolution } from '../cache/resolve.js';
 import { ResearchError } from '../shared/errors.js';
 import type { CollectionResult } from '../browser/collect.js';
 import type { KeywordRecord } from './run.js';
@@ -85,9 +86,30 @@ function baseOptions(
     debugRoot: join(runDirectory, 'debug'),
     collect: async (keyword) => okResult(keyword),
     hooks: makeHooks(),
-    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set(), relatedResolutions: relatedResolutionsFor(KEYWORDS) },
     ...extra,
   };
+}
+
+// Builds a map of relatedResolutions (all hit_empty) for the given keywords.
+function relatedResolutionsFor(keywords: SeedKeyword[]): Map<string, RelatedCacheResolution> {
+  const resolutions = new Map<string, RelatedCacheResolution>();
+  for (const keyword of keywords) {
+    resolutions.set(keyword.normalizedKeyword, {
+      kind: 'hit_empty',
+      entry: {
+        cacheKey: buildRelatedCacheKey(keyword.normalizedKeyword, keywordCacheIdentity(BASE_CONFIG)),
+        normalizedKeyword: keyword.normalizedKeyword,
+        identity: keywordCacheIdentity(BASE_CONFIG),
+        status: 'empty',
+        error: null,
+        rows: [],
+        storedAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+  }
+  return resolutions;
 }
 
 test('keywords.csv follows the operator column contract with zero vs missing values', async () => {

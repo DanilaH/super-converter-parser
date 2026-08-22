@@ -53,6 +53,8 @@ export type SnapshotsPublisher = (
   runId: string,
   runDirectory: string,
   state: RunState,
+  ahrefs?: AhrefsSummary,
+  scoringCompleteness?: ScoringCompleteness,
 ) => Promise<void>;
 
 export type EngineHooks = {
@@ -73,8 +75,29 @@ export type EngineCacheOptions = {
   relatedResolutions?: Map<string, RelatedCacheResolution>;
 };
 
+export type AhrefsSummary = {
+  mode: 'required' | 'optional';
+  state: 'complete' | 'degraded' | 'skipped' | 'failed';
+  discovered: number;
+  attempted: number;
+  notAttempted: number;
+  cache: number;
+  fresh: number;
+  ok: number;
+  notFound: number;
+  error: number;
+  numericCoverage: number;
+  requireAhrefs: boolean;
+};
+
+export type ScoringCompleteness = {
+  status: 'complete' | 'degraded';
+  numericDrCoverage: number;
+  missingDrDomains: number;
+};
+
 export type RunOutcome =
-  | { kind: 'finished'; state: 'completed' | 'completed_with_errors' }
+  | { kind: 'finished'; state: 'completed' | 'completed_with_errors'; ahrefs: AhrefsSummary; scoringCompleteness: ScoringCompleteness }
   | { kind: 'paused'; reason: string };
 
 export type ExecuteRunOptions = {
@@ -99,6 +122,9 @@ export type ExecuteRunOptions = {
   // every registrable domain in the organic SERP and persists it next to the
   // SERP row. Domain rating lookups are cached and rate limited.
   ahrefs?: { apiKey: string | null; client: AhrefsClient };
+  // When true, a missing/blank AHREFS_API_KEY fails before keyword collection
+  // and the run cannot finish as clean completed. Persists through resume.
+  requireAhrefs?: boolean;
 };
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
@@ -146,6 +172,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     hooks,
     signal = NEVER_CANCELLED,
   } = options;
+  const requireAhrefs = options.requireAhrefs ?? false;
   const collectRelated: CollectRelatedFn = options.collectRelated ?? (async (keyword, relatedDebugRoot) => {
     const result = await collect(keyword, relatedDebugRoot, signal);
     return { related: result.related, debugArtifactPath: result.debugArtifactPath };
@@ -156,6 +183,20 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   const identity = keywordCacheIdentity(config);
   let forceRefresh = options.cache?.forceRefresh ?? false;
   let refreshKeywords = new Set(options.cache?.refreshKeywords ?? []);
+
+  // Tracks Ahrefs DR accounting across the run: discovered domains, attempted
+  // lookups, cache/fresh provenance, terminal statuses and numeric coverage.
+  const ahrefsTracker = new AhrefsTracker(options.ahrefs?.client ?? null, requireAhrefs);
+
+  // In required mode, a missing/blank key or absent client fails before any
+  // keyword collection begins. This mirrors the CLI preflight check and keeps
+  // the engine self-consistent for direct (non-CLI) use.
+  if (requireAhrefs && !options.ahrefs?.client) {
+    throw new ResearchError(
+      'AHREFS_REQUIRE_CONFIG',
+      'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but no Ahrefs client is configured (AHREFS_API_KEY missing or blank).',
+    );
+  }
 
   let run: StoredRun;
   // The CLI pre-creates fresh runs (before preflight) so a cancellation during
@@ -278,9 +319,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       };
 
       // Keyword and related caches are resolved independently. A cached primary
-      // result must not suppress expansion when its related lookup is missing,
-      // expired, or an earlier error.
-      if (config.expansion.enabled && config.expansion.depth >= 1 && isExpandableKeyword(stored)) {
+      // result must not suppress related observation when its related lookup is
+      // missing, expired, or an earlier error. Related observation runs for every
+      // root keyword regardless of expansion.enabled; --expand only controls
+      // whether observed rows are queued for depth-one Google lookups.
+      if (config.expansion.depth >= 1 && isExpandableKeyword(stored)) {
         const relatedResolution =
           options.cache?.relatedResolutions?.get(stored.normalizedKeyword) ??
           resolveRelatedAccess(
@@ -326,7 +369,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           relatedOutcome = relatedResult.related;
         }
         let added: string[] = [];
-        if (relatedOutcome.status === 'ok') {
+        if (config.expansion.enabled && relatedOutcome.status === 'ok') {
           added = applySurferExpansion({
             runId,
             store,
@@ -344,7 +387,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       }
       // Commit the cached primary only after any required related lookup. If
       // the process exits during that lookup, the root remains resumable and
-      // expansion cannot be silently skipped on restart.
+      // related observation cannot be silently skipped on restart.
       const hitSourceByDomain = await applyDomainRatings({
         serpRows: entry.serpRows,
         ahrefs: options.ahrefs?.client ?? null,
@@ -353,6 +396,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         now: hooks.now,
         sleep: hooks.sleep,
         logger,
+        tracker: ahrefsTracker,
       });
       store.recordDomains(runId, stored.idx, stored.keyword, entry.serpRows, hitSourceByDomain);
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
@@ -436,6 +480,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         now: hooks.now,
         sleep: hooks.sleep,
         logger,
+        tracker: ahrefsTracker,
       });
       store.recordDomains(runId, idx, record.keyword, serpRows, missSourceByDomain);
       store.commitKeyword(runId, committed, serpRows, cacheStatus);
@@ -482,34 +527,33 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         }
       }
 
-      // Persist the structured related-keyword outcome (ok / empty / error).
+      // Persist the structured related-keyword outcome (ok / empty / error / not_attempted).
       // The status is taken verbatim from collection: a broken related widget
       // is stored as 'error' even when the primary collection succeeded, and a
       // main-parser error combined with a related-parser error keeps 'error'.
-      persistRelatedCache({
-        cache: options.cache,
-        identity,
-        keyword: record,
-        related: result?.related ?? { status: 'not_attempted', error: null, rows: [] },
-        config,
-        collectedAt,
-      });
-      if (result) reportRelatedOutcome(result, record.normalizedKeyword, logger);
+      // Related observation is recorded for every root keyword regardless of
+      // expansion.enabled; --expand only controls queueing below.
+      if (isExpandableKeyword(stored)) {
+        persistRelatedCache({
+          cache: options.cache,
+          identity,
+          keyword: record,
+          related: result?.related ?? { status: 'not_attempted', error: null, rows: [] },
+          config,
+          collectedAt,
+        });
+        if (result) reportRelatedOutcome(result, record.normalizedKeyword, logger);
 
-      // Expansion runs only for seed keywords; depth-one related candidates are
-      // queued for collection but never expanded themselves. It triggers only
-      // when the related outcome is 'ok' (i.e. rows were actually parsed). The
-      // structured related outcome is also persisted at the run level so it is
-      // reproducible from run.sqlite (not the cross-run cache).
-      if (
-        config.expansion.enabled &&
-        config.expansion.depth >= 1 &&
-        result &&
-        result.related.status !== 'not_attempted' &&
-        isExpandableKeyword(stored)
-      ) {
+        // Expansion queues depth-one related candidates for Google collection.
+        // It triggers only when expansion is enabled and the related outcome is
+        // 'ok' (rows were actually parsed). Related children never expand further.
         let added: string[] = [];
-        if (result.related.status === 'ok') {
+        if (
+          config.expansion.enabled &&
+          config.expansion.depth >= 1 &&
+          result &&
+          result.related.status === 'ok'
+        ) {
           added = applySurferExpansion({
             runId,
             store,
@@ -523,7 +567,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
           }
         }
-        store.recordRelatedKeywords(runId, idx, record.keyword, result.related, new Set(added));
+        store.recordRelatedKeywords(runId, idx, record.keyword, result?.related ?? { status: 'not_attempted', error: null, rows: [] }, new Set(added));
       }
     }
 
@@ -554,14 +598,26 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
   if (outcome === null) {
     const progress = countProgress(store.loadKeywords(runId));
-    const state: 'completed' | 'completed_with_errors' =
+    const ahrefs = ahrefsTracker.finish(store.loadSerpRows(runId));
+    const baseState: 'completed' | 'completed_with_errors' =
       progress.errors > 0 ? 'completed_with_errors' : 'completed';
+    // In required mode only, any not_attempted domain or systemic Ahrefs failure
+    // prevents a clean completed state. In optional mode a skipped stage is
+    // reported honestly but does not degrade the run state.
+    const state: RunState =
+      baseState === 'completed' && ahrefs.requireAhrefs && ahrefs.state !== 'complete'
+        ? 'completed_with_errors'
+        : baseState;
+    const scoringCompleteness: ScoringCompleteness =
+      ahrefs.numericCoverage >= ahrefs.discovered && ahrefs.discovered > 0
+        ? { status: 'complete', numericDrCoverage: ahrefs.numericCoverage, missingDrDomains: ahrefs.discovered - ahrefs.numericCoverage }
+        : { status: 'degraded', numericDrCoverage: ahrefs.numericCoverage, missingDrDomains: ahrefs.discovered - ahrefs.numericCoverage };
     // Publish the final snapshots while the run is still resumable: a failed
     // JSON write must never leave a terminal run without published artifacts.
     // If publication fails, the run stays "running" and resume republishes.
-    await publish(store, runId, runDirectory, state);
+    await publish(store, runId, runDirectory, state, ahrefs, scoringCompleteness);
     store.setRunState(runId, state);
-    outcome = { kind: 'finished', state };
+    outcome = { kind: 'finished', state, ahrefs, scoringCompleteness };
   } else {
     store.setRunState(runId, 'paused', { pauseReason: outcome.reason });
     await publish(store, runId, runDirectory, 'paused');
@@ -572,6 +628,111 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   }
 
   return outcome;
+}
+
+// Tracks Ahrefs DR accounting across a run: counts discovered domains, attempted
+// lookups, cache/fresh provenance, terminal statuses (ok / not_found / error),
+// and numeric DR coverage. Systemic auth failures (a thrown 401/403 on the first
+// real lookup) mark the whole stage as failed so the run cannot finish clean.
+class AhrefsTracker {
+  private readonly discovered = new Set<string>();
+  private attempted = 0;
+  private cacheCount = 0;
+  private freshCount = 0;
+  private ok = 0;
+  private notFound = 0;
+  private error = 0;
+  private numericCoverage = 0;
+  private readonly numericDomains = new Set<string>();
+  private systemicFailure: string | null = null;
+  private firstLookupObserved = false;
+
+  constructor(
+    private readonly ahrefs: AhrefsClient | null,
+    private readonly requireAhrefs: boolean,
+  ) {}
+
+  get mode(): 'required' | 'optional' {
+    return this.requireAhrefs ? 'required' : 'optional';
+  }
+
+  registerDomain(domain: string): void {
+    this.discovered.add(domain);
+  }
+
+  recordLookup(source: 'cache' | 'fresh' | 'none', status: 'ok' | 'not_found' | 'error', dr: number | null, domain?: string): void {
+    if (source === 'cache') this.cacheCount += 1;
+    else if (source === 'fresh') this.freshCount += 1;
+    if (source !== 'none') this.attempted += 1;
+    if (status === 'ok') {
+      this.ok += 1;
+      if (dr !== null) {
+        this.numericCoverage += 1;
+        if (domain) this.numericDomains.add(domain);
+      }
+    } else if (status === 'not_found') {
+      this.notFound += 1;
+    } else {
+      this.error += 1;
+    }
+  }
+
+  // Records a systemic auth failure (401/403 thrown by the client on the first
+  // real lookup). A systemic failure is not an isolated domain error: it means
+  // the key is unusable and no further lookups should be attempted.
+  recordSystemicFailure(code: string): void {
+    if (!this.firstLookupObserved) {
+      this.systemicFailure = code;
+    }
+  }
+
+  observeLookup(): void {
+    this.firstLookupObserved = true;
+  }
+
+  hasObservedLookup(): boolean {
+    return this.firstLookupObserved;
+  }
+
+  finish(serpRows: SerpResult[]): AhrefsSummary {
+    // Count discovered domains from the final SERP rows (any domain that was
+    // observed in organic results, regardless of whether DR was attempted).
+    for (const row of serpRows) {
+      if (row.registrableDomain) this.discovered.add(row.registrableDomain);
+    }
+    const discovered = this.discovered.size;
+    let state: AhrefsSummary['state'];
+    if (!this.ahrefs) {
+      // No client configured: stage was skipped entirely.
+      state = this.requireAhrefs ? 'failed' : 'skipped';
+    } else if (this.systemicFailure !== null) {
+      state = 'failed';
+    } else if (this.notAttempted(discovered)) {
+      state = this.requireAhrefs ? 'failed' : 'skipped';
+    } else if (this.error > 0) {
+      state = this.requireAhrefs ? 'degraded' : 'complete';
+    } else {
+      state = 'complete';
+    }
+    return {
+      mode: this.mode,
+      state,
+      discovered,
+      attempted: this.attempted,
+      notAttempted: discovered - this.attempted,
+      cache: this.cacheCount,
+      fresh: this.freshCount,
+      ok: this.ok,
+      notFound: this.notFound,
+      error: this.error,
+      numericCoverage: this.numericDomains.size,
+      requireAhrefs: this.requireAhrefs,
+    };
+  }
+
+  private notAttempted(discovered: number): boolean {
+    return discovered > 0 && this.attempted < discovered;
+  }
 }
 
 // A keyword is expanded only when it originated from a seed (depth 0). Related
@@ -719,8 +880,9 @@ export async function applyDomainRatings(params: {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   logger: (line: string) => void;
+  tracker?: AhrefsTracker;
 }): Promise<Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>> {
-  const { serpRows, ahrefs, domainCache, config, now, sleep, logger } = params;
+  const { serpRows, ahrefs, domainCache, config, now, sleep, logger, tracker } = params;
   // Per-domain DR for in-call dedupe (a domain on several rows is fetched once).
   // Carries the error code too, so a repeated occurrence of the same domain in
   // one SERP inherits the exact error provenance of the first lookup.
@@ -734,6 +896,7 @@ export async function applyDomainRatings(params: {
   if (!ahrefs || !domainCache) {
     for (const row of serpRows) {
       if (row.registrableDomain && row.drStatus === null) row.drStatus = 'not_attempted';
+      if (row.registrableDomain) tracker?.registerDomain(row.registrableDomain);
     }
     return sourceByDomain;
   }
@@ -750,6 +913,8 @@ export async function applyDomainRatings(params: {
     }
     const domain = row.registrableDomain;
     if (!domain) continue;
+
+    tracker?.registerDomain(domain);
 
     const prior = resolvedDrs.get(domain);
     if (prior) {
@@ -770,9 +935,11 @@ export async function applyDomainRatings(params: {
       row.drError = cached.error ?? null;
       resolvedDrs.set(domain, { dr: cached.dr, status: cached.status, error: cached.error ?? null });
       sourceByDomain.set(domain, { source: 'cache', fetchedAt: cached.storedAt });
+      tracker?.recordLookup('cache', cached.status, cached.dr, domain);
       continue;
     }
 
+    tracker?.observeLookup();
     try {
       const rating = await ahrefs(domain);
       const ttl =
@@ -794,8 +961,18 @@ export async function applyDomainRatings(params: {
       row.drError = rating.error ?? null;
       resolvedDrs.set(domain, { dr: rating.dr, status: rating.status, error: rating.error ?? null });
       sourceByDomain.set(domain, { source: 'fresh', fetchedAt: rating.fetchedAt });
+      tracker?.recordLookup('fresh', rating.status, rating.dr, domain);
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
+      // A thrown 401/403 on the first real lookup is a systemic auth failure,
+      // not an isolated domain error. Record it so the stage is marked failed
+      // and no doomed fan-out occurs for the remaining domains.
+      if (!tracker?.hasObservedLookup() && (code === 'AHREFS_ERROR' || code === 'AHREFS_RATE_LIMIT')) {
+        const msg = error instanceof Error ? error.message : '';
+        if (/401|403/i.test(msg)) {
+          tracker?.recordSystemicFailure(code);
+        }
+      }
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
       row.dr = null;
       row.drStatus = 'error';
@@ -810,6 +987,7 @@ export async function applyDomainRatings(params: {
         new Date(now()).toISOString(),
         config.cache.ttl.domainErrorMs,
       );
+      tracker?.recordLookup('fresh', 'error', null, domain);
     }
     await sleep(config.ahrefs.rateLimitMinDelayMs);
   }
