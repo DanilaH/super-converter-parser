@@ -17,6 +17,7 @@ import {
   type StoredKeyword,
   type StoredRun,
 } from '../db/store.js';
+import { NEVER_CANCELLED, type CancellationSignal } from '../browser/captcha.js';
 import {
   RESUMABLE_RUN_STATES,
   TERMINAL_RUN_STATES,
@@ -38,11 +39,13 @@ import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, CacheStore, type KeywordC
 export type CollectKeywordFn = (
   keyword: KeywordRecord,
   debugRoot: string,
+  signal?: CancellationSignal,
 ) => Promise<CollectionResult>;
 
 export type CollectRelatedFn = (
   keyword: KeywordRecord,
   debugRoot: string,
+  signal?: CancellationSignal,
 ) => Promise<RelatedCollectionResult>;
 
 export type SnapshotsPublisher = (
@@ -85,6 +88,10 @@ export type ExecuteRunOptions = {
   debugRoot: string;
   collect: CollectKeywordFn;
   collectRelated?: CollectRelatedFn;
+  // Unified cancellation signal from the CLI. Collection polls it during the
+  // indefinite CAPTCHA wait; when it flips, collection aborts (RUN_PAUSED) and
+  // the active keyword is left resumable rather than committed as terminal.
+  signal?: CancellationSignal;
   hooks: EngineHooks;
   publishSnapshots?: SnapshotsPublisher;
   cache?: EngineCacheOptions;
@@ -126,10 +133,21 @@ export function validateResume(store: RunStore, runId: string): StoredRun {
 }
 
 export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome> {
-  const { store, runId, mode, keywords, config, input, runDirectory, debugRoot, collect, hooks } =
-    options;
+  const {
+    store,
+    runId,
+    mode,
+    keywords,
+    config,
+    input,
+    runDirectory,
+    debugRoot,
+    collect,
+    hooks,
+    signal = NEVER_CANCELLED,
+  } = options;
   const collectRelated: CollectRelatedFn = options.collectRelated ?? (async (keyword, relatedDebugRoot) => {
-    const result = await collect(keyword, relatedDebugRoot);
+    const result = await collect(keyword, relatedDebugRoot, signal);
     return { related: result.related, debugArtifactPath: result.debugArtifactPath };
   });
   const { logger } = hooks;
@@ -140,7 +158,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   let refreshKeywords = new Set(options.cache?.refreshKeywords ?? []);
 
   let run: StoredRun;
-  if (mode === 'fresh') {
+  // The CLI pre-creates fresh runs (before preflight) so a cancellation during
+  // preflight leaves a resumable run. Continue with the existing record instead
+  // of recreating it (which would collide on the run primary key).
+  const preCreated = mode === 'fresh' ? store.loadRun(runId) : null;
+  if (preCreated) {
+    store.markStaleRunningAsPending(runId);
+    store.setRunState(runId, 'running');
+    run = preCreated;
+  } else if (mode === 'fresh') {
     store.createRun({
       runId,
       configSnapshot: config,
@@ -263,14 +289,30 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             options.cache?.store ?? null,
             hooks.now(),
           );
-        let outcome: SurferRelatedOutcome;
+        let relatedOutcome: SurferRelatedOutcome;
         if (relatedResolution.kind === 'hit_ok') {
-          outcome = { status: 'ok', error: null, rows: relatedRowsToSurferKeywords(relatedResolution.entry.rows) };
+          relatedOutcome = { status: 'ok', error: null, rows: relatedRowsToSurferKeywords(relatedResolution.entry.rows) };
         } else if (relatedResolution.kind === 'hit_empty') {
-          outcome = { status: 'empty', error: null, rows: [] };
+          relatedOutcome = { status: 'empty', error: null, rows: [] };
         } else {
           store.incrementLookups(runId);
-          const relatedResult = await collectRelated(storedKeywordToRecord(stored), debugRoot);
+          let relatedResult: RelatedCollectionResult;
+          try {
+            relatedResult = await collectRelated(
+              storedKeywordToRecord(stored),
+              debugRoot,
+              signal,
+            );
+          } catch (error) {
+            if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+              outcome = {
+                kind: 'paused',
+                reason: 'SIGINT received during collection; active keyword left resumable.',
+              };
+              break;
+            }
+            throw error;
+          }
           const collectedAt = new Date(hooks.now()).toISOString();
           persistRelatedCache({
             cache: options.cache,
@@ -281,15 +323,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             collectedAt,
           });
           reportRelatedOutcome(relatedResult, stored.normalizedKeyword, logger);
-          outcome = relatedResult.related;
+          relatedOutcome = relatedResult.related;
         }
         let added: string[] = [];
-        if (outcome.status === 'ok') {
+        if (relatedOutcome.status === 'ok') {
           added = applySurferExpansion({
             runId,
             store,
             parentKeyword: stored.keyword,
-            related: outcome.rows,
+            related: relatedOutcome.rows,
             config,
             seenNormalized,
             logger,
@@ -298,7 +340,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             logger(`  ↳ expansion: +${name} (parent: ${stored.keyword})`);
           }
         }
-        store.recordRelatedKeywords(runId, stored.idx, stored.keyword, outcome, new Set(added));
+        store.recordRelatedKeywords(runId, stored.idx, stored.keyword, relatedOutcome, new Set(added));
       }
       // Commit the cached primary only after any required related lookup. If
       // the process exits during that lookup, the root remains resumable and
@@ -321,10 +363,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       const startAt = hooks.now();
       let result: CollectionResult | null = null;
 
-      for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
-        store.incrementLookups(runId);
-        result = await collect(storedKeywordToRecord(stored), debugRoot);
-        const record = result.record;
+      try {
+        for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
+          store.incrementLookups(runId);
+          result = await collect(storedKeywordToRecord(stored), debugRoot, signal);
+          const record = result.record;
         if (!isTerminalKeywordStatus(record.status)) {
           throw new ResearchError(
             'DB_ERROR',
@@ -346,6 +389,21 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         }
         break;
       }
+      } catch (error) {
+        if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+          // Collection was cancelled (Ctrl+C) while this keyword was in flight.
+          // Leave it as 'running' (resumable) instead of committing a false
+          // terminal result; the run is recorded as paused below.
+          outcome = {
+            kind: 'paused',
+            reason: 'SIGINT received during collection; active keyword left resumable.',
+          };
+        } else {
+          throw error;
+        }
+      }
+
+      if (outcome !== null) break;
 
       const record = result?.record as KeywordRecord;
       const collectedAt = new Date(hooks.now()).toISOString();

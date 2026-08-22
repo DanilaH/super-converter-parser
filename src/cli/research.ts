@@ -10,10 +10,13 @@ import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
+import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
-import { buildRunStatus } from '../runs/snapshots.js';
+import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
+import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity } from '../cache/keys.js';
@@ -41,18 +44,24 @@ type CliOptions = {
 // without a Chrome instance; the defaults are the production implementations.
 export type CliDeps = {
   connect: (cdpUrl: string) => Promise<Browser>;
-  preflight: (context: BrowserContext, config: ResearchConfig) => Promise<void>;
+  preflight: (
+    context: BrowserContext,
+    config: ResearchConfig,
+    signal: CancellationSignal,
+  ) => Promise<void>;
   collect: (
     context: BrowserContext,
     config: ResearchConfig,
     record: KeywordRecord,
     debugRoot: string,
+    signal: CancellationSignal,
   ) => Promise<CollectionResult>;
   collectRelated?: (
     context: BrowserContext,
     config: ResearchConfig,
     record: KeywordRecord,
     debugRoot: string,
+    signal: CancellationSignal,
   ) => Promise<RelatedCollectionResult>;
 };
 
@@ -279,12 +288,12 @@ export async function runCli(
   let browser: Browser | null = null;
   let store: RunStore | null = null;
   let cacheStore: CacheStore | null = null;
+  let runId = '';
+  let runDirectory = '';
+  let debugRoot = '';
   try {
     const config = loadConfig(env);
 
-    let runId: string;
-    let runDirectory: string;
-    let debugRoot: string;
     let mode: 'fresh' | 'resume';
     let keywords: SeedKeyword[] | MicrosoftKeyword[] = [];
     let input: { kind: 'seeds' | 'microsoft'; path: string };
@@ -441,12 +450,35 @@ export async function runCli(
     );
     const needsBrowser = plan.needsBrowser;
 
+    // Single cancellation signal threaded through the collector and CAPTCHA
+    // helper. The CAPTCHA helper polls this instead of owning a SIGINT listener,
+    // so the CLI keeps sole control of first-Ctrl+C (pause) / second-Ctrl+C
+    // (force-quit).
+    const signal: CancellationSignal = { isCancelled: () => pauseRequested };
+
+    // Fresh runs are initialized in the store up front so a cancellation during
+    // preflight still leaves a fully resumable run: its keywords are staged and
+    // the run record exists. executeRun detects the pre-created run and continues
+    // instead of recreating it, so --resume re-runs preflight and proceeds.
+    if (mode === 'fresh') {
+      store.createRun({
+        runId,
+        configSnapshot: runConfig,
+        parserVersions: { surfer: SURFER_PARSER_VERSION, google: GOOGLE_PARSER_VERSION },
+        input,
+        keywords,
+        forceRefresh: effective.forceRefresh,
+        refreshKeywords: [...refreshSet],
+      });
+      store.setRunState(runId, 'created');
+    }
+
     let context: BrowserContext | null = null;
     if (needsBrowser) {
       browser = await deps.connect(runConfig.browser.cdpUrl);
       console.log(`  ✓ Research Chrome connected (${runConfig.browser.cdpUrl})`);
       context = getPrimaryContext(browser);
-      await deps.preflight(context, runConfig);
+      await deps.preflight(context, runConfig, signal);
       console.log('  ✓ Google reachable');
       console.log(`  ✓ Keyword Surfer injection detected; configured market: ${runConfig.research.market}`);
     } else if (pendingNormalized.length === 0) {
@@ -476,7 +508,7 @@ export async function runCli(
       // collect only runs when there are pending keywords, which implies the
       // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
-        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
+        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword, signal),
       ...(relatedCollector
         ? {
             collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
@@ -485,10 +517,12 @@ export async function runCli(
                 runConfig,
                 record,
                 debugRootForKeyword,
+                signal,
               ),
           }
         : {}),
       hooks,
+      signal,
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
@@ -521,11 +555,34 @@ export async function runCli(
   } catch (error) {
     console.error('');
     console.error('Run failed:');
+    if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+      // A cancellation that escaped the engine's collect wrapper (e.g. during
+      // preflight) is a graceful pause, not an internal failure. Leave the run
+      // in a resumable state so --resume can continue from where it stopped.
+      if (store && runId) {
+        try {
+          store.setRunState(runId, 'paused');
+          // Publish consistent artifacts (status.json, manifest, CSVs) so the
+          // paused run is inspectable and resumable rather than an empty stub.
+          await writeSnapshots(store, runId, runDirectory, 'paused');
+        } catch {
+          /* best-effort; the run may not exist yet if cancelled before init */
+        }
+      }
+      return EXIT_PAUSED;
+    }
     if (error instanceof ResearchError) {
       console.error(`  ${error.code}: ${error.message}`);
       return exitCodeForError(error);
     }
-    console.error(error);
+    // A genuine internal failure: lead with a clear, actionable message rather
+    // than a raw stack trace (TASK-008 / issue #16: the primary operator
+    // message must never be a stack dump). The stack follows only for debugging.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`  INTERNAL ERROR: ${message}`);
+    if (error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
     return EXIT_INTERNAL;
   } finally {
     store?.close();

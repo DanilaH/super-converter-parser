@@ -202,6 +202,110 @@ test('caches a thrown lookup error as error status so it is not re-fetched withi
   assert.equal(calls.length, 1, 'thrown error was cached as error, not re-fetched');
 });
 
+test('classifies 429 / 5xx / network / 4xx DR failures as error status and caches them', async () => {
+  // Thrown ResearchErrors model rate limiting (429) and server errors (5xx).
+  const thrownCases: Array<{ code: 'AHREFS_RATE_LIMIT' | 'AHREFS_ERROR'; msg: string }> = [
+    { code: 'AHREFS_RATE_LIMIT', msg: '429 too many requests' },
+    { code: 'AHREFS_ERROR', msg: 'status 500' },
+  ];
+  for (const c of thrownCases) {
+    const calls: string[] = [];
+    const ahrefs: AhrefsClient = async (domain: string) => {
+      calls.push(domain);
+      throw new ResearchError(c.code, c.msg);
+    };
+    const cache = CacheStore.openInMemory();
+    const rows = [serpRow('https://e.com/1', 'e.com')];
+    await applyDomainRatings({
+      serpRows: rows,
+      ahrefs,
+      domainCache: cache,
+      config: CONFIG,
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      logger: () => undefined,
+    });
+    assert.equal(rows[0]!.drStatus, 'error', `${c.code} must be recorded as error`);
+    await applyDomainRatings({
+      serpRows: [serpRow('https://e.com/2', 'e.com')],
+      ahrefs,
+      domainCache: cache,
+      config: CONFIG,
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      logger: () => undefined,
+    });
+    assert.equal(calls.length, 1, `${c.code} error must be cached, not re-fetched`);
+  }
+
+  // Returned (non-thrown) error statuses model network/timeout and other 4xx,
+  // which the client surfaces as a DomainRatingResult with status 'error'.
+  const returnedCases: Array<{ error: string }> = [{ error: 'network' }, { error: 'status 403' }];
+  for (const c of returnedCases) {
+    const calls: string[] = [];
+    const ahrefs: AhrefsClient = async (domain: string) => {
+      calls.push(domain);
+      return {
+        domain,
+        dr: null,
+        fetchedAt: new Date().toISOString(),
+        source: 'ahrefs',
+        status: 'error',
+        error: c.error,
+      };
+    };
+    const cache = CacheStore.openInMemory();
+    const rows = [serpRow('https://e.com/1', 'e.com')];
+    await applyDomainRatings({
+      serpRows: rows,
+      ahrefs,
+      domainCache: cache,
+      config: CONFIG,
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      logger: () => undefined,
+    });
+    assert.equal(rows[0]!.drStatus, 'error', `returned error "${c.error}" must be recorded as error`);
+    await applyDomainRatings({
+      serpRows: [serpRow('https://e.com/2', 'e.com')],
+      ahrefs,
+      domainCache: cache,
+      config: CONFIG,
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      logger: () => undefined,
+    });
+    assert.equal(calls.length, 1, `returned error "${c.error}" must be cached, not re-fetched`);
+  }
+});
+
+test('a domain repeated within one keyword SERP is resolved exactly once', async () => {
+  const calls: string[] = [];
+  const ahrefs: AhrefsClient = async (domain: string) => {
+    calls.push(domain);
+    return okRating(domain, 33);
+  };
+  const cache = CacheStore.openInMemory();
+  const rows = [
+    serpRow('https://d.com/1', 'd.com'),
+    serpRow('https://d.com/2', 'd.com'),
+  ];
+  await applyDomainRatings({
+    serpRows: rows,
+    ahrefs,
+    domainCache: cache,
+    config: CONFIG,
+    now: () => Date.now(),
+    sleep: async () => undefined,
+    logger: () => undefined,
+  });
+  assert.equal(calls.length, 1, 'same domain inside one keyword is fetched once');
+  assert.deepEqual(
+    rows.map((row) => row.dr),
+    [33, 33],
+  );
+});
+
 // --- End-to-end path through executeRun ---
 
 const KEYWORDS: SeedKeyword[] = buildSeedKeywords([

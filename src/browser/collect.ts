@@ -14,7 +14,12 @@ import {
   type SerpResult,
 } from '../google/serp.js';
 import type { KeywordRecord } from '../runs/run.js';
-import { pauseForManualCaptcha, waitForManualCaptcha } from './captcha.js';
+import {
+  pauseForManualCaptcha,
+  waitForManualCaptcha,
+  type CancellationSignal,
+  NEVER_CANCELLED,
+} from './captcha.js';
 import {
   buildParserFailureContext,
   isParserErrorCode,
@@ -54,6 +59,7 @@ export async function collectKeyword(
   config: ResearchConfig,
   keyword: KeywordRecord,
   debugRoot: string,
+  signal: CancellationSignal = NEVER_CANCELLED,
 ): Promise<CollectionResult> {
   const page = await context.newPage();
   let pageUrl = '';
@@ -71,7 +77,16 @@ export async function collectKeyword(
       await waitForManualCaptcha(page);
     } catch (error) {
       if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
-        await pauseForManualCaptcha(page);
+        const solved = await pauseForManualCaptcha(page, signal);
+        if (!solved) {
+          // The run was cancelled (Ctrl+C) while the CAPTCHA was pending. Do not
+          // pretend the CAPTCHA was solved: abort collection so the engine leaves
+          // the active keyword resumable instead of committing a false result.
+          throw new ResearchError(
+            'RUN_PAUSED',
+            'Collection cancelled while a CAPTCHA was pending; active keyword left resumable.',
+          );
+        }
       } else {
         throw error;
       }
@@ -210,6 +225,12 @@ export async function collectKeyword(
 
     return { record, serpRows, related, debugArtifactPath };
   } catch (error) {
+    // A cancellation (Ctrl+C) must propagate to the engine so it can leave the
+    // active keyword resumable and record the run as paused. It must not be
+    // swallowed into a false 'failed' result.
+    if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+      throw error;
+    }
     const { code, message } = toComponentError(error, 'GOOGLE_UNAVAILABLE');
 
     const record: KeywordRecord = {
@@ -245,6 +266,7 @@ export async function collectRelatedKeyword(
   config: ResearchConfig,
   keyword: KeywordRecord,
   debugRoot: string,
+  signal: CancellationSignal = NEVER_CANCELLED,
 ): Promise<RelatedCollectionResult> {
   const page = await context.newPage();
   let pageUrl = '';
@@ -258,7 +280,13 @@ export async function collectRelatedKeyword(
       await waitForManualCaptcha(page);
     } catch (error) {
       if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
-        await pauseForManualCaptcha(page);
+        const solved = await pauseForManualCaptcha(page, signal);
+        if (!solved) {
+          throw new ResearchError(
+            'RUN_PAUSED',
+            'Related collection cancelled while a CAPTCHA was pending; active keyword left resumable.',
+          );
+        }
       } else {
         throw error;
       }
@@ -279,6 +307,9 @@ export async function collectRelatedKeyword(
         debugArtifactPath: null,
       };
     } catch (error) {
+      if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+        throw error;
+      }
       const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
       const debugArtifactPath = isParserErrorCode(code)
         ? await saveParserFailureArtifacts(
