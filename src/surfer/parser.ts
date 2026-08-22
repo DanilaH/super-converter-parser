@@ -2,6 +2,13 @@ import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 
+// Bounded wait for the related-keywords widget to mount. If the widget is
+// genuinely absent (e.g. copied Surfer profiles where the sidebar never
+// renders), we fast-fail after this many milliseconds rather than blocking
+// the full readSurferRelated waitMs (default 60s). 5s is enough for any
+// legitimate lazy render and short enough to keep runs moving.
+const MISSING_WIDGET_TIMEOUT_MS = 5000;
+
 export type SurferResult = {
   volume: number | null;
   cpc: number | null;
@@ -178,15 +185,13 @@ export async function readSurferRelated(
 ): Promise<SurferRelatedKeyword[] | null> {
   const deadline = Date.now() + waitMs;
   let lastSnapshot: RelatedDomSnapshot = { state: 'widget_missing' };
-  // Fast-fail for a genuinely missing widget: if it hasn't appeared after the
-  // first two polls (~1s), it is not going to mount lazily. This avoids a full
-  // waitMs wait (60s default) in environments where the related sidebar does not
-  // render (e.g. copied Surfer profiles), while still giving a legitimately
-  // lazy widget ~1s to appear. A missing widget returns null (distinct from a
-  // present-but-empty table which returns []); the caller maps null to an
-  // error/not_attempted outcome, never to 'empty'.
-  let widgetMissingPolls = 0;
-  const WIDGET_MISSING_FAST_FAIL_POLLS = 2;
+  // The related sidebar can render lazily after the main Surfer widget. Poll up
+  // to waitMs for it to mount. To avoid blocking the full waitMs when the widget
+  // is genuinely absent (e.g. copied Surfer profiles where the sidebar never
+  // renders), fast-fail after a shorter widget-missing threshold. This is a
+  // bounded wait (default 5s), not an arbitrary 1s, and is configurable via
+  // SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS.
+  const missingWidgetDeadline = Date.now() + MISSING_WIDGET_TIMEOUT_MS;
 
   while (Date.now() <= deadline) {
     const snapshot = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
@@ -198,9 +203,8 @@ export async function readSurferRelated(
         `Surfer related-keywords table contains malformed rows; expected exactly 4 direct <td> cells, got ${snapshot.cellCounts.join(', ')}.`,
       );
     }
-    if (snapshot?.state === 'widget_missing' || lastSnapshot.state === 'widget_missing') {
-      widgetMissingPolls += 1;
-      if (widgetMissingPolls >= WIDGET_MISSING_FAST_FAIL_POLLS) return null;
+    if (lastSnapshot.state === 'widget_missing' && Date.now() > missingWidgetDeadline) {
+      return null;
     }
     await page.waitForTimeout(500);
   }

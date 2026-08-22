@@ -239,7 +239,7 @@ test('mixed ok / not_found / error outcomes are isolated, cached, and counted co
   assert.equal(outcome.ahrefs.error, 1, 'error.com is error');
   assert.equal(outcome.ahrefs.discovered, 3, 'three unique domains discovered');
   assert.equal(outcome.ahrefs.numericCoverage, 1, 'only example.com has numeric DR');
-  assert.equal(outcome.ahrefs.state, 'complete');
+  assert.equal(outcome.ahrefs.state, 'degraded', 'errors degrade the stage even in optional mode');
   assert.equal(outcome.ahrefs.cache, 1, 'example.com for list comparison is served from cache');
   assert.equal(outcome.ahrefs.fresh, 3, 'three fresh lookups: example.com, error.com, other.com');
 

@@ -405,7 +405,8 @@ export async function runCli(
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
 
-    const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
+    const rawKey = (env.AHREFS_API_KEY ?? '').trim();
+    const ahrefsApiKey = rawKey.length > 0 ? rawKey : null;
     // In required mode, a missing/blank key fails before keyword collection with
     // a classified, actionable error. This persists through resume because the
     // requirement is part of the persisted config snapshot.

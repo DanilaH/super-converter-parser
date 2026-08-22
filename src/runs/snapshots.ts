@@ -184,19 +184,29 @@ export async function writeSnapshots(
   // Legacy runs may carry a configSnapshot without a scoring section; fall back
   // to the documented default DR thresholds instead of throwing.
   const candidates = buildCandidates(keywords, serpRows, resolveDrThresholds(run.configSnapshot));
-  // Real related rows (each is one related keyword, regardless of parent outcome)
-  // are counted separately from parent-keyword outcome placeholders
-  // (ok/empty/error/not_attempted). outcomeNotAttempted is inferred from root
-  // keywords that produced no related row at all.
-  const relatedOutcomes = { ok: 0, empty: 0, error: 0, notAttempted: 0 };
+  // Real related rows: each StoredRelatedKeyword row is one related keyword.
+  const relatedRowsCount = relatedKeywords.length;
+  // Parent-keyword outcomes: group rows by parent and derive one outcome per
+  // parent. A parent is 'ok' if it has at least one ok row, 'error' if it has an
+  // error row (and no ok), 'empty' if all its rows are empty, 'not_attempted' if
+  // it has no rows at all.
+  const parentOutcomes = new Map<number, 'ok' | 'empty' | 'error'>();
   for (const row of relatedKeywords) {
-    if (row.status === 'ok') relatedOutcomes.ok += 1;
-    else if (row.status === 'empty') relatedOutcomes.empty += 1;
-    else relatedOutcomes.error += 1;
+    const current = parentOutcomes.get(row.parentIdx);
+    if (row.status === 'ok') {
+      parentOutcomes.set(row.parentIdx, 'ok');
+    } else if (row.status === 'error' && current !== 'ok') {
+      parentOutcomes.set(row.parentIdx, 'error');
+    } else if (row.status === 'empty' && current === undefined) {
+      parentOutcomes.set(row.parentIdx, 'empty');
+    }
+  }
+  const relatedOutcomes = { ok: 0, empty: 0, error: 0, notAttempted: 0 };
+  for (const outcome of parentOutcomes.values()) {
+    relatedOutcomes[outcome] += 1;
   }
   const rootKeywordCount = keywords.filter((k) => !k.sources.some((s) => s.type === 'surfer_related')).length;
-  const parentKeywordCount = new Set(relatedKeywords.map((r) => r.parentIdx)).size;
-  relatedOutcomes.notAttempted = rootKeywordCount - parentKeywordCount;
+  relatedOutcomes.notAttempted = rootKeywordCount - parentOutcomes.size;
   await writeTextAtomic(
     `${runDirectory}/related-keywords.csv`,
     renderRelatedKeywordsCsv(relatedKeywords),
@@ -216,6 +226,7 @@ export async function writeSnapshots(
       keywords,
       candidates,
       relatedKeywords,
+      relatedRowsCount,
       relatedOutcomes,
       domains,
       progress,
@@ -566,6 +577,7 @@ export type ReportContext = {
   keywords: StoredKeyword[];
   candidates: Candidate[];
   relatedKeywords: StoredRelatedKeyword[];
+  relatedRowsCount: number;
   relatedOutcomes: { ok: number; empty: number; error: number; notAttempted: number };
   domains: StoredDomain[];
   progress: { completed: number; partial: number; failed: number; errors: number };
@@ -577,7 +589,7 @@ export type ReportContext = {
 };
 
 export function renderReportMd(ctx: ReportContext): string {
-  const { state, run, keywords, candidates, relatedKeywords, relatedOutcomes, domains, progress, cacheStats, ahrefs: ahrefsSummary, scoringCompleteness: scoringSummary } = ctx;
+  const { state, run, keywords, candidates, relatedKeywords, relatedRowsCount, relatedOutcomes, domains, progress, cacheStats, ahrefs: ahrefsSummary, scoringCompleteness: scoringSummary } = ctx;
   const processed = progress.completed + progress.partial + progress.failed;
   const hitRate = cacheHitRatePercent(cacheStats.hits, processed);
   const lines: string[] = [];
@@ -595,7 +607,7 @@ export function renderReportMd(ctx: ReportContext): string {
   lines.push(`- Keywords: ${keywords.length} (completed ${progress.completed}, partial ${progress.partial}, failed ${progress.failed}, errors ${progress.errors})`);
   lines.push(`- Processed: ${processed} / ${keywords.length}`);
   lines.push(`- Unique domains: ${ahrefsSummary.discovered} discovered, ${ahrefsSummary.attempted} attempted, ${ahrefsSummary.numericCoverage} with numeric DR`);
-  lines.push(`- Related keywords: ${relatedKeywords.length} real rows (outcomes: ok ${relatedOutcomes.ok}, empty ${relatedOutcomes.empty}, error ${relatedOutcomes.error}, not_attempted ${relatedOutcomes.notAttempted})`);
+  lines.push(`- Related keywords: ${relatedRowsCount} real rows; parent outcomes: ok ${relatedOutcomes.ok}, empty ${relatedOutcomes.empty}, error ${relatedOutcomes.error}, not_attempted ${relatedOutcomes.notAttempted}`);
   lines.push(`- Unique domains (run-level): ${domains.length}`);
   lines.push(`- Browser lookups: ${run.lookups}`);
   lines.push(

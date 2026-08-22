@@ -726,7 +726,10 @@ class AhrefsTracker {
     } else if (notAttempted > 0 && discovered > 0) {
       state = this.requireAhrefs ? 'failed' : 'skipped';
     } else if (error > 0) {
-      state = this.requireAhrefs ? 'degraded' : 'complete';
+      // Any error (429, 5xx, network) degrades the stage regardless of mode.
+      // Required mode cannot finish clean with errors; optional mode reports
+      // degraded so the operator knows DR data is incomplete.
+      state = 'degraded';
     } else {
       state = 'complete';
     }
@@ -982,6 +985,10 @@ export async function applyDomainRatings(params: {
       // it so the stage is marked failed and no doomed fan-out occurs.
       if (!tracker?.hasObservedLookup() && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
         tracker?.recordSystemicFailure(code);
+        // Systemic auth failure: stop the DR stage entirely. Do not fan out doomed
+        // requests for the remaining domains — the key is unusable.
+        logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopping DR stage.`);
+        break;
       }
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}${error instanceof ResearchError && error.httpStatus ? ` (${error.httpStatus})` : ''}`);
       row.dr = null;

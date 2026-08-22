@@ -232,6 +232,7 @@ test('report is deterministic and shows the target state', () => {
     keywords,
     candidates: [],
     relatedKeywords: [],
+    relatedRowsCount: 0,
     domains: [],
     progress: { completed: 0, partial: 0, failed: 0, errors: 0 },
     cacheStats: { hits: 0, misses: 0, expired: 0, refreshed: 0 },
