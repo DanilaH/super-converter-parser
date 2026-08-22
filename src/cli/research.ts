@@ -605,7 +605,7 @@ export async function runCli(
       console.log('Resume with:');
       console.log(`  npm run research -- --resume ${runId}`);
       if (options.jsonStatus && store) {
-        console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused')));
+        console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused', outcome.ahrefs ?? undefined, outcome.scoringCompleteness ?? undefined)));
       }
       return EXIT_PAUSED;
     }

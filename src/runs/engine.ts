@@ -99,7 +99,7 @@ export type ScoringCompleteness = {
 
 export type RunOutcome =
   | { kind: 'finished'; state: 'completed' | 'completed_with_errors'; ahrefs: AhrefsSummary; scoringCompleteness: ScoringCompleteness }
-  | { kind: 'paused'; reason: string };
+  | { kind: 'paused'; reason: string; ahrefs: AhrefsSummary | null; scoringCompleteness: ScoringCompleteness | null };
 
 export type ExecuteRunOptions = {
   store: RunStore;
@@ -266,13 +266,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   // run into a terminal state while related candidates stayed unprocessed).
   while (outcome === null) {
     if (hooks.pauseRequested()) {
-      outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.' };
+      outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.', ahrefs: null, scoringCompleteness: null };
       break;
     }
 
     const tripReason = breaker.tripReason();
     if (tripReason !== null) {
-      outcome = { kind: 'paused', reason: tripReason };
+      outcome = { kind: 'paused', reason: tripReason, ahrefs: null, scoringCompleteness: null };
       break;
     }
 
@@ -352,6 +352,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
               outcome = {
                 kind: 'paused',
                 reason: 'SIGINT received during collection; active keyword left resumable.',
+                ahrefs: null,
+                scoringCompleteness: null,
               };
               break;
             }
@@ -442,6 +444,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           outcome = {
             kind: 'paused',
             reason: 'SIGINT received during collection; active keyword left resumable.',
+            ahrefs: null,
+            scoringCompleteness: null,
           };
         } else {
           throw error;
@@ -592,7 +596,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     // the run even when this was the last keyword. The keyword result is
     // already committed and checkpointed above; the pause is recorded below.
     if (hooks.pauseRequested()) {
-      outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.' };
+      outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.', ahrefs: null, scoringCompleteness: null };
       break;
     }
   }
@@ -634,6 +638,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     logger(`Run paused: ${outcome.reason}`);
     logger('Resume with:');
     logger(`  ${RESUME_COMMAND_PREFIX} ${runId}`);
+    return { kind: 'paused', reason: outcome.reason, ahrefs: pausedAhrefs, scoringCompleteness: pausedScoring };
   }
 
   return outcome;
@@ -649,7 +654,7 @@ class AhrefsTracker {
   private freshCount = 0;
   private readonly numericDomains = new Set<string>();
   private systemicFailure: string | null = null;
-  private hasSuccessfulLookup = false;
+  private successCount = 0;
 
   constructor(
     private readonly ahrefs: AhrefsClient | null,
@@ -660,18 +665,28 @@ class AhrefsTracker {
     return this.requireAhrefs ? 'required' : 'optional';
   }
 
-  markSuccessfulLookup(): void {
-    this.hasSuccessfulLookup = true;
+  markSuccess(domain: string, dr: number): void {
+    this.numericDomains.add(domain);
+    this.successCount += 1;
   }
 
-  get systemicFailed(): boolean {
+  get hasSuccess(): boolean {
+    return this.successCount > 0;
+  }
+
+  recordSystemicFailure(code: string): void {
+    this.systemicFailure = code;
+  }
+
+  get isSystemicallyFailed(): boolean {
     return this.systemicFailure !== null;
   }
 
-  stopAllDomains(serpRows: SerpResult[], errorCode: string, now: string): void {
+  stopAllDomains(serpRows: SerpResult[], reason: string): void {
     // Global stop: a systemic auth failure means the key is unusable. Mark every
-    // remaining domain in-flight as a terminal systemic error so the domains table
-    // has explicit statuses (not silent not_attempted) and the stage is failed.
+    // remaining in-flight domain as not_attempted with the systemic reason so the
+    // domains table has explicit statuses and the stage is failed. No further
+    // Ahrefs calls are made for the rest of the run.
     for (const row of serpRows) {
       const domain = row.registrableDomain;
       if (!domain) continue;
@@ -679,8 +694,8 @@ class AhrefsTracker {
         continue;
       }
       row.dr = null;
-      row.drStatus = 'error';
-      row.drError = errorCode;
+      row.drStatus = 'not_attempted';
+      row.drError = reason;
       this.discovered.add(domain);
     }
   }
@@ -692,30 +707,9 @@ class AhrefsTracker {
   recordLookup(source: 'cache' | 'fresh' | 'none', status: 'ok' | 'not_found' | 'error', dr: number | null, domain?: string): void {
     if (source === 'cache') this.cacheCount += 1;
     else if (source === 'fresh') this.freshCount += 1;
-    // Track unique domains with numeric DR for the summary; terminal status
-    // counts (ok/not_found/error) are derived from persisted domains in finish()
-    // so they survive resume. A successful lookup clears systemic eligibility.
     if (status === 'ok' && dr !== null && domain) {
       this.numericDomains.add(domain);
-      this.markSuccessfulLookup();
     }
-  }
-
-  // Records a systemic auth failure (401/403 thrown by the client on the first
-  // real lookup). A systemic failure is not an isolated domain error: it means
-  // the key is unusable and no further lookups should be attempted.
-  recordSystemicFailure(code: string): void {
-    if (!this.firstLookupObserved) {
-      this.systemicFailure = code;
-    }
-  }
-
-  observeLookup(): void {
-    this.firstLookupObserved = true;
-  }
-
-  hasObservedLookup(): boolean {
-    return this.firstLookupObserved;
   }
 
   finish(persistedDomains: StoredDomain[]): AhrefsSummary {
@@ -984,7 +978,6 @@ export async function applyDomainRatings(params: {
       continue;
     }
 
-    tracker?.markSuccessfulLookup();
     try {
       const rating = await ahrefs(domain);
       const ttl =
@@ -1007,15 +1000,25 @@ export async function applyDomainRatings(params: {
       resolvedDrs.set(domain, { dr: rating.dr, status: rating.status, error: rating.error ?? null });
       sourceByDomain.set(domain, { source: 'fresh', fetchedAt: rating.fetchedAt });
       tracker?.recordLookup('fresh', rating.status, rating.dr, domain);
+      // Mark success only after a successful response (numeric DR obtained).
+      if (rating.status === 'ok' && rating.dr !== null) {
+        tracker?.markSuccess(domain, rating.dr);
+      }
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
       // Systemic auth failure: a 401/403 before any successful lookup means the
-      // key is unusable. Stop the entire DR stage and mark every remaining domain
-      // with an explicit systemic error status.
-      if (!tracker?.hasSuccessfulLookup && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
+      // key is unusable. Record this domain as a fresh error, then mark every
+      // remaining domain as not_attempted and stop all further Ahrefs calls.
+      if (!tracker?.hasSuccess && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
         tracker?.recordSystemicFailure(code);
-        tracker?.stopAllDomains(serpRows, code, new Date(now()).toISOString());
-        logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopped DR stage for all remaining domains.`);
+        row.dr = null;
+        row.drStatus = 'error';
+        row.drError = code;
+        resolvedDrs.set(domain, { dr: null, status: 'error', error: code });
+        sourceByDomain.set(domain, { source: 'fresh', fetchedAt: new Date(now()).toISOString() });
+        logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopping DR stage.`);
+        // Mark remaining domains as not_attempted and stop.
+        tracker?.stopAllDomains(serpRows, `systemic ${error.httpStatus}: ${code}`);
         break;
       }
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}${error instanceof ResearchError && error.httpStatus ? ` (${error.httpStatus})` : ''}`);
