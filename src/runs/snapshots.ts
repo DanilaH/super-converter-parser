@@ -184,8 +184,12 @@ export async function writeSnapshots(
   // Legacy runs may carry a configSnapshot without a scoring section; fall back
   // to the documented default DR thresholds instead of throwing.
   const candidates = buildCandidates(keywords, serpRows, resolveDrThresholds(run.configSnapshot));
-  // Real related rows: each StoredRelatedKeyword row is one related keyword.
-  const relatedRowsCount = relatedKeywords.length;
+  // Real related rows: count only rows with status=ok and a non-empty
+  // relatedKeyword. Rows with status=error/empty/not_attempted and blank
+  // keywords are excluded from the real-row count across all outputs.
+  const relatedRowsCount = relatedKeywords.filter(
+    (r) => r.status === 'ok' && r.relatedKeyword.trim() !== '',
+  ).length;
   // Parent-keyword outcomes: group rows by parent and derive one outcome per
   // parent. A parent is 'ok' if it has at least one ok row, 'error' if it has an
   // error row (and no ok), 'empty' if all its rows are empty, 'not_attempted' if
@@ -559,7 +563,9 @@ export function buildRunStatus(
     artifacts,
     counts: {
       domains: store.loadDomains(runId).length,
-      relatedKeywords: store.loadRelatedKeywords(runId).length,
+      relatedKeywords: store.loadRelatedKeywords(runId).filter(
+        (r) => r.status === 'ok' && r.relatedKeyword.trim() !== '',
+      ).length,
     },
     cache: {
       ...cacheStats,

@@ -238,6 +238,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     forceRefresh = merged.forceRefresh;
     refreshKeywords = new Set(merged.refreshKeywords);
     store.setRunState(runId, 'running');
+    // Restore systemic Ahrefs failure from persisted domains so the global lock
+    // survives resume: if any persisted domain carries a 'systemic' error, the
+    // key was unusable and no further DR lookups should be attempted.
+    if (options.ahrefs?.client) {
+      const systemicDomain = store.loadDomains(runId).find((d) => d.error?.startsWith('systemic'));
+      if (systemicDomain) {
+        ahrefsTracker.recordSystemicFailure(systemicDomain.error!);
+      }
+    }
   }
 
   // All keywords currently known (seeds + any previously expanded rows from a
@@ -929,6 +938,17 @@ export async function applyDomainRatings(params: {
   // Provenance returned to the caller so the run-level domains table can record
   // whether each value came from the domain cache or a fresh Ahrefs lookup.
   const sourceByDomain = new Map<string, { source: 'cache' | 'fresh' | 'none'; fetchedAt: string | null }>();
+  // Global lock: a systemic auth failure (401/403 before any success) means the
+  // key is unusable for the entire run. No further Ahrefs calls are made; every
+  // remaining domain is marked not_attempted. This is resume-safe because the
+  // tracker's systemic flag is restored from persisted domains on resume.
+  if (tracker?.isSystemicallyFailed) {
+    for (const row of serpRows) {
+      if (row.registrableDomain && row.drStatus === null) row.drStatus = 'not_attempted';
+      if (row.registrableDomain) tracker.registerDomain(row.registrableDomain);
+    }
+    return sourceByDomain;
+  }
   // Ahrefs enrichment intentionally skipped (no client or no domain cache):
   // mark every observed row as 'not_attempted' so the run-level domains table
   // still persists the observed domains with honest provenance (source 'none').

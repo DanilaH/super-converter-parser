@@ -631,6 +631,11 @@ export async function runCli(
       // A cancellation that escaped the engine's collect wrapper (e.g. during
       // preflight) is a graceful pause, not an internal failure. Leave the run
       // in a resumable state so --resume can continue from where it stopped.
+      // Log the pause reason (do not swallow silently) before returning.
+      console.log('');
+      console.log(`Run paused (escaped ${error.code}): ${error.message}`);
+      console.log('Resume with:');
+      console.log(`  npm run research -- --resume ${runId}`);
       if (store && runId) {
         try {
           store.setRunState(runId, 'paused');

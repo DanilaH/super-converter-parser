@@ -152,13 +152,14 @@ test('optional mode without key is explicitly skipped, never reported as resolve
   store.close();
 });
 
-test('required mode with systemic auth failure does not finish clean and does not fan out doomed requests', async () => {
+test('required mode with systemic auth failure does not finish clean and makes exactly one API call across multiple keywords', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();
   const runDirectory = await mkdtemp(join(tmpdir(), 'task009-systemic-fail-'));
   const debugRoot = join(runDirectory, 'debug');
   await createRunDirectory(runDirectory).catch(() => undefined);
   await createRunDirectory(debugRoot).catch(() => undefined);
+  const cache = CacheStore.openInMemory();
 
   let apiCalls = 0;
   const ahrefs: AhrefsClient = async (domain: string) => {
@@ -181,17 +182,20 @@ test('required mode with systemic auth failure does not finish clean and does no
     hooks: makeHooks(),
     requireAhrefs: true,
     ahrefs: { apiKey: 'invalid-key', client: ahrefs },
+    cache: { store: cache, forceRefresh: false, refreshKeywords: new Set() },
   });
 
   assert.equal(outcome.kind, 'finished');
   assert.equal(outcome.ahrefs.mode, 'required');
   assert.equal(outcome.ahrefs.state, 'failed');
-  // Systemic auth failure on the first real lookup must not fan out doomed requests
-  // for all domains; the first domain triggers the failure, the second keyword's
-  // domains must not be looked up because the run stops applying DR.
-  assert.ok(apiCalls <= 2, `expected at most 2 API calls (one domain per keyword before systemic fail), got ${apiCalls}`);
+  // Systemic auth failure on the first real lookup must make exactly ONE API
+  // call: the global lock stops all further DR lookups for every remaining
+  // domain across all subsequent keywords. With 2 keywords × 2 domains each,
+  // without the lock this would be 4 calls; with the lock it must be exactly 1.
+  assert.equal(apiCalls, 1, `expected exactly 1 API call before global lock, got ${apiCalls}`);
   assert.ok(outcome.state !== 'completed', 'required mode with systemic failure must not finish as clean completed');
   store.close();
+  cache.close();
 });
 
 test('mixed ok / not_found / error outcomes are isolated, cached, and counted consistently', async () => {
