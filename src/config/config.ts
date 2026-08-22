@@ -15,6 +15,7 @@ export type ResearchConfig = {
     surferPreflightTimeoutMs: number;
     surferWidgetSelector: string;
     surferRelatedWidgetSelector: string;
+    surferRelatedMissingWidgetTimeoutMs: number;
   };
   retry: {
     maxAttempts: number;
@@ -51,6 +52,7 @@ export type ResearchConfig = {
     rateLimitMinDelayMs: number;
     rateLimitMaxDelayMs: number;
     timeoutMs: number;
+    requireAhrefs: boolean;
   };
   // Centralized DR classification thresholds for candidate scoring. See
   // SCORING.md: very weak < veryWeakMax <= weak < weakMax <= neutral
@@ -79,6 +81,7 @@ const DEFAULTS: ResearchConfig = {
     surferPreflightTimeoutMs: 60_000,
       surferWidgetSelector: SURFER_MARKERS.mainWidget,
       surferRelatedWidgetSelector: SURFER_MARKERS.relatedWidget,
+      surferRelatedMissingWidgetTimeoutMs: 5000,
   },
   retry: {
     maxAttempts: 3,
@@ -115,6 +118,7 @@ const DEFAULTS: ResearchConfig = {
     rateLimitMinDelayMs: 1000,
     rateLimitMaxDelayMs: 10_000,
     timeoutMs: 15_000,
+    requireAhrefs: false,
   },
   scoring: {
     drThresholds: {
@@ -302,6 +306,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       surferRelatedWidgetSelector: (
         env.SURFER_RELATED_WIDGET_SELECTOR ?? DEFAULTS.browser.surferRelatedWidgetSelector
       ).trim(),
+      surferRelatedMissingWidgetTimeoutMs: readPositiveNumber(
+        'SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS',
+        env.SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS,
+        DEFAULTS.browser.surferRelatedMissingWidgetTimeoutMs,
+      ),
     },
     retry,
     circuitBreaker,
@@ -319,6 +328,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
         DEFAULTS.ahrefs.rateLimitMaxDelayMs,
       ),
       timeoutMs: readPositiveNumber('AHREFS_TIMEOUT_MS', env.AHREFS_TIMEOUT_MS, DEFAULTS.ahrefs.timeoutMs),
+      requireAhrefs: readBoolean('REQUIRE_AHREFS', env.REQUIRE_AHREFS, DEFAULTS.ahrefs.requireAhrefs),
     },
     scoring: {
       drThresholds,

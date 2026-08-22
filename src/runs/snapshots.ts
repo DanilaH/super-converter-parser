@@ -17,6 +17,29 @@ import {
   SCORING_VERSION,
   type Candidate,
 } from '../scoring/scoring.js';
+import type { AhrefsSummary, ScoringCompleteness } from './engine.js';
+
+// Default Ahrefs summary for runs that predate the tracker or are still running.
+function emptyAhrefs(requireAhrefs: boolean): AhrefsSummary {
+  return {
+    mode: requireAhrefs ? 'required' : 'optional',
+    state: requireAhrefs ? 'failed' : 'skipped',
+    discovered: 0,
+    attempted: 0,
+    notAttempted: 0,
+    cache: 0,
+    fresh: 0,
+    ok: 0,
+    notFound: 0,
+    error: 0,
+    numericCoverage: 0,
+    requireAhrefs,
+  };
+}
+
+function emptyScoring(): ScoringCompleteness {
+  return { status: 'degraded', numericDrCoverage: 0, missingDrDomains: 0 };
+}
 
 export function countProgress(keywords: StoredKeyword[]): {
   completed: number;
@@ -66,6 +89,8 @@ export async function writeSnapshots(
   runId: string,
   runDirectory: string,
   state: RunState,
+  ahrefs?: AhrefsSummary,
+  scoringCompleteness?: ScoringCompleteness,
 ): Promise<void> {
   const run = store.loadRun(runId) as StoredRun;
   const keywords = store.loadKeywords(runId);
@@ -87,6 +112,10 @@ export async function writeSnapshots(
       .map((row) => row.registrableDomain),
   ).size;
 
+  const requireAhrefs = run.configSnapshot.ahrefs?.requireAhrefs ?? false;
+  const ahrefsSummary = ahrefs ?? emptyAhrefs(requireAhrefs);
+  const scoringSummary = scoringCompleteness ?? emptyScoring();
+
   const manifest: RunManifest = {
     runId,
     createdAt: run.createdAt,
@@ -97,6 +126,25 @@ export async function writeSnapshots(
     parserVersions: run.parserVersions,
     scoringVersion: SCORING_VERSION,
     pauseReason: run.pauseReason,
+    ahrefs: {
+      mode: ahrefsSummary.mode,
+      state: ahrefsSummary.state,
+      discovered: ahrefsSummary.discovered,
+      attempted: ahrefsSummary.attempted,
+      notAttempted: ahrefsSummary.notAttempted,
+      cache: ahrefsSummary.cache,
+      fresh: ahrefsSummary.fresh,
+      ok: ahrefsSummary.ok,
+      notFound: ahrefsSummary.notFound,
+      error: ahrefsSummary.error,
+      numericCoverage: ahrefsSummary.numericCoverage,
+      requireAhrefs: ahrefsSummary.requireAhrefs,
+    },
+    scoringCompleteness: {
+      status: scoringSummary.status,
+      numericDrCoverage: scoringSummary.numericDrCoverage,
+      missingDrDomains: scoringSummary.missingDrDomains,
+    },
     progress: {
       totalKeywords: keywords.length,
       completedKeywords: progress.completed,
@@ -136,6 +184,33 @@ export async function writeSnapshots(
   // Legacy runs may carry a configSnapshot without a scoring section; fall back
   // to the documented default DR thresholds instead of throwing.
   const candidates = buildCandidates(keywords, serpRows, resolveDrThresholds(run.configSnapshot));
+  // Real related rows: count only rows with status=ok and a non-empty
+  // relatedKeyword. Rows with status=error/empty/not_attempted and blank
+  // keywords are excluded from the real-row count across all outputs.
+  const relatedRowsCount = relatedKeywords.filter(
+    (r) => r.status === 'ok' && r.relatedKeyword.trim() !== '',
+  ).length;
+  // Parent-keyword outcomes: group rows by parent and derive one outcome per
+  // parent. A parent is 'ok' if it has at least one ok row, 'error' if it has an
+  // error row (and no ok), 'empty' if all its rows are empty, 'not_attempted' if
+  // it has no rows at all.
+  const parentOutcomes = new Map<number, 'ok' | 'empty' | 'error'>();
+  for (const row of relatedKeywords) {
+    const current = parentOutcomes.get(row.parentIdx);
+    if (row.status === 'ok') {
+      parentOutcomes.set(row.parentIdx, 'ok');
+    } else if (row.status === 'error' && current !== 'ok') {
+      parentOutcomes.set(row.parentIdx, 'error');
+    } else if (row.status === 'empty' && current === undefined) {
+      parentOutcomes.set(row.parentIdx, 'empty');
+    }
+  }
+  const relatedOutcomes = { ok: 0, empty: 0, error: 0, notAttempted: 0 };
+  for (const outcome of parentOutcomes.values()) {
+    relatedOutcomes[outcome] += 1;
+  }
+  const rootKeywordCount = keywords.filter((k) => !k.sources.some((s) => s.type === 'surfer_related')).length;
+  relatedOutcomes.notAttempted = rootKeywordCount - parentOutcomes.size;
   await writeTextAtomic(
     `${runDirectory}/related-keywords.csv`,
     renderRelatedKeywordsCsv(relatedKeywords),
@@ -155,11 +230,15 @@ export async function writeSnapshots(
       keywords,
       candidates,
       relatedKeywords,
+      relatedRowsCount,
+      relatedOutcomes,
       domains,
       progress,
       cacheStats,
       uniqueDomains: uniqueDomains.size,
       completedDomains,
+      ahrefs: ahrefsSummary,
+      scoringCompleteness: scoringSummary,
     }),
     'run report',
   );
@@ -168,7 +247,7 @@ export async function writeSnapshots(
   // manifest write fails, status.json is removed so a terminal run state is
   // never emitted without the manifest, and the run stays resumable (not
   // falsely terminal). A run is only "complete" once both artifacts exist.
-  const status = buildRunStatus(store, runId, runDirectory, state);
+  const status = buildRunStatus(store, runId, runDirectory, state, ahrefs, scoringCompleteness);
   await writeJsonAtomic(`${runDirectory}/status.json`, status, 'run status');
 
   try {
@@ -332,6 +411,7 @@ export const CANDIDATES_CSV_HEADERS = [
   'score',
   'tier',
   'scoring_version',
+  'scoring_completeness',
   'rationale',
 ];
 
@@ -398,6 +478,7 @@ export function renderCandidatesCsv(candidates: Candidate[]): string {
       row.score === null ? '' : String(row.score),
       row.tier ?? '',
       row.scoringVersion,
+      row.scoringCompleteness,
       row.rationale,
     ]);
   }
@@ -437,6 +518,8 @@ export type RunStatus = {
     hitRatePercent: number;
   };
   lookups: number;
+  ahrefs: AhrefsSummary;
+  scoringCompleteness: ScoringCompleteness;
 };
 
 export function buildRunStatus(
@@ -444,12 +527,17 @@ export function buildRunStatus(
   runId: string,
   runDirectory: string,
   state: RunState,
+  ahrefs?: AhrefsSummary,
+  scoringCompleteness?: ScoringCompleteness,
 ): RunStatus {
   const run = store.loadRun(runId);
   const keywords = store.loadKeywords(runId);
   const progress = countProgress(keywords);
   const cacheStats = countCacheStats(keywords);
   const processed = progress.completed + progress.partial + progress.failed;
+  const requireAhrefs = run?.configSnapshot.ahrefs?.requireAhrefs ?? false;
+  const ahrefsSummary = ahrefs ?? emptyAhrefs(requireAhrefs);
+  const scoringSummary = scoringCompleteness ?? emptyScoring();
   const artifacts: RunArtifacts = {
     manifest: `${runDirectory}/manifest.json`,
     keywordsJson: `${runDirectory}/keywords.json`,
@@ -475,13 +563,17 @@ export function buildRunStatus(
     artifacts,
     counts: {
       domains: store.loadDomains(runId).length,
-      relatedKeywords: store.loadRelatedKeywords(runId).length,
+      relatedKeywords: store.loadRelatedKeywords(runId).filter(
+        (r) => r.status === 'ok' && r.relatedKeyword.trim() !== '',
+      ).length,
     },
     cache: {
       ...cacheStats,
       hitRatePercent: cacheHitRatePercent(cacheStats.hits, processed),
     },
     lookups: run?.lookups ?? 0,
+    ahrefs: ahrefsSummary,
+    scoringCompleteness: scoringSummary,
   };
 }
 
@@ -491,15 +583,19 @@ export type ReportContext = {
   keywords: StoredKeyword[];
   candidates: Candidate[];
   relatedKeywords: StoredRelatedKeyword[];
+  relatedRowsCount: number;
+  relatedOutcomes: { ok: number; empty: number; error: number; notAttempted: number };
   domains: StoredDomain[];
   progress: { completed: number; partial: number; failed: number; errors: number };
   cacheStats: { hits: number; misses: number; expired: number; refreshed: number };
   uniqueDomains: number;
   completedDomains: number;
+  ahrefs: AhrefsSummary;
+  scoringCompleteness: ScoringCompleteness;
 };
 
 export function renderReportMd(ctx: ReportContext): string {
-  const { state, run, keywords, candidates, relatedKeywords, domains, progress, cacheStats } = ctx;
+  const { state, run, keywords, candidates, relatedKeywords, relatedRowsCount, relatedOutcomes, domains, progress, cacheStats, ahrefs: ahrefsSummary, scoringCompleteness: scoringSummary } = ctx;
   const processed = progress.completed + progress.partial + progress.failed;
   const hitRate = cacheHitRatePercent(cacheStats.hits, processed);
   const lines: string[] = [];
@@ -507,6 +603,7 @@ export function renderReportMd(ctx: ReportContext): string {
   lines.push('');
   lines.push(`State: **${state}**  `);
   lines.push(`Scoring version: ${SCORING_VERSION}  `);
+  lines.push(`Scoring completeness: **${scoringSummary.status}**  `);
   // Deterministic timestamp from the stored run, never a freshly generated one.
   lines.push(`Created: ${run.createdAt}  Updated: ${run.updatedAt ?? run.createdAt}`);
   lines.push('');
@@ -515,8 +612,8 @@ export function renderReportMd(ctx: ReportContext): string {
   lines.push(`- Input: ${run.input.kind} — ${run.input.path}`);
   lines.push(`- Keywords: ${keywords.length} (completed ${progress.completed}, partial ${progress.partial}, failed ${progress.failed}, errors ${progress.errors})`);
   lines.push(`- Processed: ${processed} / ${keywords.length}`);
-  lines.push(`- Unique domains: ${ctx.uniqueDomains} (DR resolved: ${ctx.completedDomains})`);
-  lines.push(`- Related keywords observed: ${relatedKeywords.length}`);
+  lines.push(`- Unique domains: ${ahrefsSummary.discovered} discovered, ${ahrefsSummary.attempted} attempted, ${ahrefsSummary.numericCoverage} with numeric DR`);
+  lines.push(`- Related keywords: ${relatedRowsCount} real rows; parent outcomes: ok ${relatedOutcomes.ok}, empty ${relatedOutcomes.empty}, error ${relatedOutcomes.error}, not_attempted ${relatedOutcomes.notAttempted}`);
   lines.push(`- Unique domains (run-level): ${domains.length}`);
   lines.push(`- Browser lookups: ${run.lookups}`);
   lines.push(
@@ -532,6 +629,24 @@ export function renderReportMd(ctx: ReportContext): string {
       lines.push(
         `- \`${keyword.keyword}\`: Surfer market ${run.configSnapshot.research.market}, Google detected "${keyword.google?.detectedLocation ?? ''}"`,
       );
+    }
+    lines.push('');
+  }
+
+  // Prominent warning when the Ahrefs stage was skipped/failed or numeric DR
+  // coverage is incomplete. Scores based on missing DR must not be presented as
+  // fully evidenced without this adjacent completeness status.
+  if (ahrefsSummary.state === 'skipped' || ahrefsSummary.state === 'failed' || scoringSummary.status === 'degraded') {
+    lines.push('## ⚠ Data completeness warning');
+    lines.push('');
+    if (ahrefsSummary.state === 'skipped') {
+      lines.push('- Ahrefs DR stage was **skipped** (no AHREFS_API_KEY). Numeric scores are based on missing DR data.');
+    }
+    if (ahrefsSummary.state === 'failed') {
+      lines.push('- Ahrefs DR stage **failed** (systemic error or missing key in required mode). Numeric scores are unreliable.');
+    }
+    if (scoringSummary.status === 'degraded' && ahrefsSummary.state !== 'skipped' && ahrefsSummary.state !== 'failed') {
+      lines.push(`- Numeric DR coverage is incomplete (${ahrefsSummary.numericCoverage}/${ahrefsSummary.discovered} domains). ${ahrefsSummary.notAttempted} domain(s) not attempted.`);
     }
     lines.push('');
   }
@@ -569,7 +684,16 @@ export function renderReportMd(ctx: ReportContext): string {
   lines.push('');
   lines.push(`- Parser versions: Surfer ${run.parserVersions.surfer}, Google ${run.parserVersions.google}`);
   lines.push(
-    `- Ahrefs DR: ${domains.length} unique domains resolved (ok ${domains.filter((d) => d.status === 'ok').length}, not_found ${domains.filter((d) => d.status === 'not_found').length}, error ${domains.filter((d) => d.status === 'error').length}); from cache ${domains.filter((d) => d.source === 'cache').length}, fresh ${domains.filter((d) => d.source === 'fresh').length}`,
+    `- Ahrefs DR: ${ahrefsSummary.discovered} discovered, ${ahrefsSummary.attempted} attempted, ${ahrefsSummary.notAttempted} not_attempted (mode: ${ahrefsSummary.mode}, state: ${ahrefsSummary.state})`,
+  );
+  lines.push(
+    `  - status: ok ${ahrefsSummary.ok}, not_found ${ahrefsSummary.notFound}, error ${ahrefsSummary.error}; numeric DR coverage ${ahrefsSummary.numericCoverage}/${ahrefsSummary.discovered}`,
+  );
+  lines.push(
+    `  - source: cache ${ahrefsSummary.cache}, fresh ${ahrefsSummary.fresh}`,
+  );
+  lines.push(
+    `- Scoring completeness: ${scoringSummary.status} (numeric DR coverage ${scoringSummary.numericDrCoverage}, missing DR domains ${scoringSummary.missingDrDomains})`,
   );
   lines.push(
     `- Cache buckets: ${cacheStats.hits} hit / ${cacheStats.misses} miss / ${cacheStats.expired} expired / ${cacheStats.refreshed} refreshed (${hitRate}% hit rate)`,

@@ -219,3 +219,55 @@ JSON, no ANSI / surrounding prose).
   (primary keys on `(run_id, parent_idx, related_keyword)` and
   `(run_id, domain)`).
 - `AHREFS_API_KEY` is never persisted.
+
+## 10. Scoring completeness metadata (TASK-009)
+
+Score v1 formulas, weights, thresholds, tiers, and `SCORING_VERSION` are unchanged.
+Completeness metadata is **adjacent evidence only** — it never changes a score.
+
+Each candidate carries a `scoring_completeness` field:
+
+- `complete` — every SERP domain has numeric DR (`missing_dr_count === 0` and at
+  least one known domain). The score is fully evidenced.
+- `degraded` — some domains have missing DR (Ahrefs `not_found`, `error`, or
+  skipped/not_attempted). The score is deterministic under the v1 formula but is
+  based on incomplete evidence.
+
+Missing DR stays missing; it is never treated as `0`. A numeric score remains
+deterministic under v1 but must not be presented as fully evidenced without the
+adjacent `scoring_completeness` status.
+
+### Per Ahrefs summary
+
+The run exposes an Ahrefs summary sufficient for truthful reporting:
+
+```text
+total discovered / attempted / not_attempted
+source cache / fresh
+status ok / not_found / error
+numeric DR coverage
+stage mode required / optional
+stage state complete / degraded / skipped / failed
+```
+
+- **discovered**: unique registrable domains observed in organic SERPs
+- **attempted**: domains with terminal Ahrefs status `ok | not_found | error`
+- **not_attempted**: DR stage skipped or stopped before lookup
+- **numeric DR coverage**: unique domains with `status=ok` and numeric `dr`
+
+`domains.csv`, `manifest.json`, `status.json`, and `report.md` must agree on these
+totals. The report must never say "N domains resolved" when they were merely
+discovered. The summary is computed from **persisted** domains so it survives
+resume correctly.
+
+### Required vs optional mode
+
+- `--require-ahrefs` (or `REQUIRE_AHREFS=true`): missing/blank key fails before
+  keyword collection with `AHREFS_REQUIRE_CONFIG`; unusable key/auth rejection
+  becomes an explicit `failed` stage, never clean `completed`.
+- optional mode (default): without a key, DR is skipped; outputs explicitly say
+  `skipped/not_attempted` and scoring completeness is visibly `degraded`.
+
+### Output updates
+
+`candidates.csv` adds a `scoring_completeness` column (complete | degraded).

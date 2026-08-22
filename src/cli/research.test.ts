@@ -571,6 +571,18 @@ test('a resumed run whose pending keywords are cached finalizes without browser 
       storedAt: collectedAt,
       expiresAt: new Date(Date.now() + loadConfig({}).cache.ttl.completedMs).toISOString(),
     });
+    cacheStore.putRelated(
+      {
+        cacheKey: buildRelatedCacheKey('k2', identity),
+        normalizedKeyword: 'k2',
+        identity,
+        status: 'empty',
+        error: null,
+        rows: [],
+      },
+      collectedAt,
+      loadConfig({}).cache.ttl.relatedMs,
+    );
     cacheStore.close();
 
     // No flags, no browser: the plan serves every remaining keyword from cache.

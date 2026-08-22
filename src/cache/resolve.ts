@@ -54,8 +54,10 @@ export function planRunCache(
   cache: KeywordCache | null,
   now: number,
   related?: {
-    enabled: boolean;
     expandableKeywords: ReadonlySet<string>;
+  },
+  expansion?: {
+    enabled: boolean;
   },
 ): RunCachePlan {
   const resolutions = new Map<string, CacheResolution>();
@@ -66,7 +68,10 @@ export function planRunCache(
     resolutions.set(normalizedKeyword, resolution);
     if (resolution.kind !== 'hit') needsBrowser = true;
 
-    if (!related?.enabled || !related.expandableKeywords.has(normalizedKeyword)) continue;
+    // Related collection planning is independent of queue expansion: every
+    // root keyword gets a related-cache resolution so the Surfer sidebar can be
+    // observed even when expansion is disabled.
+    if (!related?.expandableKeywords.has(normalizedKeyword)) continue;
     const relatedResolution = resolveRelatedAccess(
       normalizedKeyword,
       options.identity,
@@ -78,6 +83,10 @@ export function planRunCache(
       needsBrowser = true;
       continue;
     }
+    // Queue-expansion planning (which related candidates to add to the Google
+    // lookup queue) is gated on expansion.enabled and is separate from the
+    // related-collection planning above.
+    if (!expansion?.enabled) continue;
     if (relatedResolution.kind === 'hit_ok') {
       for (const row of relatedResolution.entry.rows) {
         const candidate = normalizeKeyword(row.relatedKeyword);

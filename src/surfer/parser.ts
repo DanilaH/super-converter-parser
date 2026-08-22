@@ -2,6 +2,12 @@ import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 
+// Bounded wait for the related-keywords widget to mount. If the widget is
+// genuinely absent (e.g. copied Surfer profiles where the sidebar never
+// renders), we fast-fail after missingWidgetTimeoutMs (default 5s, configured
+// via config.browser.surferRelatedMissingWidgetTimeoutMs) rather than blocking
+// the full readSurferRelated waitMs (default 60s).
+
 export type SurferResult = {
   volume: number | null;
   cpc: number | null;
@@ -175,9 +181,17 @@ export async function readSurferRelated(
   page: Page,
   widgetSelector: string,
   waitMs: number,
-): Promise<SurferRelatedKeyword[]> {
+  missingWidgetTimeoutMs: number = 5000,
+): Promise<SurferRelatedKeyword[] | null> {
   const deadline = Date.now() + waitMs;
   let lastSnapshot: RelatedDomSnapshot = { state: 'widget_missing' };
+  // The related sidebar can render lazily after the main Surfer widget. Poll up
+  // to waitMs for it to mount. To avoid blocking the full waitMs when the widget
+  // is genuinely absent (e.g. copied Surfer profiles where the sidebar never
+  // renders), fast-fail after a shorter widget-missing threshold. This is a
+  // bounded wait (default 5s), not an arbitrary 1s, and is configurable via
+  // SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS.
+  const missingWidgetDeadline = Date.now() + missingWidgetTimeoutMs;
 
   while (Date.now() <= deadline) {
     const snapshot = await extractRelatedRows(page, widgetSelector).catch(() => undefined);
@@ -189,15 +203,15 @@ export async function readSurferRelated(
         `Surfer related-keywords table contains malformed rows; expected exactly 4 direct <td> cells, got ${snapshot.cellCounts.join(', ')}.`,
       );
     }
+    if (lastSnapshot.state === 'widget_missing' && Date.now() > missingWidgetDeadline) {
+      return null;
+    }
     await page.waitForTimeout(500);
   }
 
   if (lastSnapshot.state === 'empty') return [];
   if (lastSnapshot.state === 'widget_missing') {
-    throw new ResearchError(
-      'SURFER_RELATED_PARSE_ERROR',
-      `Surfer related-keywords widget "${widgetSelector}" was not found in the page.`,
-    );
+    return null;
   }
   throw new ResearchError(
     'SURFER_RELATED_PARSE_ERROR',

@@ -170,7 +170,7 @@ test('pause after two keywords; resume collects only the remaining two', async (
       hooks: makeHooks({ pauseRequested: () => calls.length >= 2 }),
     }),
   );
-  assert.deepEqual(first, { kind: 'paused', reason: 'SIGINT received; run paused safely.' });
+  assert.deepEqual(first, { kind: 'paused', reason: 'SIGINT received; run paused safely.', ahrefs: { mode: 'optional', state: 'skipped', discovered: 1, attempted: 0, notAttempted: 1, cache: 0, fresh: 0, ok: 0, notFound: 0, error: 0, numericCoverage: 0, requireAhrefs: false }, scoringCompleteness: { status: 'degraded', numericDrCoverage: 0, missingDrDomains: 1 } });
   assert.deepEqual(calls, ['compare lists', 'best office chairs']);
 
   const keywords = store.loadKeywords(runId);

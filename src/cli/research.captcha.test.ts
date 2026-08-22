@@ -7,11 +7,19 @@ import { join } from 'node:path';
 import type { Browser, BrowserContext, Page, Locator } from 'playwright-core';
 import { runCli, EXIT_PAUSED, EXIT_OK } from './research.js';
 import { collectKeyword } from '../browser/collect.js';
-import type { CollectionResult } from '../browser/collect.js';
+import type { CollectionResult, RelatedCollectionResult } from '../browser/collect.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { KeywordRecord } from '../runs/run.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
+
+// Minimal related collector for tests that exercise CAPTCHA/resume flows:
+// returns empty without touching the browser, since these tests care about
+// pause/resume semantics, not related-keyword parsing.
+const emptyRelated = async (): Promise<RelatedCollectionResult> => ({
+  related: { status: 'empty', error: null, rows: [] },
+  debugArtifactPath: null,
+});
 
 function fakePage(captcha: boolean): Page {
   const isCaptcha = (sel: string) => sel.toLowerCase().includes('captcha');
@@ -87,6 +95,7 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
       debugRoot: string,
       signal: CancellationSignal,
     ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+    collectRelated: emptyRelated,
   };
   const depsClean = {
     connect: async () => fakeBrowser(fakePage(false)),
@@ -98,6 +107,7 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
       debugRoot: string,
       signal: CancellationSignal,
     ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+    collectRelated: emptyRelated,
   };
 
   const previousCwd = process.cwd();
@@ -175,6 +185,7 @@ test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { time
       debugRoot: string,
       signal: CancellationSignal,
     ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+    collectRelated: emptyRelated,
   };
 
   const previousCwd = process.cwd();

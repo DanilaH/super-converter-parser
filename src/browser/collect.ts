@@ -110,13 +110,15 @@ export async function collectKeyword(
       errors.push({ code, message });
     }
 
-    // The related-keyword reader runs only for root/seed keywords. Expanded
-    // (surfer_related) keywords are themselves collected but never expanded
-    // further, so re-reading their related list would be wasted browser work.
+    // The related-keyword reader runs for every root/seed keyword regardless of
+    // expansion.enabled. --expand only controls whether observed rows are queued
+    // for depth-one Google lookups (handled by the engine). Expanded
+    // (surfer_related) keywords are collected but never expanded further, so
+    // re-reading their related list would be wasted browser work.
     let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
     let relatedParserError: ComponentError | null = null;
     const isRoot = !keyword.sources.some((source) => source.type === 'surfer_related');
-    if (config.expansion.enabled && config.expansion.depth >= 1 && isRoot) {
+    if (isRoot) {
       // The related-keywords widget can mount lazily after the main Surfer
       // widget; scroll the results so Surfer renders it before we read.
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
@@ -126,13 +128,19 @@ export async function collectKeyword(
           page,
           config.browser.surferRelatedWidgetSelector,
           config.browser.surferWaitTimeoutMs,
+          config.browser.surferRelatedMissingWidgetTimeoutMs,
         );
+        // null means the related widget was genuinely absent (fast-failed after
+        // ~1s) — classify as 'error', never as 'empty'. Only a present widget with
+        // zero rows is 'empty'.
         related =
-          parsed.length > 0
-            ? { status: 'ok', error: null, rows: parsed }
-            : { status: 'empty', error: null, rows: [] };
+          parsed === null
+            ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
+            : parsed.length > 0
+              ? { status: 'ok', error: null, rows: parsed }
+              : { status: 'empty', error: null, rows: [] };
       } catch (error) {
-        // Related-keyword expansion is optional enrichment: a missing/broken
+        // Related-keyword observation is optional enrichment: a missing/broken
         // widget must not downgrade an otherwise-successful keyword. The error
         // is preserved in the structured related outcome for traceability.
         const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
@@ -299,11 +307,15 @@ export async function collectRelatedKeyword(
         page,
         config.browser.surferRelatedWidgetSelector,
         config.browser.surferWaitTimeoutMs,
+        config.browser.surferRelatedMissingWidgetTimeoutMs,
       );
+      // null = widget genuinely absent → 'error', never 'empty'.
       return {
-        related: rows.length > 0
-          ? { status: 'ok', error: null, rows }
-          : { status: 'empty', error: null, rows: [] },
+        related: rows === null
+          ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
+          : rows.length > 0
+            ? { status: 'ok', error: null, rows }
+            : { status: 'empty', error: null, rows: [] },
         debugArtifactPath: null,
       };
     } catch (error) {
@@ -331,9 +343,14 @@ export async function collectRelatedKeyword(
         debugArtifactPath,
       };
     }
-  } catch {
+  } catch (error) {
     // Navigation/CAPTCHA failures happen before the related reader has a
     // truthful result, so they must not be cached as a genuine empty list.
+    // A cancellation (Ctrl+C) must propagate to the engine so it can leave the
+    // active keyword resumable and record the run as paused.
+    if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+      throw error;
+    }
     return {
       related: { status: 'not_attempted', error: null, rows: [] },
       debugArtifactPath: null,

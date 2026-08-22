@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
@@ -8,6 +9,37 @@ import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
+
+// Minimal .env loader: only sets variables not already present in process.env,
+// so explicit shell/env values always win. No dependency required.
+function loadDotEnv(): void {
+  const envPath = resolve(process.cwd(), '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    const content = readFileSync(envPath, 'utf8');
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eqIndex = line.indexOf('=');
+      if (eqIndex === -1) continue;
+      const key = line.slice(0, eqIndex).trim();
+      let value = line.slice(eqIndex + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (key && process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // Silently ignore unreadable .env; env vars and defaults still work.
+  }
+}
+
+loadDotEnv();
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
@@ -38,6 +70,7 @@ type CliOptions = {
   refreshKeywords: string[];
   expand: boolean;
   jsonStatus: boolean;
+  requireAhrefs: boolean;
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -81,6 +114,7 @@ function parseArgs(argv: string[]): CliOptions {
     refreshKeywords: [],
     expand: false,
     jsonStatus: false,
+    requireAhrefs: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -95,10 +129,12 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
-    } else if (arg === '--expand') {
+    } else if (arg === '--expand' || arg === '--expand-surfer') {
       options.expand = true;
     } else if (arg === '--json-status') {
       options.jsonStatus = true;
+    } else if (arg === '--require-ahrefs') {
+      options.requireAhrefs = true;
     } else if (arg === '--refresh-keyword') {
       const value = argv[index + 1];
       if (value === undefined) {
@@ -130,6 +166,8 @@ function printUsage(): void {
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
+  console.log('  --expand-surfer      Alias for --expand (clarity flag).');
+  console.log('  --require-ahrefs     Require Ahrefs DR: fail if AHREFS_API_KEY is missing/blank.');
   console.log('  --json-status       Print a single compact JSON status line as the final stdout line.');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
@@ -163,7 +201,7 @@ function printUsage(): void {
   console.log('  CACHE_TTL_RELATED_ERROR_MS   Cache TTL for failed related-keyword expansions in ms (default 1h)');
   console.log('  CACHE_TTL_DOMAIN_OK_MS       Cache TTL for successful DR lookups in ms (default 30d)');
   console.log('  CACHE_TTL_DOMAIN_NOT_FOUND_MS Cache TTL for not-found DR lookups in ms (default 30d)');
-  console.log('  CACHE_TTL_DOMAIN_ERROR_MS    Cache TTL for failed DR lookups in ms (default 1h)');
+  console.log('  REQUIRE_AHREFS               Require Ahrefs DR (true/false); fail early without a key');
   console.log('');
   console.log('Exit codes: 0 ok (incl. completed_with_errors), 1 internal, 2 invalid input/config,');
   console.log('3 preflight/environment, 130 gracefully paused (resume with --resume).');
@@ -192,10 +230,16 @@ export function effectiveConfigForResume(
   // selector) come from the persisted snapshot so a resumed run reproduces the
   // original expansion behavior; operational settings (connection, timeouts,
   // retries, breaker) use the current env.
+  // Resume always restores the persisted requireAhrefs — the operator must not
+  // re-supply --require-ahrefs on resume. The persisted value is authoritative;
+  // this prevents silent DR skip (resuming a required run as optional) or mid-run
+  // failure (resuming an optional run as required when earlier keywords lack DR).
+  // A persisted snapshot that predates this field (undefined) defaults to optional.
   return {
     ...current,
     research: persisted.research,
     expansion: persisted.expansion,
+    ahrefs: { ...current.ahrefs, requireAhrefs: persisted.ahrefs.requireAhrefs ?? false },
     browser: { ...current.browser, surferRelatedWidgetSelector: persisted.browser.surferRelatedWidgetSelector },
   };
 }
@@ -216,7 +260,8 @@ function validateRefreshKeywords(rawKeywords: string[], knownKeywords: string[])
   });
 }
 
-function exitCodeForError(error: ResearchError): number {  switch (error.code) {
+function exitCodeForError(error: ResearchError): number {
+  switch (error.code) {
     case 'INPUT_SCHEMA_ERROR':
     case 'RESUME_NOT_FOUND':
     case 'RESUME_TERMINAL_RUN':
@@ -229,6 +274,8 @@ function exitCodeForError(error: ResearchError): number {  switch (error.code) {
     case 'CAPTCHA_REQUIRED':
     case 'OUTPUT_WRITE_ERROR':
     case 'CACHE_DB_ERROR':
+    case 'AHREFS_NOT_CONFIGURED':
+    case 'AHREFS_REQUIRE_CONFIG':
       return EXIT_PREFLIGHT;
     default:
       return EXIT_INTERNAL;
@@ -373,14 +420,30 @@ export async function runCli(
       runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
     }
 
+    // --require-ahrefs overrides the persisted/env config for fresh runs. For
+    // resume, the requirement is validated (and restored) by effectiveConfigForResume.
+    if (options.requireAhrefs && mode === 'fresh') {
+      runConfig = { ...runConfig, ahrefs: { ...runConfig.ahrefs, requireAhrefs: true } };
+    }
+
     cacheStore = CacheStore.open(runConfig.cache.path);
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
 
-    const ahrefsApiKey = env.AHREFS_API_KEY ?? null;
-    // AHREFS_API_KEY is required for the DR phase: this tool gates Ahrefs
-    // enrichment on a configured key, so without one the whole DR phase is
-    // skipped (organic SERP and all other stages still run).
+    const rawKey = (env.AHREFS_API_KEY ?? '').trim();
+    const ahrefsApiKey = rawKey.length > 0 ? rawKey : null;
+    // In required mode, a missing/blank key fails before keyword collection with
+    // a classified, actionable error. This persists through resume because the
+    // requirement is part of the persisted config snapshot.
+    if (runConfig.ahrefs.requireAhrefs && !ahrefsApiKey) {
+      throw new ResearchError(
+        'AHREFS_REQUIRE_CONFIG',
+        'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
+      );
+    }
+    // AHREFS_API_KEY gates DR enrichment: without a key the DR phase is skipped
+    // (organic SERP and all other stages still run). In optional mode this is
+    // reported as skipped/degraded, never as resolved.
     let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
     if (ahrefsApiKey) {
       ahrefs = {
@@ -444,8 +507,10 @@ export async function runCli(
       cacheStore,
       Date.now(),
       {
-        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
         expandableKeywords,
+      },
+      {
+        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
       },
     );
     const needsBrowser = plan.needsBrowser;
@@ -531,6 +596,7 @@ export async function runCli(
         relatedResolutions: plan.relatedResolutions,
       },
       ...(ahrefs ? { ahrefs } : {}),
+      requireAhrefs: runConfig.ahrefs.requireAhrefs,
     });
 
     if (outcome.kind === 'paused') {
@@ -539,17 +605,23 @@ export async function runCli(
       console.log('Resume with:');
       console.log(`  npm run research -- --resume ${runId}`);
       if (options.jsonStatus && store) {
-        console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused')));
+        console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused', outcome.ahrefs ?? undefined, outcome.scoringCompleteness ?? undefined)));
       }
       return EXIT_PAUSED;
     }
     console.log('');
     console.log(`Run completed: ${outcome.state}`);
+    if (outcome.ahrefs) {
+      console.log(`  Ahrefs: ${outcome.ahrefs.discovered} discovered, ${outcome.ahrefs.attempted} attempted, ${outcome.ahrefs.numericCoverage} numeric DR (${outcome.ahrefs.state})`);
+    }
+    if (outcome.scoringCompleteness) {
+      console.log(`  Scoring completeness: ${outcome.scoringCompleteness.status}`);
+    }
     console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv, related-keywords.csv, domains.csv, candidates.csv, report.md, status.json)`);
     console.log(`  CSV: runs/${runId}/keywords.csv`);
     console.log(`  CSV: runs/${runId}/serp.csv`);
     if (options.jsonStatus && store) {
-      console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state)));
+      console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness)));
     }
     return EXIT_OK;
   } catch (error) {
@@ -559,6 +631,11 @@ export async function runCli(
       // A cancellation that escaped the engine's collect wrapper (e.g. during
       // preflight) is a graceful pause, not an internal failure. Leave the run
       // in a resumable state so --resume can continue from where it stopped.
+      // Log the pause reason (do not swallow silently) before returning.
+      console.log('');
+      console.log(`Run paused (escaped ${error.code}): ${error.message}`);
+      console.log('Resume with:');
+      console.log(`  npm run research -- --resume ${runId}`);
       if (store && runId) {
         try {
           store.setRunState(runId, 'paused');

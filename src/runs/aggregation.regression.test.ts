@@ -9,7 +9,26 @@ import { loadConfig } from '../config/config.js';
 import { buildSeedKeywords, type SeedKeyword } from '../input/seeds/normalize.js';
 import { createRunId, type RunState } from './run.js';
 import { writeSnapshots, renderReportMd } from './snapshots.js';
-import { applyDomainRatings, executeRun, type EngineHooks, type CollectKeywordFn } from './engine.js';
+import { applyDomainRatings, executeRun, type EngineHooks, type CollectKeywordFn, type AhrefsSummary, type ScoringCompleteness } from './engine.js';
+
+function emptyAhrefs(requireAhrefs = false): AhrefsSummary {
+  return {
+    mode: requireAhrefs ? 'required' : 'optional',
+    state: requireAhrefs ? 'failed' : 'skipped',
+    discovered: 0,
+    attempted: 0,
+    notAttempted: 0,
+    cache: 0,
+    fresh: 0,
+    ok: 0,
+    notFound: 0,
+    error: 0,
+    numericCoverage: 0,
+    requireAhrefs,
+  };
+}
+
+const EMPTY_SCORING: ScoringCompleteness = { status: 'degraded', numericDrCoverage: 0, missingDrDomains: 0 };
 import { setRenameForTesting } from './run.js';
 import { resolveDrThresholds, aggregate } from '../scoring/scoring.js';
 import type { SerpResult } from '../google/serp.js';
@@ -213,11 +232,15 @@ test('report is deterministic and shows the target state', () => {
     keywords,
     candidates: [],
     relatedKeywords: [],
+    relatedRowsCount: 0,
     domains: [],
     progress: { completed: 0, partial: 0, failed: 0, errors: 0 },
     cacheStats: { hits: 0, misses: 0, expired: 0, refreshed: 0 },
     uniqueDomains: 0,
     completedDomains: 0,
+    ahrefs: emptyAhrefs(),
+    scoringCompleteness: EMPTY_SCORING,
+    relatedOutcomes: { ok: 0, empty: 0, error: 0, notAttempted: 0 },
   };
   const r1 = renderReportMd(ctx);
   const r2 = renderReportMd(ctx);
