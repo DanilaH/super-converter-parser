@@ -218,23 +218,36 @@ space-free profile `C:\tmp\research-profile`, Keyword Surfer injected). Expansio
 was disabled (`EXPANSION_ENABLED=false`); Ahrefs DR skipped (no key). Google was
 reachable and served real SERPs.
 
-### 12.1 Cold run → Ctrl+C → resume (no repeated work)
+### 12.1 Cold run → Ctrl+C → resume on ONE run id (no repeated work)
 
-Keywords: `compare lists`, `json diff`, `merge lists` (cold via `--force-refresh`).
+Single live scenario, **same run id throughout**:
+`20260822082607391_f646df8b-b61f-4b01-aa4c-2eae6d187779`
+(Keywords `compare lists`, `json diff`, `merge lists`; cold via `--force-refresh`.
+Preflight passed: `Research Chrome connected`, `Google reachable`,
+`Keyword Surfer injection detected`.)
 
-- Real browser collection (preflight passed: `Research Chrome connected`,
-  `Google reachable`, `Keyword Surfer injection detected`):
-  - `compare lists` → volume **49,500**, cpc **$7.90**, organic **9**
-  - `json diff` → volume **8,100**, cpc **$10.55**, organic **9**
-  - `merge lists` → volume **140**, cpc **$3.72**, organic **9**
-- `Ctrl+C` during collection: `Run paused: SIGINT received; run paused safely.`,
-  process exited **130**. `status.json` of the interrupted run reports
-  `"status": "paused"` (run `20260822081923715_245f564c-a188-406e-9007-2ed285d5d715`).
-  Store shows `compare lists` completed and the remaining keywords left pending
-  (resumable), not committed as terminal.
-- `--resume <run-id>` (`20260822081554570_0f109dad-441a-404b-818f-829a47e49f47`):
-  `compare lists` was a **cache hit (0 browser lookups)** and was NOT re-collected;
-  `json diff` and `merge lists` were collected. All three terminal, `errors: 0`.
+- **Phase A (cold):** `compare lists` collected for real — volume **49,500**,
+  cpc **$7.90**, organic **9**. `Ctrl+C` during collection →
+  `Run paused: SIGINT received; run paused safely.`, process exited **130**.
+- **Keyword states BEFORE `--resume`** (read from the run store, same id):
+  - `compare lists` → `completed`, volume **49,500**
+  - `json diff` → `pending`
+  - `merge lists` → `pending`
+  - run state → `paused`
+- **Phase B (`--resume 20260822082607391_f646df8b-b61f-4b01-aa4c-2eae6d187779`):**
+  the resume collection loop begins at **`[1/3] json diff`** then **`[2/3] merge lists`**.
+  `compare lists` **never appears as a collection step** — it was already `completed`
+  in the run store, so the engine skipped it (it is not re-run and is not
+  re-fetched from the keyword cache); its volume stayed **49,500** unchanged.
+  - `json diff` → collected, volume **8,100**, cpc **$10.55**
+  - `merge lists` → collected, volume **140**, cpc **$3.72**
+  - resume-session browser lookups = **2** (json diff, merge lists only); the run's
+    lifetime total is **3** because `compare lists` was collected once in Phase A and
+    **not** again on resume.
+- **Keyword states AFTER `--resume`:** all three `completed`, `errors: 0`.
+
+This proves the completed keyword was **skipped on resume, not re-collected** (no
+new browser lookup, no cache-hit re-fetch); only the pending keywords were collected.
 
 ### 12.2 Warm run (cache behavior)
 
