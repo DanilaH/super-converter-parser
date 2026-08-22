@@ -247,7 +247,7 @@ export async function writeSnapshots(
   // manifest write fails, status.json is removed so a terminal run state is
   // never emitted without the manifest, and the run stays resumable (not
   // falsely terminal). A run is only "complete" once both artifacts exist.
-  const status = buildRunStatus(store, runId, runDirectory, state);
+  const status = buildRunStatus(store, runId, runDirectory, state, ahrefs, scoringCompleteness);
   await writeJsonAtomic(`${runDirectory}/status.json`, status, 'run status');
 
   try {
