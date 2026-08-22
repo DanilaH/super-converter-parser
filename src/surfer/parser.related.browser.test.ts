@@ -30,11 +30,11 @@ test('browser-reader parses the real keyword-surfer-sidebar related table', asyn
     await page.setContent(html);
     assert.equal(await page.locator('.keyword-surfer-sidebar').count(), 0);
     const rows = await readSurferRelated(page, 'keyword-surfer-sidebar', 2000);
-    assert.ok(rows.length >= 1, 'expected at least one related row');
-    assert.equal(rows[0]!.keyword, 'instagram');
-    assert.equal(rows[0]!.overlap, 50);
-    assert.equal(rows[0]!.volume, 30400000);
-    assert.equal(rows[1]!.keyword, 'ig app');
+    assert.ok(rows !== null && rows.length >= 1, 'expected at least one related row');
+    assert.equal(rows![0]!.keyword, 'instagram');
+    assert.equal(rows![0]!.overlap, 50);
+    assert.equal(rows![0]!.volume, 30400000);
+    assert.equal(rows![1]!.keyword, 'ig app');
 
     await page.setContent(`
       <keyword-surfer-sidebar class="keyword-surfer">

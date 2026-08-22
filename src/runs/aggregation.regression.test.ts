@@ -239,6 +239,7 @@ test('report is deterministic and shows the target state', () => {
     completedDomains: 0,
     ahrefs: emptyAhrefs(),
     scoringCompleteness: EMPTY_SCORING,
+    relatedOutcomes: { ok: 0, empty: 0, error: 0, notAttempted: 0 },
   };
   const r1 = renderReportMd(ctx);
   const r2 = renderReportMd(ctx);

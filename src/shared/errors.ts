@@ -3,6 +3,7 @@ export type ResearchErrorCode =
   | 'SURFER_NOT_DETECTED'
   | 'SURFER_PARSE_ERROR'
   | 'SURFER_RELATED_PARSE_ERROR'
+  | 'SURFER_RELATED_WIDGET_MISSING'
   | 'GOOGLE_SERP_PARSE_ERROR'
   | 'AHREFS_RATE_LIMIT'
   | 'AHREFS_ERROR'
@@ -23,10 +24,13 @@ export type ResearchErrorCode =
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;
+  /** Optional HTTP status code (e.g. 401, 403, 429, 5xx) for explicit auth/systemic classification. */
+  readonly httpStatus: number | undefined;
 
-  constructor(code: ResearchErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(code: ResearchErrorCode, message: string, options?: { cause?: unknown; httpStatus?: number }) {
     super(message, options);
     this.name = 'ResearchError';
     this.code = code;
+    this.httpStatus = options?.httpStatus;
   }
 }

@@ -163,7 +163,7 @@ test('required mode with systemic auth failure does not finish clean and does no
   let apiCalls = 0;
   const ahrefs: AhrefsClient = async (domain: string) => {
     apiCalls += 1;
-    throw new ResearchError('AHREFS_ERROR', `status 403 for "${domain}"`);
+    throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (403) for "${domain}".`, { httpStatus: 403 });
   };
 
   const collect: CollectKeywordFn = async (record) => okCollect(record);
@@ -231,11 +231,15 @@ test('mixed ok / not_found / error outcomes are isolated, cached, and counted co
   });
 
   assert.equal(outcome.kind, 'finished');
-  assert.equal(outcome.ahrefs.ok, 2, 'example.com: fresh ok + cache hit ok');
+  // Ahrefs accounting is over unique persisted domains (resumes correctly),
+  // not over lookup calls. example.com appears once with status=ok even though
+  // it was looked up for two keywords.
+  assert.equal(outcome.ahrefs.ok, 1, 'example.com is one unique ok domain');
   assert.equal(outcome.ahrefs.notFound, 1, 'other.com is not_found');
   assert.equal(outcome.ahrefs.error, 1, 'error.com is error');
   assert.equal(outcome.ahrefs.discovered, 3, 'three unique domains discovered');
   assert.equal(outcome.ahrefs.numericCoverage, 1, 'only example.com has numeric DR');
+  assert.equal(outcome.ahrefs.state, 'complete');
   assert.equal(outcome.ahrefs.cache, 1, 'example.com for list comparison is served from cache');
   assert.equal(outcome.ahrefs.fresh, 3, 'three fresh lookups: example.com, error.com, other.com');
 

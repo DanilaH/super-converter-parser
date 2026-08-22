@@ -217,7 +217,8 @@ test('keyword hit plus related miss still needs the browser', () => {
   const plan = planRunCache(
     ['compare lists'], OPTIONS, cacheWithRelated(null),
     Date.parse('2026-01-01T00:00:00.000Z'),
-    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+    { expandableKeywords: new Set(['compare lists']) },
+    { enabled: true },
   );
   assert.equal(plan.resolutions.get('compare lists')?.kind, 'hit');
   assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'miss');
@@ -229,7 +230,8 @@ test('expired related entry needs a retry', () => {
     ['compare lists'], OPTIONS,
     cacheWithRelated(relatedEntry('ok', '2026-01-01T00:00:00.000Z')),
     Date.parse('2026-01-01T00:00:00.000Z'),
-    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+    { expandableKeywords: new Set(['compare lists']) },
+    { enabled: true },
   );
   assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'expired');
   assert.equal(plan.needsBrowser, true);
@@ -239,7 +241,8 @@ test('cached related error remains retryable', () => {
   const plan = planRunCache(
     ['compare lists'], OPTIONS, cacheWithRelated(relatedEntry('error')),
     Date.parse('2026-01-01T00:00:00.000Z'),
-    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+    { expandableKeywords: new Set(['compare lists']) },
+    { enabled: true },
   );
   assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'retry_error');
   assert.equal(plan.needsBrowser, true);
@@ -249,7 +252,8 @@ test('fresh related empty needs no browser for a keyword hit', () => {
   const plan = planRunCache(
     ['compare lists'], OPTIONS, cacheWithRelated(relatedEntry('empty')),
     Date.parse('2026-01-01T00:00:00.000Z'),
-    { enabled: true, expandableKeywords: new Set(['compare lists']) },
+    { expandableKeywords: new Set(['compare lists']) },
+    { enabled: true },
   );
   assert.equal(plan.relatedResolutions.get('compare lists')?.kind, 'hit_empty');
   assert.equal(plan.needsBrowser, false);

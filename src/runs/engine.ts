@@ -14,6 +14,7 @@ import {
   isTerminalKeywordStatus,
   storedKeywordToRecord,
   type CacheStatus,
+  type StoredDomain,
   type StoredKeyword,
   type StoredRun,
 } from '../db/store.js';
@@ -598,7 +599,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
   if (outcome === null) {
     const progress = countProgress(store.loadKeywords(runId));
-    const ahrefs = ahrefsTracker.finish(store.loadSerpRows(runId));
+    const ahrefs = ahrefsTracker.finish(store.loadDomains(runId));
     const baseState: 'completed' | 'completed_with_errors' =
       progress.errors > 0 ? 'completed_with_errors' : 'completed';
     // In required mode only, any not_attempted domain or systemic Ahrefs failure
@@ -619,8 +620,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     store.setRunState(runId, state);
     outcome = { kind: 'finished', state, ahrefs, scoringCompleteness };
   } else {
+    // Paused state: publish the Ahrefs summary + scoring completeness so the
+    // paused run's artifacts are consistent with a final run (and with the
+    // resume that recomputes them from persisted state).
+    const pausedAhrefs = ahrefsTracker.finish(store.loadDomains(runId));
+    const pausedScoring: ScoringCompleteness =
+      pausedAhrefs.numericCoverage >= pausedAhrefs.discovered && pausedAhrefs.discovered > 0
+        ? { status: 'complete', numericDrCoverage: pausedAhrefs.numericCoverage, missingDrDomains: pausedAhrefs.discovered - pausedAhrefs.numericCoverage }
+        : { status: 'degraded', numericDrCoverage: pausedAhrefs.numericCoverage, missingDrDomains: pausedAhrefs.discovered - pausedAhrefs.numericCoverage };
     store.setRunState(runId, 'paused', { pauseReason: outcome.reason });
-    await publish(store, runId, runDirectory, 'paused');
+    await publish(store, runId, runDirectory, 'paused', pausedAhrefs, pausedScoring);
     logger('');
     logger(`Run paused: ${outcome.reason}`);
     logger('Resume with:');
@@ -636,13 +645,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 // real lookup) mark the whole stage as failed so the run cannot finish clean.
 class AhrefsTracker {
   private readonly discovered = new Set<string>();
-  private attempted = 0;
   private cacheCount = 0;
   private freshCount = 0;
-  private ok = 0;
-  private notFound = 0;
-  private error = 0;
-  private numericCoverage = 0;
   private readonly numericDomains = new Set<string>();
   private systemicFailure: string | null = null;
   private firstLookupObserved = false;
@@ -663,17 +667,11 @@ class AhrefsTracker {
   recordLookup(source: 'cache' | 'fresh' | 'none', status: 'ok' | 'not_found' | 'error', dr: number | null, domain?: string): void {
     if (source === 'cache') this.cacheCount += 1;
     else if (source === 'fresh') this.freshCount += 1;
-    if (source !== 'none') this.attempted += 1;
-    if (status === 'ok') {
-      this.ok += 1;
-      if (dr !== null) {
-        this.numericCoverage += 1;
-        if (domain) this.numericDomains.add(domain);
-      }
-    } else if (status === 'not_found') {
-      this.notFound += 1;
-    } else {
-      this.error += 1;
+    // Track unique domains with numeric DR for the summary; terminal status
+    // counts (ok/not_found/error) are derived from persisted domains in finish()
+    // so they survive resume.
+    if (status === 'ok' && dr !== null && domain) {
+      this.numericDomains.add(domain);
     }
   }
 
@@ -694,22 +692,40 @@ class AhrefsTracker {
     return this.firstLookupObserved;
   }
 
-  finish(serpRows: SerpResult[]): AhrefsSummary {
-    // Count discovered domains from the final SERP rows (any domain that was
-    // observed in organic results, regardless of whether DR was attempted).
-    for (const row of serpRows) {
-      if (row.registrableDomain) this.discovered.add(row.registrableDomain);
+  finish(persistedDomains: StoredDomain[]): AhrefsSummary {
+    // Compute Ahrefs accounting from persisted domains so the summary survives
+    // resume (the in-memory tracker is recreated on each process start).
+    for (const domain of persistedDomains) {
+      this.discovered.add(domain.domain);
     }
     const discovered = this.discovered.size;
+
+    let ok = 0;
+    let notFound = 0;
+    let error = 0;
+    let numericCoverage = 0;
+    for (const domain of persistedDomains) {
+      if (domain.status === 'ok') {
+        ok += 1;
+        if (domain.dr !== null) numericCoverage += 1;
+      } else if (domain.status === 'not_found') {
+        notFound += 1;
+      } else if (domain.status === 'error') {
+        error += 1;
+      }
+    }
+    const attempted = persistedDomains.filter((d) => d.status !== 'not_attempted').length;
+    const notAttempted = discovered - attempted;
+
     let state: AhrefsSummary['state'];
     if (!this.ahrefs) {
       // No client configured: stage was skipped entirely.
       state = this.requireAhrefs ? 'failed' : 'skipped';
     } else if (this.systemicFailure !== null) {
       state = 'failed';
-    } else if (this.notAttempted(discovered)) {
+    } else if (notAttempted > 0 && discovered > 0) {
       state = this.requireAhrefs ? 'failed' : 'skipped';
-    } else if (this.error > 0) {
+    } else if (error > 0) {
       state = this.requireAhrefs ? 'degraded' : 'complete';
     } else {
       state = 'complete';
@@ -718,20 +734,16 @@ class AhrefsTracker {
       mode: this.mode,
       state,
       discovered,
-      attempted: this.attempted,
-      notAttempted: discovered - this.attempted,
+      attempted,
+      notAttempted,
       cache: this.cacheCount,
       fresh: this.freshCount,
-      ok: this.ok,
-      notFound: this.notFound,
-      error: this.error,
-      numericCoverage: this.numericDomains.size,
+      ok,
+      notFound,
+      error,
+      numericCoverage,
       requireAhrefs: this.requireAhrefs,
     };
-  }
-
-  private notAttempted(discovered: number): boolean {
-    return discovered > 0 && this.attempted < discovered;
   }
 }
 
@@ -965,15 +977,13 @@ export async function applyDomainRatings(params: {
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
       // A thrown 401/403 on the first real lookup is a systemic auth failure,
-      // not an isolated domain error. Record it so the stage is marked failed
-      // and no doomed fan-out occurs for the remaining domains.
-      if (!tracker?.hasObservedLookup() && (code === 'AHREFS_ERROR' || code === 'AHREFS_RATE_LIMIT')) {
-        const msg = error instanceof Error ? error.message : '';
-        if (/401|403/i.test(msg)) {
-          tracker?.recordSystemicFailure(code);
-        }
+      // not an isolated domain error. Classify by explicit httpStatus, never by
+      // regex on the message (which can false-positive on unrelated text). Record
+      // it so the stage is marked failed and no doomed fan-out occurs.
+      if (!tracker?.hasObservedLookup() && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
+        tracker?.recordSystemicFailure(code);
       }
-      logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}`);
+      logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}${error instanceof ResearchError && error.httpStatus ? ` (${error.httpStatus})` : ''}`);
       row.dr = null;
       row.drStatus = 'error';
       row.drError = code;

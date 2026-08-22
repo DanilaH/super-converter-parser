@@ -129,10 +129,15 @@ export async function collectKeyword(
           config.browser.surferRelatedWidgetSelector,
           config.browser.surferWaitTimeoutMs,
         );
+        // null means the related widget was genuinely absent (fast-failed after
+        // ~1s) — classify as 'error', never as 'empty'. Only a present widget with
+        // zero rows is 'empty'.
         related =
-          parsed.length > 0
-            ? { status: 'ok', error: null, rows: parsed }
-            : { status: 'empty', error: null, rows: [] };
+          parsed === null
+            ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
+            : parsed.length > 0
+              ? { status: 'ok', error: null, rows: parsed }
+              : { status: 'empty', error: null, rows: [] };
       } catch (error) {
         // Related-keyword observation is optional enrichment: a missing/broken
         // widget must not downgrade an otherwise-successful keyword. The error
@@ -302,10 +307,13 @@ export async function collectRelatedKeyword(
         config.browser.surferRelatedWidgetSelector,
         config.browser.surferWaitTimeoutMs,
       );
+      // null = widget genuinely absent → 'error', never 'empty'.
       return {
-        related: rows.length > 0
-          ? { status: 'ok', error: null, rows }
-          : { status: 'empty', error: null, rows: [] },
+        related: rows === null
+          ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
+          : rows.length > 0
+            ? { status: 'ok', error: null, rows }
+            : { status: 'empty', error: null, rows: [] },
         debugArtifactPath: null,
       };
     } catch (error) {

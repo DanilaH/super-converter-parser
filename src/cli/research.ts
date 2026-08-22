@@ -475,8 +475,10 @@ export async function runCli(
       cacheStore,
       Date.now(),
       {
-        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
         expandableKeywords,
+      },
+      {
+        enabled: runConfig.expansion.enabled && runConfig.expansion.depth >= 1,
       },
     );
     const needsBrowser = plan.needsBrowser;

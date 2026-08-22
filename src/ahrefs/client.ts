@@ -86,14 +86,20 @@ export function createAhrefsClient(
           await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
           continue;
         }
-        throw new ResearchError('AHREFS_RATE_LIMIT', `Ahrefs rate limit hit for "${domain}".`);
+        throw new ResearchError('AHREFS_RATE_LIMIT', `Ahrefs rate limit hit for "${domain}".`, { httpStatus: 429 });
       }
       if (response.status >= 500) {
         if (attempt < MAX_ATTEMPTS) {
           await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
           continue;
         }
-        throw new ResearchError('AHREFS_ERROR', `Ahrefs server error ${response.status} for "${domain}".`);
+        throw new ResearchError('AHREFS_ERROR', `Ahrefs server error ${response.status} for "${domain}".`, { httpStatus: response.status });
+      }
+      // 401/403 are auth/systemic failures: unusable key. Throw (don't return a
+      // plain error result) so the stage can be marked failed and no doomed
+      // fan-out occurs for the remaining domains.
+      if (response.status === 401 || response.status === 403) {
+        throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (${response.status}) for "${domain}".`, { httpStatus: response.status });
       }
       if (!response.ok) {
         return {
