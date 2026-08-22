@@ -207,6 +207,66 @@ mandatory row is `FAIL`.
 | 10 | Output atomic, manifest-last, never falsely terminal | PASS | `src/runs/aggregation.regression.test.ts` (Contracts 7/14/15) |
 | 11 | CSV/JSON/Markdown agree with run DB | PASS | `src/runs/aggregation.regression.test.ts`, `src/runs/csv.snapshot.test.ts` |
 | 12 | `--json-status` stable and machine-readable | PASS | `src/cli/research.jsonstatus.test.ts` (completed / completed_with_errors / paused; JSON asserted as the single, final stdout line with no other JSON/ANSI noise) |
-| 13 | Representative real Google + Surfer e2e | BLOCKED_BY_ENVIRONMENT | attempted automated run: CDP at 127.0.0.1:9222 and :9333 unreachable from the agent environment; the mandatory flow also needs interactive CAPTCHA solving, which a non-interactive agent cannot perform. Deterministic contracts above are verified; the live path is the operator's manual acceptance |
+| 13 | Representative real Google + Surfer e2e | PASS | live run against Research Chrome (CDP `http://127.0.0.1:9333`): cold `force-refresh` collected real Surfer volume/CPC + organic rows; `Ctrl+C` mid-collection exited `130` with the active keyword left resumable (`status.json` `"status":"paused"`); `--resume` re-collected only the pending keywords (completed keyword served from cache, `0` lookups); warm run was `100%` cache hits / `0` browser lookups. See §12 for run IDs and numbers |
 | 14 | Docs reproducible, evidence + limitations honest | PASS | `ACCEPTANCE.md`, README acceptance note, `IMPLEMENTATION_PLAN.md` |
-| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 296 pass / 0 fail / 1 skipped |
+| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 299 pass / 0 fail / 1 skipped |
+
+## 12. PR #17 live E2E evidence (issue #16 §9)
+
+Run live against Research Chrome over CDP (`http://127.0.0.1:9333`, copied
+space-free profile `C:\tmp\research-profile`, Keyword Surfer injected). Expansion
+was disabled (`EXPANSION_ENABLED=false`); Ahrefs DR skipped (no key). Google was
+reachable and served real SERPs.
+
+### 12.1 Cold run → Ctrl+C → resume (no repeated work)
+
+Keywords: `compare lists`, `json diff`, `merge lists` (cold via `--force-refresh`).
+
+- Real browser collection (preflight passed: `Research Chrome connected`,
+  `Google reachable`, `Keyword Surfer injection detected`):
+  - `compare lists` → volume **49,500**, cpc **$7.90**, organic **9**
+  - `json diff` → volume **8,100**, cpc **$10.55**, organic **9**
+  - `merge lists` → volume **140**, cpc **$3.72**, organic **9**
+- `Ctrl+C` during collection: `Run paused: SIGINT received; run paused safely.`,
+  process exited **130**. `status.json` of the interrupted run reports
+  `"status": "paused"` (run `20260822081923715_245f564c-a188-406e-9007-2ed285d5d715`).
+  Store shows `compare lists` completed and the remaining keywords left pending
+  (resumable), not committed as terminal.
+- `--resume <run-id>` (`20260822081554570_0f109dad-441a-404b-818f-829a47e49f47`):
+  `compare lists` was a **cache hit (0 browser lookups)** and was NOT re-collected;
+  `json diff` and `merge lists` were collected. All three terminal, `errors: 0`.
+
+### 12.2 Warm run (cache behavior)
+
+Fresh `--seeds` on the same keywords (`20260822081618363_f6572fa7-f2b4-4a55-9568-fa5ca15dcaec`):
+
+- `Cache 100% (3 hit / 0 miss / 0 expired / 0 refreshed)`, `Browser lookups 0`.
+- `status.json` cache: `hits: 3, hitRatePercent: 100`.
+
+### 12.3 Geo honesty
+
+Every keyword recorded `geo_warning: true` with
+`detected_google_location: "Chelyabinsk Oblast, Russia"` against the configured
+`gl=us`/`market: US`. The mismatch is surfaced in `keywords.csv`, `keywords.json`,
+`report.md`, the CLI `GEO WARNING` log, and the manifest/status rollups — no false
+US-localization claimed.
+
+### 12.4 Known environment limitation (honest)
+
+In this copied/free Surfer profile the `keyword-surfer-sidebar` related-keywords
+widget did not render; expansion was run with `--expand` off, so `relatedKeywords`
+is `0`. That is the documented §9/§10 limitation, not a product defect: the main
+Surfer volume/CPC + organic pipeline remained valid and `errors: 0`. No CAPTCHA was
+encountered, so the manual CAPTCHA path was not exercised live (covered by
+`src/cli/research.captcha.test.ts` and `src/browser/captcha.test.ts`).
+
+### 12.5 Commands used
+
+```
+set CDP_URL=http://127.0.0.1:9333
+npm run research -- --seeds input/seeds.csv --force-refresh   # cold, real browser
+# ... Ctrl+C during collection → exit 130, run paused ...
+npm run research -- --resume <run-id>                         # no repeated completed work
+npm run research -- --seeds input/seeds.csv                   # warm: 100% cache hits, 0 lookups
+```
+
