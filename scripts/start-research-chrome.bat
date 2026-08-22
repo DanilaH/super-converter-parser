@@ -31,6 +31,22 @@ if not exist "%RESEARCH_PROFILE_DIR%\Default" (
     echo.
 )
 
+:: --- Check if research Chrome is already running (match by profile dir) ---
+:: Uses PowerShell + CIM (not deprecated WMIC) to inspect command lines. If a
+:: Chrome instance with this profile is already running, skip launching a new
+:: one and reuse the existing window.
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { $_.CommandLine -like \"*--user-data-dir=%RESEARCH_PROFILE_DIR%*\" } | Select-Object -First 1 ProcessId" > "%TEMP%\research_chrome_pid.txt" 2>nul
+set /p RESEARCH_CHROME_PID=<"%TEMP%\research_chrome_pid.txt" 2>nul
+del "%TEMP%\research_chrome_pid.txt" 2>nul
+
+if defined RESEARCH_CHROME_PID (
+    set "RESEARCH_CHROME_PID=%RESEARCH_CHROME_PID: =%"
+)
+if not "%RESEARCH_CHROME_PID%"=="" (
+    echo [INFO] Research Chrome already running (PID: %RESEARCH_CHROME_PID%), reusing existing window.
+    goto :wait_cdp
+)
+
 :: --- Launch research Chrome ---
 echo Starting Research Chrome...
 echo   Profile: %RESEARCH_PROFILE_DIR%
@@ -46,6 +62,7 @@ start "Research Chrome" "%RESEARCH_CHROME_PATH%" ^
     --no-default-browser-check
 
 :: --- Wait for CDP with timeout ---
+:wait_cdp
 echo Waiting for CDP to respond (timeout: %RESEARCH_CDP_TIMEOUT_SEC%s)...
 set /a "ELAPSED=0"
 
