@@ -395,6 +395,12 @@ export async function runCli(
       runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
     }
 
+    // --require-ahrefs overrides the persisted/env config for fresh runs. For
+    // resume, the requirement is validated (and restored) by effectiveConfigForResume.
+    if (options.requireAhrefs && mode === 'fresh') {
+      runConfig = { ...runConfig, ahrefs: { ...runConfig.ahrefs, requireAhrefs: true } };
+    }
+
     cacheStore = CacheStore.open(runConfig.cache.path);
     console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
     console.log('');
@@ -403,7 +409,7 @@ export async function runCli(
     // In required mode, a missing/blank key fails before keyword collection with
     // a classified, actionable error. This persists through resume because the
     // requirement is part of the persisted config snapshot.
-    if (config.ahrefs.requireAhrefs && !ahrefsApiKey) {
+    if (runConfig.ahrefs.requireAhrefs && !ahrefsApiKey) {
       throw new ResearchError(
         'AHREFS_REQUIRE_CONFIG',
         'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
