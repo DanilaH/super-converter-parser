@@ -407,6 +407,9 @@ After a discovery run completes, enrichment modules derive additional signals fr
 
 ```bash
 npm run enrich -- --run <source-run-id> --modules clusters
+
+# Resume the same enrichment ID after Ctrl+C
+npm run enrich -- --resume <enrichment-id>
 ```
 
 ### SERP-overlap clustering
@@ -428,6 +431,8 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 
 **Outputs:**
 - `keyword-clusters.csv` — cluster_id, canonical_keyword, member_count, members, median_volume, average_volume, representative_domains
-- `keyword-clusters.json` — full algorithm version, config, thresholds, evidence, and metrics
+- `keyword-clusters.json` — full algorithm version, source run, config, thresholds, all pair evidence, exclusions, and metrics
+- `manifest.json` — persisted modules/config/shortlist, artifact list, and summary counts
+- `status.json` — machine-readable terminal status and the same summary counts
 
-Keywords without a persisted SERP are excluded with an explicit count in the logs.
+The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. Enrichment checkpoints are stored in `enrichments/<enrichment-id>/enrichment.sqlite`; Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.

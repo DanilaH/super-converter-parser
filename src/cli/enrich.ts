@@ -4,10 +4,14 @@ import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment, NEVER_CANCELLED, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
-import { writeKeywordClustersCsv, writeKeywordClustersJson } from '../enrichment/outputs.js';
+import { runEnrichment, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
+import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
-import { KNOWN_ENRICHMENT_MODULES, type EnrichmentModuleId } from '../enrichment/types.js';
+import {
+  IMPLEMENTED_ENRICHMENT_MODULES,
+  KNOWN_ENRICHMENT_MODULES,
+  type EnrichmentModuleId,
+} from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 
 function loadDotEnv(): void {
@@ -74,9 +78,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--modules requires a value');
       const parsed = value.split(',').map((m) => m.trim()).filter(Boolean);
+      if (parsed.length === 0) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--modules must contain at least one module');
+      }
       for (const m of parsed) {
         if (!KNOWN_ENRICHMENT_MODULES.includes(m as EnrichmentModuleId)) {
           throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown module: ${m}. Known: ${KNOWN_ENRICHMENT_MODULES.join(', ')}`);
+        }
+        if (!(IMPLEMENTED_ENRICHMENT_MODULES as readonly string[]).includes(m)) {
+          throw new ResearchError('INPUT_SCHEMA_ERROR', `Module is reserved but not implemented yet: ${m}`);
         }
       }
       modules = parsed as EnrichmentModuleId[];
@@ -134,13 +144,13 @@ function parseArgs(argv: string[]): ParsedArgs {
 function findSourceRunDirectory(sourceRunId: string): string {
   const runsDir = resolve(process.cwd(), 'runs');
   const runDir = resolve(runsDir, sourceRunId);
-  const storePath = resolve(runDir, 'run.sqlite');
-  if (!existsSync(storePath)) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `Source run not found: ${sourceRunId} (missing ${storePath})`);
-  }
   const relative = relativePath(runsDir, runDir);
   if (relative.startsWith('..') || isAbsolute(relative)) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Invalid source run ID: ${sourceRunId}`);
+  }
+  const storePath = resolve(runDir, 'run.sqlite');
+  if (!existsSync(storePath)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Source run not found: ${sourceRunId} (missing ${storePath})`);
   }
   return runDir;
 }
@@ -155,10 +165,30 @@ function findEnrichmentDirectory(enrichmentId: string): string {
   return enrichmentDir;
 }
 
+function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShortlist: string[]): string[] {
+  if (rawShortlist.length === 0) return [];
+  const sourceStore = RunStore.openReadOnly(sourceStorePath);
+  try {
+    const available = new Set(
+      sourceStore.loadKeywords(sourceRunId).map((keyword) => keyword.normalizedKeyword),
+    );
+    const normalized = [...new Set(rawShortlist.map(normalizeKeyword))];
+    const rejected = normalized.filter((keyword) => !available.has(keyword));
+    if (rejected.length > 0) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `Shortlist keywords not found in source run: ${rejected.join(', ')}`,
+      );
+    }
+    return normalized;
+  } finally {
+    sourceStore.close();
+  }
+}
+
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
-  let sourceStore: RunStore | undefined;
   const signal: CancellationSignal = { cancelled: false };
 
   const sigintHandler = (): void => {
@@ -167,7 +197,7 @@ async function main(): Promise<void> {
     }
     (signal as { cancelled: boolean }).cancelled = true;
     console.log('');
-    console.log('Stopping gracefully... solving.');
+    console.log('Stopping gracefully...');
   };
   const sigtermHandler = (): void => {
     (signal as { cancelled: boolean }).cancelled = true;
@@ -180,6 +210,19 @@ async function main(): Promise<void> {
 
     if (!args.sourceRunId && !args.resumeEnrichmentId) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run <source-run-id> or --resume <enrichment-id> is required');
+    }
+    if (args.sourceRunId && args.resumeEnrichmentId) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
+    }
+    if (args.resumeEnrichmentId) {
+      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist'];
+      const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
+      if (supplied.length > 0) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `Resume reuses persisted config/shortlist; remove: ${supplied.join(', ')}`,
+        );
+      }
     }
 
     loadConfig(process.env);
@@ -201,9 +244,8 @@ async function main(): Promise<void> {
       if (!existsSync(existingStorePath)) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
       }
-      const existingStore = RunStore.open(existingStorePath);
-      const existingRun = existingStore.loadEnrichmentRun(enrichmentId);
-      existingStore.close();
+      store = RunStore.open(existingStorePath);
+      const existingRun = store.loadEnrichmentRun(enrichmentId);
       if (!existingRun) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
       }
@@ -235,18 +277,14 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-      shortlist = args.shortlist;
+      shortlist = validateShortlist(sourceStorePath, sourceRunId, args.shortlist);
       modules = args.modules;
     }
 
-    store = RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
+    store ??= RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
 
-    if (!isResume) {
-      const logger: EnrichmentLogger = (line: string) => console.log(line);
-      console.log('Utility Research Runner — Enrichment');
-      console.log('');
-    }
-
+    console.log('Utility Research Runner — Enrichment');
+    console.log('');
     const logger: EnrichmentLogger = (line: string) => console.log(line);
 
     const outcome = await runEnrichment({
@@ -260,6 +298,7 @@ async function main(): Promise<void> {
       config: { clusters: clusteringConfig },
       logger,
       signal,
+      resume: isResume,
     });
 
     if (outcome.kind === 'paused') {
@@ -267,25 +306,13 @@ async function main(): Promise<void> {
       console.log(`  npm run enrich -- --resume ${enrichmentId}`);
       exitCode = EXIT_PAUSED;
     } else if (outcome.kind === 'completed' && outcome.result) {
-      const clusters = outcome.result.clusters;
-      const csvPath = resolve(enrichmentDirectory, 'keyword-clusters.csv');
-      const jsonPath = resolve(enrichmentDirectory, 'keyword-clusters.json');
-
-      await writeKeywordClustersCsv(csvPath, clusters);
-      await writeKeywordClustersJson(jsonPath, {
-        enrichmentId,
-        sourceRunId: args.sourceRunId,
-        outputDirectory: enrichmentDirectory,
-        clusters,
-        algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
-        config: clusteringConfig,
-      });
-
       console.log('');
-      console.log(`Clusters: ${clusters.length}`);
+      console.log(`Clusters: ${outcome.result.clusters.length}`);
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log(`  keyword-clusters.csv`);
-      console.log(`  keyword-clusters.json`);
+      console.log('  keyword-clusters.csv');
+      console.log('  keyword-clusters.json');
+      console.log('  manifest.json');
+      console.log('  status.json');
     } else if (outcome.kind === 'failed') {
       console.error(`Enrichment failed: ${outcome.error}`);
       exitCode = EXIT_INTERNAL;
@@ -304,8 +331,8 @@ async function main(): Promise<void> {
     }
   } finally {
     store?.close();
-    sourceStore?.close();
     process.off('SIGINT', sigintHandler);
+    process.off('SIGTERM', sigtermHandler);
   }
 
   process.exit(exitCode);

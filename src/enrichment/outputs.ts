@@ -4,14 +4,14 @@ import type { ClusteringConfig, KeywordCluster, PairwiseComparison, ClusteredKey
 
 export type ClusterOutputOptions = {
   enrichmentId: string;
-  sourceRunId?: string;
+  sourceRunId: string;
   outputDirectory: string;
   clusters: KeywordCluster[];
-  pairs?: PairwiseComparison[];
-  exclusions?: ClusteredKeywordExclusion[];
-  edgeCount?: number;
-  inputCount?: number;
-  excludedCount?: number;
+  pairs: PairwiseComparison[];
+  exclusions: ClusteredKeywordExclusion[];
+  edgeCount: number;
+  inputCount: number;
+  excludedCount: number;
   algorithmVersion: string;
   config: ClusteringConfig;
 };

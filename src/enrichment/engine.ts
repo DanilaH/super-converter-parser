@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RunStore } from '../db/store.js';
+import { normalizeKeyword } from '../input/seeds/normalize.js';
+import { writeTextAtomic } from '../runs/run.js';
 import type { SerpResult } from '../google/serp.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson } from './outputs.js';
@@ -40,6 +42,7 @@ export type EnrichmentOptions = {
   config: EnrichmentModuleConfig;
   logger: EnrichmentLogger;
   signal?: CancellationSignal;
+  resume?: boolean;
 };
 
 export type EnrichmentOutcome = {
@@ -88,10 +91,6 @@ function buildClusteringInputs(
   return inputs;
 }
 
-function normalizeForSerpLookup(raw: string): string {
-  return raw.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
   const {
     enrichmentId,
@@ -104,6 +103,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     config,
     logger,
     signal = NEVER_CANCELLED,
+    resume = false,
   } = options;
 
   let sourceConn: SourceConnection | undefined;
@@ -111,20 +111,29 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
   try {
     sourceConn = openSource(sourceRunId, sourceStoreOrPath);
 
+    if (resume) {
+      const existingRun = enrichmentStore.loadEnrichmentRun(enrichmentId);
+      if (!existingRun) {
+        throw new Error(`Enrichment not found for resume: ${enrichmentId}`);
+      }
+      enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
+    } else {
+      enrichmentStore.createEnrichmentRun({
+        enrichmentId,
+        sourceRunId,
+        modules,
+        config: JSON.stringify(config),
+        sourceRunDirectory: `runs/${sourceRunId}`,
+        enrichmentDirectory,
+        shortlistKeywords: shortlist ?? [],
+      });
+    }
+
     if (signal.cancelled) {
+      enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
       return { kind: 'paused', enrichmentId, state: 'paused' };
     }
-
-    enrichmentStore.createEnrichmentRun({
-      enrichmentId,
-      sourceRunId,
-      modules,
-      config: JSON.stringify(config),
-      sourceRunDirectory: `runs/${sourceRunId}`,
-      enrichmentDirectory,
-      shortlistKeywords: shortlist ?? [],
-    });
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'running');
     logger(`Enrichment run ${enrichmentId} started`);
@@ -145,9 +154,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           clusters,
           pairs,
           exclusions: exclusions as ClusteringResult['exclusions'],
-          config: config as ClusteringResult['config'],
+          config: config.clusters ?? defaultClusteringConfig(),
           algorithmVersion: clusters[0]?.algorithmVersion ?? CLUSTERING_ALGORITHM_VERSION,
-          inputCount: clusters.reduce((sum, c) => sum + c.memberCount, 0),
+          inputCount: clusters.reduce((sum, c) => sum + c.memberCount, 0) + exclusions.length,
           excludedCount: exclusions.length,
           edgeCount: pairs.filter((p) => p.isEdge).length,
         };
@@ -156,7 +165,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           enrichmentId,
           sourceConn.store,
           sourceRunId,
-          config.clusters ?? { topN: 10, edgeRule: { minSharedDomains: 3, minJaccard: 0.3 }, algorithmVersion: '1.0.0' },
+          config.clusters ?? defaultClusteringConfig(),
           enrichmentStore,
           shortlist,
           logger,
@@ -177,6 +186,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     const csvPath = join(enrichmentDirectory, 'keyword-clusters.csv');
     const jsonPath = join(enrichmentDirectory, 'keyword-clusters.json');
     const manifestPath = join(enrichmentDirectory, 'manifest.json');
+    const statusPath = join(enrichmentDirectory, 'status.json');
 
     await mkdir(enrichmentDirectory, { recursive: true });
 
@@ -194,17 +204,44 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       algorithmVersion: result.algorithmVersion,
       config: result.config,
     });
-    await writeFile(
+    const summary = {
+      inputCount: result.inputCount,
+      excludedCount: result.excludedCount,
+      clusterCount: result.clusters.length,
+      pairCount: result.pairs.length,
+      edgeCount: result.edgeCount,
+    };
+    const artifacts = [
+      'keyword-clusters.csv',
+      'keyword-clusters.json',
+      'manifest.json',
+      'status.json',
+    ];
+    await writeTextAtomic(
       manifestPath,
       JSON.stringify({
         enrichmentId,
         sourceRunId,
         modules,
         config,
-        artifacts: ['keyword-clusters.csv', 'keyword-clusters.json', 'manifest.json'],
+        shortlist: shortlist ?? [],
+        artifacts,
+        summary,
         state: 'completed',
       }, null, 2) + '\n',
-      'utf8',
+      'enrichment manifest',
+    );
+    await writeTextAtomic(
+      statusPath,
+      JSON.stringify({
+        enrichmentId,
+        sourceRunId,
+        status: 'completed',
+        modules,
+        summary,
+        artifacts,
+      }, null, 2) + '\n',
+      'enrichment status',
     );
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
@@ -218,6 +255,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     };
   } catch (error) {
     if (error instanceof EnrichmentCancelledError) {
+      enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
       logger('Enrichment paused by user');
       return { kind: 'paused', enrichmentId, state: 'paused' };
@@ -284,21 +322,27 @@ async function runClustersModule(
     serpRowsByKeywordIdx.set(key, existing);
   }
 
-  const keywordsWithSerp = keywords.filter((kw) => {
+  let selectedKeywords = keywords;
+  if (shortlist && shortlist.length > 0) {
+    const shortlistSet = new Set(shortlist.map(normalizeKeyword));
+    const available = new Set(keywords.map((keyword) => keyword.normalizedKeyword));
+    const rejected = [...shortlistSet].filter((keyword) => !available.has(keyword));
+    if (rejected.length > 0) {
+      throw new Error(`Shortlist keywords not found in source run: ${rejected.join(', ')}`);
+    }
+    selectedKeywords = keywords.filter((keyword) => shortlistSet.has(keyword.normalizedKeyword));
+  }
+
+  const keywordsWithSerp = selectedKeywords.filter((kw) => {
     const rows = serpRowsByKeywordIdx.get(kw.keywordIdx);
     return rows && rows.length > 0;
   });
-  const keywordsWithoutSerp = keywords.filter((kw) => {
+  const keywordsWithoutSerp = selectedKeywords.filter((kw) => {
     const rows = serpRowsByKeywordIdx.get(kw.keywordIdx);
     return !rows || rows.length === 0;
   });
 
-  let inputs = buildClusteringInputs(keywordsWithSerp, serpRowsByKeywordIdx);
-
-  if (shortlist && shortlist.length > 0) {
-    const shortlistSet = new Set(shortlist.map((s) => normalizeForSerpLookup(s)));
-    inputs = inputs.filter((i) => shortlistSet.has(i.normalizedKeyword));
-  }
+  const inputs = buildClusteringInputs(keywordsWithSerp, serpRowsByKeywordIdx);
 
   checkCancellation(signal);
 
@@ -306,6 +350,10 @@ async function runClustersModule(
   logger(`Clustering ${inputs.length} keywords (${withSerp} with SERP, ${inputs.length - withSerp} excluded)`);
 
   const result = clusterKeywords(inputs, config);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  checkCancellation(signal);
+
+  result.inputCount += keywordsWithoutSerp.length;
   result.excludedCount += keywordsWithoutSerp.length;
   for (const kw of keywordsWithoutSerp) {
     result.exclusions.push({
@@ -344,6 +392,14 @@ async function runClustersModule(
   });
 
   return result;
+}
+
+function defaultClusteringConfig(): ClusteringConfig {
+  return {
+    topN: 10,
+    edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+    algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+  };
 }
 
 function checkCancellation(signal: CancellationSignal): void {

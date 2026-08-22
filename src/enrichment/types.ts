@@ -1,6 +1,16 @@
-export type EnrichmentModuleId = 'clusters';
+export const KNOWN_ENRICHMENT_MODULES = [
+  'clusters',
+  'pages',
+  'site_structure',
+  'query_suggestions',
+  'domain_age',
+  'page_backlinks',
+  'organic_snapshot',
+] as const;
 
-export const KNOWN_ENRICHMENT_MODULES: readonly EnrichmentModuleId[] = ['clusters'];
+export type EnrichmentModuleId = (typeof KNOWN_ENRICHMENT_MODULES)[number];
+
+export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters'] as const satisfies readonly EnrichmentModuleId[];
 
 export type EnrichmentItemStatus =
   | 'pending'
@@ -19,7 +29,12 @@ export type EnrichmentRunState =
 export type EnrichmentItemSource =
   | 'serp_overlap'
   | 'shortlist'
-  | 'config';
+  | 'config'
+  | 'http'
+  | 'google'
+  | 'rdap'
+  | 'first_seen'
+  | 'ahrefs';
 
 export type EnrichmentCacheStatus =
   | 'hit'
@@ -63,8 +78,16 @@ export type ClusteringConfig = {
   algorithmVersion: string;
 };
 
+type ReservedModuleConfig = Record<string, unknown>;
+
 export type EnrichmentModuleConfig = {
   clusters?: ClusteringConfig;
+  pages?: ReservedModuleConfig;
+  site_structure?: ReservedModuleConfig;
+  query_suggestions?: ReservedModuleConfig;
+  domain_age?: ReservedModuleConfig;
+  page_backlinks?: ReservedModuleConfig;
+  organic_snapshot?: ReservedModuleConfig;
 };
 
 export type EnrichmentRunRecord = {

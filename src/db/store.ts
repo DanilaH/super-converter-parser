@@ -930,6 +930,17 @@ export class RunStore {
       .run(state, new Date().toISOString(), error, enrichmentId);
   }
 
+  resetRunningEnrichmentItems(enrichmentId: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE enrichment_items
+         SET status = 'pending', updated_at = ?, fetched_at = NULL, error = NULL
+         WHERE enrichment_id = ? AND status = 'running'`,
+      )
+      .run(new Date().toISOString(), enrichmentId);
+    return result.changes;
+  }
+
   upsertEnrichmentItem(item: {
     enrichmentId: string;
     itemId: string;
@@ -1041,7 +1052,11 @@ export class RunStore {
        (enrichment_id, cluster_id, canonical_keyword, member_count, median_volume, average_volume, members, representative_domains, algorithm_version, config, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const deleteExisting = this.db.prepare(
+      'DELETE FROM keyword_clusters WHERE enrichment_id = ?',
+    );
     const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
       for (const c of clusters) {
         stmt.run(
           enrichmentId,
@@ -1098,10 +1113,6 @@ export class RunStore {
     }));
   }
 
-  openReadOnly(path: string): RunStore {
-    const db = new Database(path, { readonly: true });
-    return new RunStore(db);
-  }
 
   saveEnrichmentPairs(
     enrichmentId: string,
@@ -1120,7 +1131,11 @@ export class RunStore {
        (enrichment_id, keyword_a, keyword_b, intersection_count, union_count, jaccard, shared_domains, is_edge)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const deleteExisting = this.db.prepare(
+      'DELETE FROM enrichment_pairs WHERE enrichment_id = ?',
+    );
     const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
       for (const p of pairs) {
         stmt.run(
           enrichmentId,
@@ -1182,7 +1197,11 @@ export class RunStore {
        (enrichment_id, keyword, normalized_keyword, reason, serp_size)
        VALUES (?, ?, ?, ?, ?)`,
     );
+    const deleteExisting = this.db.prepare(
+      'DELETE FROM enrichment_exclusions WHERE enrichment_id = ?',
+    );
     const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
       for (const e of exclusions) {
         stmt.run(enrichmentId, e.keyword, e.normalizedKeyword, e.reason, e.serpSize);
       }

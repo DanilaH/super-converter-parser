@@ -170,3 +170,16 @@ test('median volume: even count averages middle two', () => {
   assert.equal(result.clusters[0]!.medianVolume, 150);
   assert.equal(result.clusters[0]!.averageVolume, 150);
 });
+
+test('large connected cluster uses bounded pair lookup', () => {
+  const inputs: ClusteringInput[] = Array.from({ length: 200 }, (_, index) => ({
+    keyword: `query ${String(index).padStart(3, '0')}`,
+    normalizedKeyword: `query ${String(index).padStart(3, '0')}`,
+    volume: index,
+    domains: ['a.com', 'b.com', 'c.com'],
+  }));
+  const result = clusterKeywords(inputs, DEFAULT_CONFIG);
+  assert.equal(result.clusters.length, 1);
+  assert.equal(result.pairs.length, 19_900);
+  assert.equal(result.clusters[0]?.memberCount, 200);
+});

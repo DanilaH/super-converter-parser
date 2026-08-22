@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory } from '../runs/run.js';
 import { loadConfig } from '../config/config.js';
-import { runEnrichment } from './engine.js';
+import { runEnrichment, type EnrichmentOptions } from './engine.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from './clustering.js';
 
 const CLUSTERING_CONFIG: ClusteringConfig = {
@@ -251,4 +251,123 @@ test('runEnrichment: fails when no completed keywords in source', async () => {
   sourceStore.close();
   enrichmentStore.close();
   await rm(enrichmentDir, { recursive: true, force: true });
+});
+
+test('runEnrichment: resume reuses the same run and completed module without duplicate rows', async () => {
+  const runId = 'resume-source';
+  const sourceStore = createTestSourceStore(runId);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-resume-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
+  const enrichmentId = 'resume-enrichment';
+  const options: EnrichmentOptions = {
+    enrichmentId,
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['clusters'],
+    config: { clusters: CLUSTERING_CONFIG },
+    logger: () => {},
+  };
+
+  const first = await runEnrichment(options);
+  assert.equal(first.kind, 'completed');
+  const pairCount = enrichmentStore.loadEnrichmentPairs(enrichmentId).length;
+  const clusterCount = enrichmentStore.loadKeywordClusters(enrichmentId).length;
+  enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
+
+  const resumed = await runEnrichment({ ...options, resume: true });
+  assert.equal(resumed.kind, 'completed');
+  assert.equal(enrichmentStore.loadEnrichmentPairs(enrichmentId).length, pairCount);
+  assert.equal(enrichmentStore.loadKeywordClusters(enrichmentId).length, clusterCount);
+  assert.equal(enrichmentStore.loadEnrichmentRun(enrichmentId)?.state, 'completed');
+
+  const artifact = JSON.parse(
+    await readFile(join(enrichmentDir, 'keyword-clusters.json'), 'utf8'),
+  ) as { sourceRunId: string; pairs: unknown[]; exclusions: unknown[]; inputCount: number };
+  assert.equal(artifact.sourceRunId, runId);
+  assert.equal(artifact.pairs.length, pairCount);
+  assert.ok(Array.isArray(artifact.exclusions));
+  assert.equal(artifact.inputCount, 2);
+  assert.equal(sourceStore.loadKeywords(runId).length, 2, 'borrowed source store remains open');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});
+
+test('runEnrichment: resume resets stale running items before pausing', async () => {
+  const runId = 'paused-source';
+  const sourceStore = createTestSourceStore(runId);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-paused-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
+  const enrichmentId = 'paused-enrichment';
+
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId,
+    sourceRunId: runId,
+    modules: ['clusters'],
+    config: JSON.stringify({ clusters: CLUSTERING_CONFIG }),
+    sourceRunDirectory: '/tmp/source',
+    enrichmentDirectory: enrichmentDir,
+    shortlistKeywords: [],
+  });
+  enrichmentStore.upsertEnrichmentItem({
+    enrichmentId,
+    itemId: 'clusters',
+    module: 'clusters',
+    status: 'running',
+    source: 'serp_overlap',
+    cacheStatus: 'none',
+  });
+
+  const outcome = await runEnrichment({
+    enrichmentId,
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['clusters'],
+    config: { clusters: CLUSTERING_CONFIG },
+    shortlist: [],
+    logger: () => {},
+    signal: { cancelled: true },
+    resume: true,
+  });
+
+  assert.equal(outcome.kind, 'paused');
+  assert.equal(enrichmentStore.loadEnrichmentRun(enrichmentId)?.state, 'paused');
+  assert.equal(enrichmentStore.loadEnrichmentItems(enrichmentId)[0]?.status, 'pending');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});
+
+test('runEnrichment: artifact publication failure leaves the run failed, not completed', async () => {
+  const runId = 'output-failure-source';
+  const sourceStore = createTestSourceStore(runId);
+  const tempDir = await mkdtemp(join(tmpdir(), 'enrichment-output-failure-'));
+  const blockedOutputPath = join(tempDir, 'not-a-directory');
+  await writeFile(blockedOutputPath, 'file');
+  const enrichmentStore = RunStore.open(join(tempDir, 'enrichment.sqlite'));
+  const enrichmentId = 'output-failure-enrichment';
+
+  const outcome = await runEnrichment({
+    enrichmentId,
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: blockedOutputPath,
+    modules: ['clusters'],
+    config: { clusters: CLUSTERING_CONFIG },
+    logger: () => {},
+  });
+
+  assert.equal(outcome.kind, 'failed');
+  assert.equal(enrichmentStore.loadEnrichmentRun(enrichmentId)?.state, 'failed');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  await rm(tempDir, { recursive: true, force: true });
 });
