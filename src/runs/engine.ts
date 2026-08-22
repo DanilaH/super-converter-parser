@@ -158,7 +158,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   let refreshKeywords = new Set(options.cache?.refreshKeywords ?? []);
 
   let run: StoredRun;
-  if (mode === 'fresh') {
+  // The CLI pre-creates fresh runs (before preflight) so a cancellation during
+  // preflight leaves a resumable run. Continue with the existing record instead
+  // of recreating it (which would collide on the run primary key).
+  const preCreated = mode === 'fresh' ? store.loadRun(runId) : null;
+  if (preCreated) {
+    store.markStaleRunningAsPending(runId);
+    store.setRunState(runId, 'running');
+    run = preCreated;
+  } else if (mode === 'fresh') {
     store.createRun({
       runId,
       configSnapshot: config,

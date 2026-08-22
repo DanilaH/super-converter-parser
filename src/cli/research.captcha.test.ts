@@ -158,3 +158,64 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
     process.chdir(previousCwd);
   }
 });
+
+test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'research-forcequit-'));
+  mkdirSync(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\n', 'utf8');
+  rmSync(join(directory, 'runs'), { recursive: true, force: true });
+
+  const depsCaptcha = {
+    connect: async () => fakeBrowser(fakePage(true)),
+    preflight: async () => undefined,
+    collect: async (
+      ctx: BrowserContext,
+      cfg: ResearchConfig,
+      record: KeywordRecord,
+      debugRoot: string,
+      signal: CancellationSignal,
+    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  const marker = join(directory, 'captcha-done.txt');
+  rmSync(marker, { force: true });
+  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
+  process.env.CAPTCHA_DONE_MARKER = marker;
+
+  // The captcha helper must not have installed its own SIGINT listener, so the
+  // CLI's single handler owns both pause (first Ctrl+C) and force-quit (second).
+  // The CLI force-quits by removing its handler and re-delivering a real SIGINT
+  // (process.kill(pid, 'SIGINT')). Spy on process.kill to prove that path runs.
+  const killCalls: Array<string | undefined> = [];
+  const realKill = process.kill;
+  (process as { kill: (pid: number, signal: string) => void }).kill = ((
+    _pid: number,
+    signal: string,
+  ) => {
+    killCalls.push(signal);
+  }) as (pid: number, signal: string) => void;
+
+  try {
+    const run = runCli(['--seeds', 'input/seeds.csv'], depsCaptcha, {
+      AHREFS_API_KEY: undefined,
+      EXPANSION_ENABLED: 'false',
+    } as unknown as NodeJS.ProcessEnv);
+    const t1 = setTimeout(() => process.emit('SIGINT'), 400);
+    const t2 = setTimeout(() => process.emit('SIGINT'), 600);
+    const code = await run;
+    clearTimeout(t1);
+    clearTimeout(t2);
+
+    // First Ctrl+C paused the run; the second Ctrl+C must reach the force-quit
+    // path (the CLI re-delivers a real SIGINT after dropping its own handler).
+    assert.ok(killCalls.includes('SIGINT'), 'second Ctrl+C must invoke force-quit (process.kill SIGINT)');
+    assert.equal(code, EXIT_PAUSED, 'the run must report the first Ctrl+C as a graceful pause');
+  } finally {
+    process.kill = realKill;
+    if (originalMarker === undefined) delete process.env.CAPTCHA_DONE_MARKER;
+    else process.env.CAPTCHA_DONE_MARKER = originalMarker;
+    process.chdir(previousCwd);
+  }
+});

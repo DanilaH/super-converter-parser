@@ -12,9 +12,11 @@ import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsof
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
-import { buildRunStatus } from '../runs/snapshots.js';
+import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
+import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { ResearchError } from '../shared/errors.js';
 import { CacheStore } from '../cache/store.js';
 import { keywordCacheIdentity } from '../cache/keys.js';
@@ -286,12 +288,12 @@ export async function runCli(
   let browser: Browser | null = null;
   let store: RunStore | null = null;
   let cacheStore: CacheStore | null = null;
+  let runId = '';
+  let runDirectory = '';
+  let debugRoot = '';
   try {
     const config = loadConfig(env);
 
-    let runId: string;
-    let runDirectory: string;
-    let debugRoot: string;
     let mode: 'fresh' | 'resume';
     let keywords: SeedKeyword[] | MicrosoftKeyword[] = [];
     let input: { kind: 'seeds' | 'microsoft'; path: string };
@@ -454,6 +456,23 @@ export async function runCli(
     // (force-quit).
     const signal: CancellationSignal = { isCancelled: () => pauseRequested };
 
+    // Fresh runs are initialized in the store up front so a cancellation during
+    // preflight still leaves a fully resumable run: its keywords are staged and
+    // the run record exists. executeRun detects the pre-created run and continues
+    // instead of recreating it, so --resume re-runs preflight and proceeds.
+    if (mode === 'fresh') {
+      store.createRun({
+        runId,
+        configSnapshot: runConfig,
+        parserVersions: { surfer: SURFER_PARSER_VERSION, google: GOOGLE_PARSER_VERSION },
+        input,
+        keywords,
+        forceRefresh: effective.forceRefresh,
+        refreshKeywords: [...refreshSet],
+      });
+      store.setRunState(runId, 'created');
+    }
+
     let context: BrowserContext | null = null;
     if (needsBrowser) {
       browser = await deps.connect(runConfig.browser.cdpUrl);
@@ -538,7 +557,18 @@ export async function runCli(
     console.error('Run failed:');
     if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
       // A cancellation that escaped the engine's collect wrapper (e.g. during
-      // preflight) is a graceful pause, not an internal failure.
+      // preflight) is a graceful pause, not an internal failure. Leave the run
+      // in a resumable state so --resume can continue from where it stopped.
+      if (store && runId) {
+        try {
+          store.setRunState(runId, 'paused');
+          // Publish consistent artifacts (status.json, manifest, CSVs) so the
+          // paused run is inspectable and resumable rather than an empty stub.
+          await writeSnapshots(store, runId, runDirectory, 'paused');
+        } catch {
+          /* best-effort; the run may not exist yet if cancelled before init */
+        }
+      }
       return EXIT_PAUSED;
     }
     if (error instanceof ResearchError) {
