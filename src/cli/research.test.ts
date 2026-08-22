@@ -210,6 +210,35 @@ test('resuming a terminal (completed) run is rejected with exit code 2', async (
   }
 });
 
+test('preflight failure exits 3 and does not start collection', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-preflight-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1', 'utf8');
+
+  let collectCalled = false;
+  const deps: CliDeps = {
+    connect: async () =>
+      ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
+    preflight: async () => {
+      throw new ResearchError('GOOGLE_UNAVAILABLE', 'Google not reachable from Research Chrome');
+    },
+    collect: async () => {
+      collectCalled = true;
+      return okResult({} as KeywordRecord);
+    },
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(['--seeds', 'input/seeds.csv'], deps, {} as NodeJS.ProcessEnv);
+    assert.equal(code, EXIT_PREFLIGHT);
+    assert.equal(collectCalled, false, 'collection must not start when preflight fails');
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 test('runCli rejects --seeds and --resume together', async () => {
   const code = await runCli(
     ['--seeds', 'a.csv', '--resume', 'run-1'],

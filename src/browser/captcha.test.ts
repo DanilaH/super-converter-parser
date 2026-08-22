@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import type { Page } from 'playwright-core';
 import { waitForManualCaptcha, pauseForManualCaptcha } from './captcha.js';
+import { ResearchError } from '../shared/errors.js';
 
 function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
   return {
@@ -22,7 +23,7 @@ test('waitForManualCaptcha throws CAPTCHA_REQUIRED when a captcha widget is pres
   const page = fakePage({ captchaVisible: true, bodyText: 'normal' });
   await assert.rejects(
     () => waitForManualCaptcha(page),
-    (error: unknown) => error instanceof Error && error.message.includes('CAPTCHA_REQUIRED'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED',
   );
 });
 
@@ -35,7 +36,7 @@ test('waitForManualCaptcha detects captcha by body text', async () => {
   const page = fakePage({ captchaVisible: false, bodyText: 'Please verify you are not a robot' });
   await assert.rejects(
     () => waitForManualCaptcha(page),
-    (error: unknown) => error instanceof Error && error.message.includes('CAPTCHA_REQUIRED'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED',
   );
 });
 

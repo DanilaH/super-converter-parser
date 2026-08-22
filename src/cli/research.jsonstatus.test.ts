@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
-import { runCli, EXIT_OK, type CliDeps } from './research.js';
+import { runCli, EXIT_OK, EXIT_PAUSED, type CliDeps } from './research.js';
 import type { Browser } from 'playwright-core';
 import type { KeywordRecord } from '../runs/run.js';
 import type { CollectionResult } from '../browser/collect.js';
@@ -23,6 +23,27 @@ function okResult(keyword: KeywordRecord): CollectionResult {
         geoWarning: false,
       },
       error: null,
+    },
+    serpRows: [],
+    debugArtifactPath: null,
+    related: { status: 'empty', error: null, rows: [] },
+  };
+}
+
+function failedResult(keyword: KeywordRecord): CollectionResult {
+  return {
+    record: {
+      ...keyword,
+      status: 'failed',
+      surfer: null,
+      google: {
+        hl: 'en',
+        gl: 'us',
+        pageUrl: 'https://google.com/search?q=x',
+        detectedLocation: null,
+        geoWarning: false,
+      },
+      error: { code: 'GOOGLE_SERP_PARSE_ERROR', message: 'organic block not found' },
     },
     serpRows: [],
     debugArtifactPath: null,
@@ -94,6 +115,78 @@ test('--json-status emits a single parseable JSON line pointing at real artifact
 
     const jsonLine = logLines.filter((line) => line.trim().startsWith('{')).pop()!;
     assert.equal(/\[[0-9;]*m/.test(jsonLine), false, 'JSON status line must not contain ANSI codes');
+  } finally {
+    console.log = originalLog;
+    process.chdir(previousCwd);
+  }
+});
+
+test('--json-status final line reports completed_with_errors when a keyword fails', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-json-errors-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\nk2', 'utf8');
+
+  const logLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logLines.push(args.map(String).join(' '));
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--json-status'],
+      {
+        connect: async () =>
+          ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
+        preflight: async () => undefined,
+        collect: async (_context, _config, record) =>
+          record.normalizedKeyword === 'k1' ? failedResult(record) : okResult(record),
+      },
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_OK, 'completed_with_errors still exits 0');
+
+    const status = parseLastJsonLine(logLines) as { status: string };
+    assert.equal(status.status, 'completed_with_errors', 'final JSON status must reflect the error');
+  } finally {
+    console.log = originalLog;
+    process.chdir(previousCwd);
+  }
+});
+
+test('--json-status final line reports paused when interrupted with Ctrl+C', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cli-json-paused-'));
+  await mkdir(join(directory, 'input'), { recursive: true });
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\nk2', 'utf8');
+
+  const logLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logLines.push(args.map(String).join(' '));
+  };
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    const code = await runCli(
+      ['--seeds', 'input/seeds.csv', '--json-status'],
+      {
+        connect: async () =>
+          ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
+        preflight: async () => undefined,
+        collect: async (_context, _config, record) => {
+          if (record.normalizedKeyword === 'k1') process.emit('SIGINT');
+          return okResult(record);
+        },
+      },
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_PAUSED, 'interrupted run exits 130');
+
+    const status = parseLastJsonLine(logLines) as { status: string };
+    assert.equal(status.status, 'paused', 'final JSON status must reflect the pause');
   } finally {
     console.log = originalLog;
     process.chdir(previousCwd);

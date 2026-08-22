@@ -60,7 +60,7 @@ test('geo mismatch surfaces in keywords.csv and report.md without false localiza
     const runDir = join(runsDir, runId);
 
     const keywordsCsv = await readFile(join(runDir, 'keywords.csv'), 'utf8');
-    assert.ok(keywordsCsv.includes('detected_location'), 'keywords.csv must expose detected_location');
+    assert.ok(keywordsCsv.includes('detected_google_location'), 'keywords.csv must expose detected_google_location');
     assert.ok(keywordsCsv.includes('geo_warning'), 'keywords.csv must expose geo_warning');
     assert.ok(keywordsCsv.includes('Moscow, Russia'), 'detected location must be persisted');
 
