@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
@@ -8,6 +9,37 @@ import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
+
+// Minimal .env loader: only sets variables not already present in process.env,
+// so explicit shell/env values always win. No dependency required.
+function loadDotEnv(): void {
+  const envPath = resolve(process.cwd(), '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    const content = readFileSync(envPath, 'utf8');
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eqIndex = line.indexOf('=');
+      if (eqIndex === -1) continue;
+      const key = line.slice(0, eqIndex).trim();
+      let value = line.slice(eqIndex + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (key && process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // Silently ignore unreadable .env; env vars and defaults still work.
+  }
+}
+
+loadDotEnv();
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
@@ -198,17 +230,11 @@ export function effectiveConfigForResume(
   // selector) come from the persisted snapshot so a resumed run reproduces the
   // original expansion behavior; operational settings (connection, timeouts,
   // retries, breaker) use the current env.
-  // A resume must not change the Ahrefs requirement: a run created with
-  // --require-ahrefs cannot be resumed without it (which would silently skip DR),
-  // and a run created without it cannot be resumed with it (which would fail
-  // mid-run because the earlier keywords have no DR). A persisted snapshot that
-  // predates this field (undefined) is treated as optional (false).
-  if ((current.ahrefs.requireAhrefs ?? false) !== (persisted.ahrefs.requireAhrefs ?? false)) {
-    throw new ResearchError(
-      'RESUME_REQUIRE_AHREFS_MISMATCH',
-      `Run "${runId}" persisted REQUIRE_AHREFS=${persisted.ahrefs.requireAhrefs} but the current value is ${current.ahrefs.requireAhrefs}. Resume with the same requirement to avoid silent DR skip or mid-run failure.`,
-    );
-  }
+  // Resume always restores the persisted requireAhrefs — the operator must not
+  // re-supply --require-ahrefs on resume. The persisted value is authoritative;
+  // this prevents silent DR skip (resuming a required run as optional) or mid-run
+  // failure (resuming an optional run as required when earlier keywords lack DR).
+  // A persisted snapshot that predates this field (undefined) defaults to optional.
   return {
     ...current,
     research: persisted.research,
@@ -241,7 +267,6 @@ function exitCodeForError(error: ResearchError): number {
     case 'RESUME_TERMINAL_RUN':
     case 'RESUME_PARSER_MISMATCH':
     case 'RESUME_CONFIG_MISMATCH':
-    case 'RESUME_REQUIRE_AHREFS_MISMATCH':
       return EXIT_INVALID_INPUT;
     case 'BROWSER_CONNECTION_ERROR':
     case 'SURFER_NOT_DETECTED':

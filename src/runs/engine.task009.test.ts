@@ -240,8 +240,11 @@ test('mixed ok / not_found / error outcomes are isolated, cached, and counted co
   assert.equal(outcome.ahrefs.discovered, 3, 'three unique domains discovered');
   assert.equal(outcome.ahrefs.numericCoverage, 1, 'only example.com has numeric DR');
   assert.equal(outcome.ahrefs.state, 'degraded', 'errors degrade the stage even in optional mode');
-  assert.equal(outcome.ahrefs.cache, 1, 'example.com for list comparison is served from cache');
+  // Cache/fresh are derived from persisted domains. example.com was first
+  // fetched as 'fresh' for the first keyword; subsequent cache hits do not
+  // change the persisted source, so it stays 'fresh'.
   assert.equal(outcome.ahrefs.fresh, 3, 'three fresh lookups: example.com, error.com, other.com');
+  assert.equal(outcome.ahrefs.cache, 0, 'no domain changed from fresh to cache in persistence');
 
   const domains = store.loadDomains(runId);
   assert.equal(domains.length, 3);

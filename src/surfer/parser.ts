@@ -4,10 +4,9 @@ import { normalizeKeyword } from '../input/seeds/normalize.js';
 
 // Bounded wait for the related-keywords widget to mount. If the widget is
 // genuinely absent (e.g. copied Surfer profiles where the sidebar never
-// renders), we fast-fail after this many milliseconds rather than blocking
-// the full readSurferRelated waitMs (default 60s). 5s is enough for any
-// legitimate lazy render and short enough to keep runs moving.
-const MISSING_WIDGET_TIMEOUT_MS = 5000;
+// renders), we fast-fail after missingWidgetTimeoutMs (default 5s, configured
+// via config.browser.surferRelatedMissingWidgetTimeoutMs) rather than blocking
+// the full readSurferRelated waitMs (default 60s).
 
 export type SurferResult = {
   volume: number | null;
@@ -182,6 +181,7 @@ export async function readSurferRelated(
   page: Page,
   widgetSelector: string,
   waitMs: number,
+  missingWidgetTimeoutMs: number = 5000,
 ): Promise<SurferRelatedKeyword[] | null> {
   const deadline = Date.now() + waitMs;
   let lastSnapshot: RelatedDomSnapshot = { state: 'widget_missing' };
@@ -191,7 +191,7 @@ export async function readSurferRelated(
   // renders), fast-fail after a shorter widget-missing threshold. This is a
   // bounded wait (default 5s), not an arbitrary 1s, and is configurable via
   // SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS.
-  const missingWidgetDeadline = Date.now() + MISSING_WIDGET_TIMEOUT_MS;
+  const missingWidgetDeadline = Date.now() + missingWidgetTimeoutMs;
 
   while (Date.now() <= deadline) {
     const snapshot = await extractRelatedRows(page, widgetSelector).catch(() => undefined);

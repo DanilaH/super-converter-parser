@@ -15,6 +15,7 @@ export type ResearchConfig = {
     surferPreflightTimeoutMs: number;
     surferWidgetSelector: string;
     surferRelatedWidgetSelector: string;
+    surferRelatedMissingWidgetTimeoutMs: number;
   };
   retry: {
     maxAttempts: number;
@@ -80,6 +81,7 @@ const DEFAULTS: ResearchConfig = {
     surferPreflightTimeoutMs: 60_000,
       surferWidgetSelector: SURFER_MARKERS.mainWidget,
       surferRelatedWidgetSelector: SURFER_MARKERS.relatedWidget,
+      surferRelatedMissingWidgetTimeoutMs: 5000,
   },
   retry: {
     maxAttempts: 3,
@@ -304,6 +306,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       surferRelatedWidgetSelector: (
         env.SURFER_RELATED_WIDGET_SELECTOR ?? DEFAULTS.browser.surferRelatedWidgetSelector
       ).trim(),
+      surferRelatedMissingWidgetTimeoutMs: readPositiveNumber(
+        'SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS',
+        env.SURFER_RELATED_MISSING_WIDGET_TIMEOUT_MS,
+        DEFAULTS.browser.surferRelatedMissingWidgetTimeoutMs,
+      ),
     },
     retry,
     circuitBreaker,

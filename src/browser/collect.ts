@@ -128,6 +128,7 @@ export async function collectKeyword(
           page,
           config.browser.surferRelatedWidgetSelector,
           config.browser.surferWaitTimeoutMs,
+          config.browser.surferRelatedMissingWidgetTimeoutMs,
         );
         // null means the related widget was genuinely absent (fast-failed after
         // ~1s) — classify as 'error', never as 'empty'. Only a present widget with
@@ -306,6 +307,7 @@ export async function collectRelatedKeyword(
         page,
         config.browser.surferRelatedWidgetSelector,
         config.browser.surferWaitTimeoutMs,
+        config.browser.surferRelatedMissingWidgetTimeoutMs,
       );
       // null = widget genuinely absent → 'error', never 'empty'.
       return {

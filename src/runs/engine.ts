@@ -649,7 +649,7 @@ class AhrefsTracker {
   private freshCount = 0;
   private readonly numericDomains = new Set<string>();
   private systemicFailure: string | null = null;
-  private firstLookupObserved = false;
+  private hasSuccessfulLookup = false;
 
   constructor(
     private readonly ahrefs: AhrefsClient | null,
@@ -658,6 +658,31 @@ class AhrefsTracker {
 
   get mode(): 'required' | 'optional' {
     return this.requireAhrefs ? 'required' : 'optional';
+  }
+
+  markSuccessfulLookup(): void {
+    this.hasSuccessfulLookup = true;
+  }
+
+  get systemicFailed(): boolean {
+    return this.systemicFailure !== null;
+  }
+
+  stopAllDomains(serpRows: SerpResult[], errorCode: string, now: string): void {
+    // Global stop: a systemic auth failure means the key is unusable. Mark every
+    // remaining domain in-flight as a terminal systemic error so the domains table
+    // has explicit statuses (not silent not_attempted) and the stage is failed.
+    for (const row of serpRows) {
+      const domain = row.registrableDomain;
+      if (!domain) continue;
+      if (row.drStatus === 'ok' || row.drStatus === 'not_found' || row.drStatus === 'error') {
+        continue;
+      }
+      row.dr = null;
+      row.drStatus = 'error';
+      row.drError = errorCode;
+      this.discovered.add(domain);
+    }
   }
 
   registerDomain(domain: string): void {
@@ -669,9 +694,10 @@ class AhrefsTracker {
     else if (source === 'fresh') this.freshCount += 1;
     // Track unique domains with numeric DR for the summary; terminal status
     // counts (ok/not_found/error) are derived from persisted domains in finish()
-    // so they survive resume.
+    // so they survive resume. A successful lookup clears systemic eligibility.
     if (status === 'ok' && dr !== null && domain) {
       this.numericDomains.add(domain);
+      this.markSuccessfulLookup();
     }
   }
 
@@ -704,7 +730,11 @@ class AhrefsTracker {
     let notFound = 0;
     let error = 0;
     let numericCoverage = 0;
+    let cacheCount = 0;
+    let freshCount = 0;
     for (const domain of persistedDomains) {
+      if (domain.source === 'cache') cacheCount += 1;
+      else if (domain.source === 'fresh') freshCount += 1;
       if (domain.status === 'ok') {
         ok += 1;
         if (domain.dr !== null) numericCoverage += 1;
@@ -739,8 +769,8 @@ class AhrefsTracker {
       discovered,
       attempted,
       notAttempted,
-      cache: this.cacheCount,
-      fresh: this.freshCount,
+      cache: cacheCount,
+      fresh: freshCount,
       ok,
       notFound,
       error,
@@ -954,7 +984,7 @@ export async function applyDomainRatings(params: {
       continue;
     }
 
-    tracker?.observeLookup();
+    tracker?.markSuccessfulLookup();
     try {
       const rating = await ahrefs(domain);
       const ttl =
@@ -979,15 +1009,13 @@ export async function applyDomainRatings(params: {
       tracker?.recordLookup('fresh', rating.status, rating.dr, domain);
     } catch (error) {
       const code = error instanceof ResearchError ? error.code : 'AHREFS_ERROR';
-      // A thrown 401/403 on the first real lookup is a systemic auth failure,
-      // not an isolated domain error. Classify by explicit httpStatus, never by
-      // regex on the message (which can false-positive on unrelated text). Record
-      // it so the stage is marked failed and no doomed fan-out occurs.
-      if (!tracker?.hasObservedLookup() && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
+      // Systemic auth failure: a 401/403 before any successful lookup means the
+      // key is unusable. Stop the entire DR stage and mark every remaining domain
+      // with an explicit systemic error status.
+      if (!tracker?.hasSuccessfulLookup && error instanceof ResearchError && (error.httpStatus === 401 || error.httpStatus === 403)) {
         tracker?.recordSystemicFailure(code);
-        // Systemic auth failure: stop the DR stage entirely. Do not fan out doomed
-        // requests for the remaining domains — the key is unusable.
-        logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopping DR stage.`);
+        tracker?.stopAllDomains(serpRows, code, new Date(now()).toISOString());
+        logger(`  ✗ Ahrefs systemic auth failure (${error.httpStatus}) on ${domain}. Stopped DR stage for all remaining domains.`);
         break;
       }
       logger(`  ⚠ Ahrefs DR lookup failed for ${domain}: ${code}${error instanceof ResearchError && error.httpStatus ? ` (${error.httpStatus})` : ''}`);
