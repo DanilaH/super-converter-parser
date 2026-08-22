@@ -1,37 +1,64 @@
-import type { RunStore } from '../db/store.js';
+import { existsSync } from 'node:fs';
+import { RunStore } from '../db/store.js';
 import type { SerpResult } from '../google/serp.js';
-import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
-import type { EnrichmentRunState } from './types.js';
+import { clusterKeywords, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
+import type {
+  EnrichmentItemSource,
+  EnrichmentModuleConfig,
+  EnrichmentModuleId,
+  EnrichmentRunState,
+  EnrichmentCacheStatus,
+} from './types.js';
 
 export type EnrichmentLogger = (line: string) => void;
 
+export type CancellationSignal = {
+  readonly cancelled: boolean;
+};
+
+export const NEVER_CANCELLED: CancellationSignal = { cancelled: false };
+
 export type EnrichmentOptions = {
   enrichmentId: string;
-  sourceStore: RunStore;
   sourceRunId: string;
-  sourceRunDirectory: string;
+  sourceStoreOrPath: RunStore | string;
   enrichmentStore: RunStore;
   enrichmentDirectory: string;
-  modules: string[];
-  config: ClusteringConfig;
+  modules: EnrichmentModuleId[];
+  shortlist?: string[];
+  config: EnrichmentModuleConfig;
   logger: EnrichmentLogger;
+  signal?: CancellationSignal;
 };
 
 export type EnrichmentOutcome = {
-  kind: 'completed' | 'failed';
+  kind: 'completed' | 'paused' | 'failed';
   enrichmentId: string;
   state: EnrichmentRunState;
-  result: ClusteringResult;
+  result?: ClusteringResult;
   error?: string;
 };
 
+type SourceConnection = {
+  store: RunStore;
+};
+
+function openSourceReadOnly(sourceRunId: string, explicitPath?: string): SourceConnection {
+  const path = explicitPath ?? `runs/${sourceRunId}/run.sqlite`;
+  if (!existsSync(path)) {
+    throw new Error(`Source run not found: ${sourceRunId} (missing ${path})`);
+  }
+  const store = RunStore.openReadOnly(path);
+  return { store };
+}
+
 function buildClusteringInputs(
   keywords: Array<{ keyword: string; normalizedKeyword: string; volume: number | null }>,
-  serpRowsByKeyword: Map<string, SerpResult[]>,
+  serpRowsByNormalizedKeyword: Map<string, SerpResult[]>,
 ): ClusteringInput[] {
   const inputs: ClusteringInput[] = [];
   for (const kw of keywords) {
-    const rows = serpRowsByKeyword.get(kw.normalizedKeyword) ?? [];
+    const rows = serpRowsByNormalizedKeyword.get(kw.normalizedKeyword) ?? [];
     const domains = [...new Set(rows
       .filter((r) => r.resultType === 'organic')
       .sort((a, b) => a.position - b.position)
@@ -50,24 +77,39 @@ function buildClusteringInputs(
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
   const {
     enrichmentId,
-    sourceStore,
     sourceRunId,
-    sourceRunDirectory,
+    sourceStoreOrPath,
     enrichmentStore,
     enrichmentDirectory,
     modules,
+    shortlist,
     config,
     logger,
+    signal = NEVER_CANCELLED,
   } = options;
 
+  let sourceConn: SourceConnection | undefined;
+
   try {
+    if (typeof sourceStoreOrPath === 'string') {
+      sourceConn = openSourceReadOnly(sourceRunId, sourceStoreOrPath);
+    } else {
+      sourceConn = { store: sourceStoreOrPath };
+    }
+
+    if (signal.cancelled) {
+      enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
+      return { kind: 'paused', enrichmentId, state: 'paused' };
+    }
+
     enrichmentStore.createEnrichmentRun({
       enrichmentId,
       sourceRunId,
       modules,
       config: JSON.stringify(config),
-      sourceRunDirectory,
+      sourceRunDirectory: `runs/${sourceRunId}`,
       enrichmentDirectory,
+      shortlistKeywords: shortlist ?? [],
     });
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'running');
@@ -77,25 +119,34 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     let result: ClusteringResult | undefined;
     if (modules.includes('clusters')) {
-      result = await runClustersModule(enrichmentId, sourceStore, sourceRunId, config, enrichmentStore, logger);
+      result = await runClustersModule(
+        enrichmentId,
+        sourceConn.store,
+        sourceRunId,
+        config.clusters ?? { topN: 10, edgeRule: { minSharedDomains: 3, minJaccard: 0.3 }, algorithmVersion: '1.0.0' },
+        enrichmentStore,
+        shortlist,
+        logger,
+        signal,
+      );
+      if (signal.cancelled) {
+        enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
+        return { kind: 'paused', enrichmentId, state: 'paused' };
+      }
+    }
+
+    if (!result) {
+      throw new Error('No modules executed');
     }
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
-    logger(`Enrichment completed: ${result ? `${result.clusters.length} clusters from ${result.inputCount} keywords` : 'no modules executed'}`);
+    logger(`Enrichment completed: ${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`);
 
-    if (result) {
-      return {
-        kind: 'completed',
-        enrichmentId,
-        state: 'completed',
-        result,
-      };
-    }
     return {
       kind: 'completed',
       enrichmentId,
       state: 'completed',
-      result: { clusters: [], config, algorithmVersion: CLUSTERING_ALGORITHM_VERSION, inputCount: 0, excludedCount: 0, pairCount: 0 },
+      result,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -105,9 +156,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       kind: 'failed',
       enrichmentId,
       state: 'failed',
-      result: { clusters: [], config, algorithmVersion: CLUSTERING_ALGORITHM_VERSION, inputCount: 0, excludedCount: 0, pairCount: 0 },
       error: message,
     };
+  } finally {
+    sourceConn?.store.close();
   }
 }
 
@@ -117,15 +169,34 @@ async function runClustersModule(
   sourceRunId: string,
   config: ClusteringConfig,
   enrichmentStore: RunStore,
+  shortlist: string[] | undefined,
   logger: EnrichmentLogger,
+  signal: CancellationSignal,
 ): Promise<ClusteringResult> {
+  const source = 'serp_overlap' as EnrichmentItemSource;
+  const cacheStatus = 'none' as EnrichmentCacheStatus;
+
   enrichmentStore.upsertEnrichmentItem({
     enrichmentId,
     itemId: 'clusters',
     module: 'clusters',
     status: 'running',
-    source: 'serp_overlap',
+    source,
+    cacheStatus,
   });
+
+  if (signal.cancelled) {
+    enrichmentStore.upsertEnrichmentItem({
+      enrichmentId,
+      itemId: 'clusters',
+      module: 'clusters',
+      status: 'error',
+      source,
+      cacheStatus,
+      error: 'Cancelled',
+    });
+    throw new Error('Cancelled');
+  }
 
   const keywords = sourceStore.loadKeywords(sourceRunId)
     .filter((k) => k.status === 'completed' || k.status === 'partial')
@@ -136,18 +207,37 @@ async function runClustersModule(
     }));
 
   if (keywords.length === 0) {
-    throw new Error('No completed keywords with SERP data found in source run');
+    throw new Error(`No completed keywords with SERP data found in source run (got ${keywords.length} keywords from ${sourceRunId})`);
   }
 
   const serpRows = sourceStore.loadSerpRows(sourceRunId);
-  const serpRowsByKeyword = new Map<string, SerpResult[]>();
+  const serpRowsByNormalizedKeyword = new Map<string, SerpResult[]>();
   for (const row of serpRows) {
-    const existing = serpRowsByKeyword.get(row.keyword) ?? [];
+    const existing = serpRowsByNormalizedKeyword.get(row.keyword) ?? [];
     existing.push(row);
-    serpRowsByKeyword.set(row.keyword, existing);
+    serpRowsByNormalizedKeyword.set(row.keyword, existing);
   }
 
-  const inputs = buildClusteringInputs(keywords, serpRowsByKeyword);
+  let inputs = buildClusteringInputs(keywords, serpRowsByNormalizedKeyword);
+
+  if (shortlist && shortlist.length > 0) {
+    const shortlistSet = new Set(shortlist.map((s) => s.trim().toLowerCase()));
+    inputs = inputs.filter((i) => shortlistSet.has(i.normalizedKeyword));
+  }
+
+  if (signal.cancelled) {
+    enrichmentStore.upsertEnrichmentItem({
+      enrichmentId,
+      itemId: 'clusters',
+      module: 'clusters',
+      status: 'error',
+      source,
+      cacheStatus,
+      error: 'Cancelled',
+    });
+    throw new Error('Cancelled');
+  }
+
   const withSerp = inputs.filter((i) => i.domains.length > 0).length;
   logger(`Clustering ${inputs.length} keywords (${withSerp} with SERP, ${inputs.length - withSerp} excluded)`);
 
@@ -167,12 +257,17 @@ async function runClustersModule(
     })),
   );
 
+  enrichmentStore.saveEnrichmentPairs(enrichmentId, result.pairs);
+  enrichmentStore.saveEnrichmentExclusions(enrichmentId, result.exclusions);
+
   enrichmentStore.upsertEnrichmentItem({
     enrichmentId,
     itemId: 'clusters',
     module: 'clusters',
     status: 'completed',
-    source: 'serp_overlap',
+    source,
+    cacheStatus,
+    fetchedAt: new Date().toISOString(),
   });
 
   return result;

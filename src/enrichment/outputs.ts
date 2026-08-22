@@ -1,4 +1,5 @@
 import { writeTextAtomic } from '../runs/run.js';
+import { renderCsv } from '../exports/csv.js';
 import type { KeywordCluster } from './types.js';
 
 export type ClusterOutputOptions = {
@@ -12,13 +13,6 @@ export type ClusterOutputOptions = {
   };
 };
 
-function escapeCsvField(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
 export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordCluster[]): Promise<void> {
   const header = [
     'cluster_id',
@@ -29,19 +23,19 @@ export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordClu
     'average_volume',
     'representative_domains',
   ];
-  const lines = [header.join(',')];
+  const rows: string[][] = [header];
   for (const cluster of clusters) {
-    lines.push([
-      escapeCsvField(cluster.clusterId),
-      escapeCsvField(cluster.canonicalKeyword),
+    rows.push([
+      cluster.clusterId,
+      cluster.canonicalKeyword,
       String(cluster.memberCount),
-      escapeCsvField(cluster.members.map((m) => m.keyword).join('; ')),
+      cluster.members.map((m) => m.keyword).join('; '),
       cluster.medianVolume !== null ? String(cluster.medianVolume) : '',
       cluster.averageVolume !== null ? cluster.averageVolume.toFixed(2) : '',
-      escapeCsvField(cluster.representativeDomains.join('; ')),
-    ].join(','));
+      cluster.representativeDomains.join('; '),
+    ]);
   }
-  return writeTextAtomic(outputPath, lines.join('\n') + '\n', 'keyword-clusters.csv');
+  return writeFileAtomic(outputPath, renderCsv(rows), 'keyword-clusters.csv');
 }
 
 export function writeKeywordClustersJson(
@@ -64,5 +58,9 @@ export function writeKeywordClustersJson(
       representativeDomains: c.representativeDomains,
     })),
   };
-  return writeTextAtomic(outputPath, JSON.stringify(payload, null, 2) + '\n', 'keyword-clusters.json');
+  return writeFileAtomic(outputPath, JSON.stringify(payload, null, 2) + '\n', 'keyword-clusters.json');
+}
+
+async function writeFileAtomic(path: string, content: string, description: string): Promise<void> {
+  await writeTextAtomic(path, content, description);
 }

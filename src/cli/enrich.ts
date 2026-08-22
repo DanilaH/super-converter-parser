@@ -1,12 +1,13 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadConfig, type ResearchConfig } from '../config/config.js';
+import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment, type EnrichmentLogger } from '../enrichment/engine.js';
+import { runEnrichment, NEVER_CANCELLED, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson } from '../enrichment/outputs.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
+import { KNOWN_ENRICHMENT_MODULES, type EnrichmentModuleId } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 
 function loadDotEnv(): void {
@@ -41,25 +42,27 @@ loadDotEnv();
 const EXIT_OK = 0;
 const EXIT_INTERNAL = 1;
 const EXIT_INVALID_INPUT = 2;
+const EXIT_PAUSED = 130;
 
 interface ParsedArgs {
-  mode: 'enrich';
   sourceRunId: string;
   resumeEnrichmentId: string;
-  modules: string[];
+  modules: EnrichmentModuleId[];
   topN: number;
   minShared: number;
   minJaccard: number;
+  shortlist: string[];
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = [...argv];
   let sourceRunId = '';
   let resumeEnrichmentId = '';
-  const modules: string[] = ['clusters'];
+  let modules: EnrichmentModuleId[] = ['clusters'];
   let topN = 10;
   let minShared = 3;
   let minJaccard = 0.3;
+  let shortlist: string[] = [];
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -70,7 +73,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === '--modules') {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--modules requires a value');
-      modules.splice(0, modules.length, ...value.split(',').map((m) => m.trim()).filter(Boolean));
+      const parsed = value.split(',').map((m) => m.trim()).filter(Boolean);
+      for (const m of parsed) {
+        if (!KNOWN_ENRICHMENT_MODULES.includes(m as EnrichmentModuleId)) {
+          throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown module: ${m}. Known: ${KNOWN_ENRICHMENT_MODULES.join(', ')}`);
+        }
+      }
+      modules = parsed as EnrichmentModuleId[];
     } else if (arg === '--top-n') {
       const value = args.shift();
       if (!value || Number.isNaN(Number(value))) {
@@ -89,12 +98,29 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-jaccard requires a numeric value');
       }
       minJaccard = Number(value);
+    } else if (arg === '--shortlist') {
+      const value = args.shift();
+      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist requires a value');
+      shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
   }
 
-  return { mode: 'enrich', sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard };
+  if (topN <= 0) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--top-n must be > 0, got ${topN}`);
+  }
+  if (minShared <= 0) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared must be > 0, got ${minShared}`);
+  }
+  if (minShared > topN) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared (${minShared}) cannot exceed --top-n (${topN})`);
+  }
+  if (minJaccard < 0 || minJaccard > 1) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
+  }
+
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist };
 }
 
 function findSourceRunDirectory(sourceRunId: string): string {
@@ -110,6 +136,18 @@ function findSourceRunDirectory(sourceRunId: string): string {
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
+  let sourceStore: RunStore | undefined;
+  const signal: CancellationSignal = { cancelled: false };
+
+  const sigintHandler = (): void => {
+    if (signal.cancelled) {
+      process.exit(EXIT_PAUSED);
+    }
+    (signal as { cancelled: boolean }).cancelled = true;
+    console.log('');
+    console.log('Stopping gracefully... solving.');
+  };
+  process.on('SIGINT', sigintHandler);
 
   try {
     const args = parseArgs(process.argv.slice(2));
@@ -122,9 +160,9 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run <source-run-id> is required');
     }
 
-    const config = loadConfig(process.env);
+    loadConfig(process.env);
     const sourceRunDirectory = findSourceRunDirectory(args.sourceRunId);
-    const sourceStore = RunStore.open(resolve(sourceRunDirectory, 'run.sqlite'));
+    const sourceStorePath = resolve(sourceRunDirectory, 'run.sqlite');
 
     const enrichmentId = createRunId();
     const enrichmentDirectory = resolve(process.cwd(), 'enrichments', enrichmentId);
@@ -150,17 +188,22 @@ async function main(): Promise<void> {
 
     const outcome = await runEnrichment({
       enrichmentId,
-      sourceStore,
+      sourceStoreOrPath: sourceStorePath,
       sourceRunId: args.sourceRunId,
-      sourceRunDirectory,
       enrichmentStore: store,
       enrichmentDirectory,
       modules: args.modules,
-      config: clusteringConfig,
+      shortlist: args.shortlist,
+      config: { clusters: clusteringConfig },
       logger,
+      signal,
     });
 
-    if (outcome.kind === 'completed' && outcome.result) {
+    if (outcome.kind === 'paused') {
+      console.log('Run paused. Resume with:');
+      console.log(`  npm run enrich -- --resume ${enrichmentId}`);
+      exitCode = EXIT_PAUSED;
+    } else if (outcome.kind === 'completed' && outcome.result) {
       const clusters = outcome.result.clusters;
       const csvPath = resolve(enrichmentDirectory, 'keyword-clusters.csv');
       const jsonPath = resolve(enrichmentDirectory, 'keyword-clusters.json');
@@ -186,9 +229,6 @@ async function main(): Promise<void> {
       console.error(`Enrichment failed: ${outcome.error}`);
       exitCode = EXIT_INTERNAL;
     }
-
-    sourceStore.close();
-    store.close();
   } catch (error) {
     if (error instanceof ResearchError) {
       console.error(`Error: ${error.message}`);
@@ -203,6 +243,8 @@ async function main(): Promise<void> {
     }
   } finally {
     store?.close();
+    sourceStore?.close();
+    process.off('SIGINT', sigintHandler);
   }
 
   process.exit(exitCode);

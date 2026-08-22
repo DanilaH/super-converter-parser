@@ -30,7 +30,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -192,6 +192,32 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (enrichment_id, cluster_id)
   );
   `,
+  // v9: complete enrichment contract — fetched_at/cache_status on items,
+  // shortlist snapshot on runs, pairwise comparison and exclusion tables.
+  // Note: ALTER TABLE ADD COLUMN IF NOT EXISTS is not supported in this SQLite build;
+  // columns are added via addColumnIfMissingLocal in migrate().
+  `
+  CREATE TABLE IF NOT EXISTS enrichment_pairs (
+    enrichment_id TEXT NOT NULL,
+    keyword_a TEXT NOT NULL,
+    keyword_b TEXT NOT NULL,
+    intersection_count INTEGER NOT NULL,
+    union_count INTEGER NOT NULL,
+    jaccard REAL NOT NULL,
+    shared_domains TEXT NOT NULL,
+    is_edge INTEGER NOT NULL,
+    PRIMARY KEY (enrichment_id, keyword_a, keyword_b)
+  );
+
+  CREATE TABLE IF NOT EXISTS enrichment_exclusions (
+    enrichment_id TEXT NOT NULL,
+    keyword TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    serp_size INTEGER NOT NULL,
+    PRIMARY KEY (enrichment_id, keyword)
+  );
+  `,
 ];
 
 export type StoredRun = {
@@ -317,6 +343,11 @@ export class RunStore {
     return store;
   }
 
+  static openReadOnly(path: string): RunStore {
+    const db = new Database(path, { readonly: true });
+    return new RunStore(db);
+  }
+
   private migrate(): void {
     const current = this.db.pragma('user_version', { simple: true }) as number;
     if (current > MIGRATIONS.length) {
@@ -341,18 +372,48 @@ export class RunStore {
         );
       }
     }
-    // v3/v4/v7 columns are now part of the CREATE TABLE for fresh databases,
-    // but existing databases (user_version < 7) may still be missing them.
-    // addColumnIfMissing is idempotent and safe to run after migrations.
-    const _serpDynamic: Array<[string, string]> = [
+    // v3/v4/v7/v9 columns are now part of the CREATE TABLE for fresh databases,
+    // but existing databases may still be missing them.
+    // addColumnIfMissingLocal is idempotent and safe to run after migrations.
+    const serpDynamic: Array<[string, string]> = [
       ['registrable_domain', "TEXT NOT NULL DEFAULT ''"],
       ['dr', 'REAL'],
       ['dr_status', 'TEXT'],
       ['dr_error', 'TEXT'],
     ];
-    for (const [column, definition] of _serpDynamic) {
+    for (const [column, definition] of serpDynamic) {
       addColumnIfMissingLocal(this.db, 'serp_rows', column, definition);
     }
+    const enrichmentItemDynamic: Array<[string, string]> = [
+      ['fetched_at', 'TEXT'],
+      ['cache_status', "TEXT NOT NULL DEFAULT 'none'"],
+    ];
+    for (const [column, definition] of enrichmentItemDynamic) {
+      addColumnIfMissingLocal(this.db, 'enrichment_items', column, definition);
+    }
+    addColumnIfMissingLocal(this.db, 'enrichment_runs', 'shortlist_keywords', "TEXT NOT NULL DEFAULT '[]'");
+    // Ensure v9 tables exist for databases created before v9.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS enrichment_pairs (
+        enrichment_id TEXT NOT NULL,
+        keyword_a TEXT NOT NULL,
+        keyword_b TEXT NOT NULL,
+        intersection_count INTEGER NOT NULL,
+        union_count INTEGER NOT NULL,
+        jaccard REAL NOT NULL,
+        shared_domains TEXT NOT NULL,
+        is_edge INTEGER NOT NULL,
+        PRIMARY KEY (enrichment_id, keyword_a, keyword_b)
+      );
+      CREATE TABLE IF NOT EXISTS enrichment_exclusions (
+        enrichment_id TEXT NOT NULL,
+        keyword TEXT NOT NULL,
+        normalized_keyword TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        serp_size INTEGER NOT NULL,
+        PRIMARY KEY (enrichment_id, keyword)
+      );
+    `);
   }
 
   get version(): number {
@@ -838,13 +899,14 @@ export class RunStore {
     config: string;
     sourceRunDirectory: string;
     enrichmentDirectory: string;
+    shortlistKeywords?: string[];
   }): void {
     const now = new Date().toISOString();
     this.db
       .prepare(
         `INSERT INTO enrichment_runs
-         (enrichment_id, source_run_id, state, created_at, updated_at, modules, config, source_run_directory, enrichment_directory, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (enrichment_id, source_run_id, state, created_at, updated_at, modules, config, source_run_directory, enrichment_directory, shortlist_keywords, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.enrichmentId,
@@ -856,40 +918,9 @@ export class RunStore {
         record.config,
         record.sourceRunDirectory,
         record.enrichmentDirectory,
+        JSON.stringify(record.shortlistKeywords ?? []),
         null,
       );
-  }
-
-  loadEnrichmentRun(enrichmentId: string): EnrichmentRunRecord | null {
-    const row = this.db
-      .prepare('SELECT * FROM enrichment_runs WHERE enrichment_id = ?')
-      .get(enrichmentId) as
-      | {
-          enrichment_id: string;
-          source_run_id: string;
-          state: string;
-          created_at: string;
-          updated_at: string;
-          modules: string;
-          config: string;
-          source_run_directory: string;
-          enrichment_directory: string;
-          error: string | null;
-        }
-      | undefined;
-    if (!row) return null;
-    return {
-      enrichmentId: row.enrichment_id,
-      sourceRunId: row.source_run_id,
-      state: row.state as EnrichmentRunRecord['state'],
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      modules: JSON.parse(row.modules) as EnrichmentModuleId[],
-      config: JSON.parse(row.config) as ClusteringConfig,
-      sourceRunDirectory: row.source_run_directory,
-      enrichmentDirectory: row.enrichment_directory,
-      error: row.error,
-    };
   }
 
   setEnrichmentState(enrichmentId: string, state: string, error: string | null = null): void {
@@ -905,6 +936,8 @@ export class RunStore {
     status: string;
     source: string;
     requestCount?: number;
+    fetchedAt?: string | null;
+    cacheStatus?: string;
     error?: string | null;
     payload?: string | null;
   }): void {
@@ -916,13 +949,15 @@ export class RunStore {
       this.db
         .prepare(
           `UPDATE enrichment_items
-           SET status = ?, updated_at = ?, request_count = ?, error = ?, payload = ?
+           SET status = ?, updated_at = ?, request_count = ?, fetched_at = ?, cache_status = ?, error = ?, payload = ?
            WHERE enrichment_id = ? AND item_id = ? AND module = ?`,
         )
         .run(
           item.status,
           now,
           item.requestCount ?? existing.request_count,
+          item.fetchedAt ?? null,
+          item.cacheStatus ?? 'none',
           item.error ?? null,
           item.payload ?? null,
           item.enrichmentId,
@@ -933,8 +968,8 @@ export class RunStore {
       this.db
         .prepare(
           `INSERT INTO enrichment_items
-           (enrichment_id, item_id, module, status, source, created_at, updated_at, request_count, error, payload)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (enrichment_id, item_id, module, status, source, created_at, updated_at, request_count, fetched_at, cache_status, error, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           item.enrichmentId,
@@ -945,6 +980,8 @@ export class RunStore {
           now,
           now,
           item.requestCount ?? 0,
+          item.fetchedAt ?? null,
+          item.cacheStatus ?? 'none',
           item.error ?? null,
           item.payload ?? null,
         );
@@ -963,19 +1000,24 @@ export class RunStore {
       created_at: string;
       updated_at: string;
       request_count: number;
+      fetched_at: string | null;
+      cache_status: string | null;
       error: string | null;
       payload: string | null;
     }>;
     return rows.map((row) => ({
       enrichmentId: row.enrichment_id,
-      clusterId: row.item_id,
+      itemId: row.item_id,
+      module: row.module as EnrichmentItemRecord['module'],
       status: row.status as EnrichmentItemStatus,
       source: row.source as EnrichmentItemRecord['source'],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       requestCount: row.request_count,
+      fetchedAt: row.fetched_at,
+      cacheStatus: (row.cache_status as EnrichmentItemRecord['cacheStatus']) ?? 'none',
       error: row.error,
-      payload: row.payload ?? '',
+      payload: row.payload,
     }));
   }
 
@@ -1053,6 +1095,154 @@ export class RunStore {
       algorithmVersion: row.algorithm_version,
       config: JSON.parse(row.config),
     }));
+  }
+
+  openReadOnly(path: string): RunStore {
+    const db = new Database(path, { readonly: true });
+    return new RunStore(db);
+  }
+
+  saveEnrichmentPairs(
+    enrichmentId: string,
+    pairs: Array<{
+      keywordA: string;
+      keywordB: string;
+      intersectionCount: number;
+      unionCount: number;
+      jaccard: number;
+      sharedDomains: string[];
+      isEdge: boolean;
+    }>,
+  ): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO enrichment_pairs
+       (enrichment_id, keyword_a, keyword_b, intersection_count, union_count, jaccard, shared_domains, is_edge)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const tx = this.db.transaction(() => {
+      for (const p of pairs) {
+        stmt.run(
+          enrichmentId,
+          p.keywordA < p.keywordB ? p.keywordA : p.keywordB,
+          p.keywordA < p.keywordB ? p.keywordB : p.keywordA,
+          p.intersectionCount,
+          p.unionCount,
+          p.jaccard,
+          JSON.stringify(p.sharedDomains),
+          p.isEdge ? 1 : 0,
+        );
+      }
+    });
+    tx();
+  }
+
+  loadEnrichmentPairs(enrichmentId: string): Array<{
+    keywordA: string;
+    keywordB: string;
+    intersectionCount: number;
+    unionCount: number;
+    jaccard: number;
+    sharedDomains: string[];
+    isEdge: boolean;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_pairs WHERE enrichment_id = ? ORDER BY keyword_a, keyword_b')
+      .all(enrichmentId) as Array<{
+      keyword_a: string;
+      keyword_b: string;
+      intersection_count: number;
+      union_count: number;
+      jaccard: number;
+      shared_domains: string;
+      is_edge: number;
+    }>;
+    return rows.map((row) => ({
+      keywordA: row.keyword_a,
+      keywordB: row.keyword_b,
+      intersectionCount: row.intersection_count,
+      unionCount: row.union_count,
+      jaccard: row.jaccard,
+      sharedDomains: JSON.parse(row.shared_domains),
+      isEdge: row.is_edge === 1,
+    }));
+  }
+
+  saveEnrichmentExclusions(
+    enrichmentId: string,
+    exclusions: Array<{
+      keyword: string;
+      normalizedKeyword: string;
+      reason: string;
+      serpSize: number;
+    }>,
+  ): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO enrichment_exclusions
+       (enrichment_id, keyword, normalized_keyword, reason, serp_size)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    const tx = this.db.transaction(() => {
+      for (const e of exclusions) {
+        stmt.run(enrichmentId, e.keyword, e.normalizedKeyword, e.reason, e.serpSize);
+      }
+    });
+    tx();
+  }
+
+  loadEnrichmentExclusions(enrichmentId: string): Array<{
+    keyword: string;
+    normalizedKeyword: string;
+    reason: string;
+    serpSize: number;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_exclusions WHERE enrichment_id = ? ORDER BY keyword')
+      .all(enrichmentId) as Array<{
+      keyword: string;
+      normalized_keyword: string;
+      reason: string;
+      serp_size: number;
+    }>;
+    return rows.map((row) => ({
+      keyword: row.keyword,
+      normalizedKeyword: row.normalized_keyword,
+      reason: row.reason,
+      serpSize: row.serp_size,
+    }));
+  }
+
+  loadEnrichmentRun(enrichmentId: string): EnrichmentRunRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM enrichment_runs WHERE enrichment_id = ?')
+      .get(enrichmentId) as
+      | {
+          enrichment_id: string;
+          source_run_id: string;
+          state: string;
+          created_at: string;
+          updated_at: string;
+          modules: string;
+          config: string;
+          source_run_directory: string;
+          enrichment_directory: string;
+          shortlist_keywords: string;
+          error: string | null;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      enrichmentId: row.enrichment_id,
+      sourceRunId: row.source_run_id,
+      state: row.state as EnrichmentRunRecord['state'],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      modules: JSON.parse(row.modules) as EnrichmentModuleId[],
+      config: JSON.parse(row.config) as EnrichmentRunRecord['config'],
+      sourceRunDirectory: row.source_run_directory,
+      enrichmentDirectory: row.enrichment_directory,
+      shortlistKeywords: JSON.parse(row.shortlist_keywords),
+      error: row.error,
+    };
   }
 }
 

@@ -16,7 +16,7 @@ test('exact match: identical domain sets merge into one cluster', () => {
   const result = clusterKeywords(inputs, DEFAULT_CONFIG);
   assert.equal(result.clusters.length, 1);
   assert.equal(result.clusters[0]!.memberCount, 2);
-  assert.equal(result.pairCount, 1);
+  assert.equal(result.edgeCount, 1);
 });
 
 test('partial overlap: Jaccard threshold gates edge creation', () => {
@@ -36,7 +36,7 @@ test('below Jaccard threshold: no edge, two singletons', () => {
   ];
   const result = clusterKeywords(inputs, DEFAULT_CONFIG);
   assert.equal(result.clusters.length, 2);
-  assert.equal(result.pairCount, 0);
+  assert.equal(result.edgeCount, 0);
 });
 
 test('transitive component: A-B and B-C implies A-B-C cluster', () => {

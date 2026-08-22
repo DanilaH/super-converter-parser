@@ -1,5 +1,7 @@
 export type EnrichmentModuleId = 'clusters';
 
+export const KNOWN_ENRICHMENT_MODULES: readonly EnrichmentModuleId[] = ['clusters'];
+
 export type EnrichmentItemStatus =
   | 'pending'
   | 'running'
@@ -13,6 +15,18 @@ export type EnrichmentRunState =
   | 'paused'
   | 'completed'
   | 'failed';
+
+export type EnrichmentItemSource =
+  | 'serp_overlap'
+  | 'shortlist'
+  | 'config';
+
+export type EnrichmentCacheStatus =
+  | 'hit'
+  | 'miss'
+  | 'expired'
+  | 'refreshed'
+  | 'none';
 
 export type ClusterEdgeRule = {
   minSharedDomains: number;
@@ -49,6 +63,10 @@ export type ClusteringConfig = {
   algorithmVersion: string;
 };
 
+export type EnrichmentModuleConfig = {
+  clusters?: ClusteringConfig;
+};
+
 export type EnrichmentRunRecord = {
   enrichmentId: string;
   sourceRunId: string;
@@ -56,22 +74,53 @@ export type EnrichmentRunRecord = {
   createdAt: string;
   updatedAt: string;
   modules: EnrichmentModuleId[];
-  config: ClusteringConfig;
+  config: EnrichmentModuleConfig;
   sourceRunDirectory: string;
   enrichmentDirectory: string;
+  shortlistKeywords: string[];
   error: string | null;
 };
 
-export type ClusterItemRecord = {
+export type EnrichmentItemRecord = {
   enrichmentId: string;
-  clusterId: string;
+  itemId: string;
+  module: EnrichmentModuleId;
   status: EnrichmentItemStatus;
-  source: 'serp_overlap';
+  source: EnrichmentItemSource;
   createdAt: string;
   updatedAt: string;
   requestCount: number;
+  fetchedAt: string | null;
+  cacheStatus: EnrichmentCacheStatus;
   error: string | null;
-  payload: string;
+  payload: string | null;
 };
 
-export type EnrichmentItemRecord = ClusterItemRecord;
+export type ClusteredKeywordExclusion = {
+  keyword: string;
+  normalizedKeyword: string;
+  reason: 'no_serp' | 'no_domains' | 'shortlist_mismatch';
+  serpSize: number;
+};
+
+export type PairwiseComparison = {
+  keywordA: string;
+  keywordB: string;
+  intersectionCount: number;
+  unionCount: number;
+  jaccard: number;
+  sharedDomains: string[];
+  isEdge: boolean;
+};
+
+export type EnrichmentResult = {
+  enrichmentId: string;
+  clusters: KeywordCluster[];
+  pairs: PairwiseComparison[];
+  exclusions: ClusteredKeywordExclusion[];
+  config: EnrichmentModuleConfig;
+  algorithmVersion: string;
+  inputCount: number;
+  excludedCount: number;
+  edgeCount: number;
+};
