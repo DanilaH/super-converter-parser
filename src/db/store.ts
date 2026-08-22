@@ -564,6 +564,7 @@ export class RunStore {
     }>;
     return rows.map((row) => ({
       keyword: row.keyword,
+      keywordIdx: row.keyword_idx,
       position: row.position,
       title: row.title,
       url: row.url,

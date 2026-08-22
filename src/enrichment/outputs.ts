@@ -1,16 +1,19 @@
 import { writeTextAtomic } from '../runs/run.js';
 import { renderCsv } from '../exports/csv.js';
-import type { KeywordCluster } from './types.js';
+import type { ClusteringConfig, KeywordCluster, PairwiseComparison, ClusteredKeywordExclusion } from './types.js';
 
 export type ClusterOutputOptions = {
   enrichmentId: string;
+  sourceRunId?: string;
   outputDirectory: string;
   clusters: KeywordCluster[];
+  pairs?: PairwiseComparison[];
+  exclusions?: ClusteredKeywordExclusion[];
+  edgeCount?: number;
+  inputCount?: number;
+  excludedCount?: number;
   algorithmVersion: string;
-  config: {
-    topN: number;
-    edgeRule: { minSharedDomains: number; minJaccard: number };
-  };
+  config: ClusteringConfig;
 };
 
 export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordCluster[]): Promise<void> {
@@ -44,9 +47,13 @@ export function writeKeywordClustersJson(
 ): Promise<void> {
   const payload = {
     enrichmentId: options.enrichmentId,
+    sourceRunId: options.sourceRunId,
     algorithmVersion: options.algorithmVersion,
     generatedAt: new Date().toISOString(),
     config: options.config,
+    inputCount: options.inputCount,
+    excludedCount: options.excludedCount,
+    edgeCount: options.edgeCount,
     clusterCount: options.clusters.length,
     clusters: options.clusters.map((c) => ({
       clusterId: c.clusterId,
@@ -57,6 +64,8 @@ export function writeKeywordClustersJson(
       averageVolume: c.averageVolume,
       representativeDomains: c.representativeDomains,
     })),
+    pairs: options.pairs,
+    exclusions: options.exclusions,
   };
   return writeFileAtomic(outputPath, JSON.stringify(payload, null, 2) + '\n', 'keyword-clusters.json');
 }

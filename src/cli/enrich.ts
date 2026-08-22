@@ -1,6 +1,6 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
@@ -85,13 +85,21 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!value || Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--top-n requires a numeric value');
       }
-      topN = Number(value);
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed)) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--top-n must be an integer, got ${value}`);
+      }
+      topN = parsed;
     } else if (arg === '--min-shared') {
       const value = args.shift();
       if (!value || Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-shared requires a numeric value');
       }
-      minShared = Number(value);
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed)) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared must be an integer, got ${value}`);
+      }
+      minShared = parsed;
     } else if (arg === '--min-jaccard') {
       const value = args.shift();
       if (!value || Number.isNaN(Number(value))) {
@@ -130,7 +138,21 @@ function findSourceRunDirectory(sourceRunId: string): string {
   if (!existsSync(storePath)) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Source run not found: ${sourceRunId} (missing ${storePath})`);
   }
+  const relative = relativePath(runsDir, runDir);
+  if (relative.startsWith('..') || isAbsolute(relative)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Invalid source run ID: ${sourceRunId}`);
+  }
   return runDir;
+}
+
+function findEnrichmentDirectory(enrichmentId: string): string {
+  const enrichmentsDir = resolve(process.cwd(), 'enrichments');
+  const enrichmentDir = resolve(enrichmentsDir, enrichmentId);
+  const relative = relativePath(enrichmentsDir, enrichmentDir);
+  if (relative.startsWith('..') || isAbsolute(relative)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Invalid enrichment ID: ${enrichmentId}`);
+  }
+  return enrichmentDir;
 }
 
 async function main(): Promise<void> {
@@ -147,53 +169,94 @@ async function main(): Promise<void> {
     console.log('');
     console.log('Stopping gracefully... solving.');
   };
+  const sigtermHandler = (): void => {
+    (signal as { cancelled: boolean }).cancelled = true;
+  };
   process.on('SIGINT', sigintHandler);
+  process.on('SIGTERM', sigtermHandler);
 
   try {
     const args = parseArgs(process.argv.slice(2));
 
-    if (args.resumeEnrichmentId) {
-      throw new ResearchError('INPUT_SCHEMA_ERROR', 'Resume for enrichment is not yet implemented');
-    }
-
-    if (!args.sourceRunId) {
-      throw new ResearchError('INPUT_SCHEMA_ERROR', '--run <source-run-id> is required');
+    if (!args.sourceRunId && !args.resumeEnrichmentId) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', '--run <source-run-id> or --resume <enrichment-id> is required');
     }
 
     loadConfig(process.env);
-    const sourceRunDirectory = findSourceRunDirectory(args.sourceRunId);
-    const sourceStorePath = resolve(sourceRunDirectory, 'run.sqlite');
 
-    const enrichmentId = createRunId();
-    const enrichmentDirectory = resolve(process.cwd(), 'enrichments', enrichmentId);
-    createRunDirectory(enrichmentDirectory);
+    let enrichmentId: string;
+    let enrichmentDirectory: string;
+    let sourceRunId: string;
+    let sourceStorePath: string;
+    let clusteringConfig: ClusteringConfig;
+    let shortlist: string[] = [];
+    let modules: EnrichmentModuleId[];
+    let isResume = false;
+
+    if (args.resumeEnrichmentId) {
+      isResume = true;
+      enrichmentId = args.resumeEnrichmentId;
+      enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
+      const existingStorePath = resolve(enrichmentDirectory, 'enrichment.sqlite');
+      if (!existsSync(existingStorePath)) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
+      }
+      const existingStore = RunStore.open(existingStorePath);
+      const existingRun = existingStore.loadEnrichmentRun(enrichmentId);
+      existingStore.close();
+      if (!existingRun) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
+      }
+      if (existingRun.state === 'completed') {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment already completed: ${enrichmentId}`);
+      }
+      sourceRunId = existingRun.sourceRunId;
+      const sourceDir = findSourceRunDirectory(sourceRunId);
+      sourceStorePath = resolve(sourceDir, 'run.sqlite');
+      clusteringConfig = existingRun.config.clusters ?? {
+        topN: 10,
+        edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+        algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+      };
+      shortlist = existingRun.shortlistKeywords;
+      modules = existingRun.modules;
+    } else {
+      sourceRunId = args.sourceRunId;
+      const sourceDir = findSourceRunDirectory(sourceRunId);
+      sourceStorePath = resolve(sourceDir, 'run.sqlite');
+      enrichmentId = createRunId();
+      enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
+      createRunDirectory(enrichmentDirectory);
+      clusteringConfig = {
+        topN: args.topN,
+        edgeRule: {
+          minSharedDomains: args.minShared,
+          minJaccard: args.minJaccard,
+        },
+        algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+      };
+      shortlist = args.shortlist;
+      modules = args.modules;
+    }
 
     store = RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
 
-    const clusteringConfig: ClusteringConfig = {
-      topN: args.topN,
-      edgeRule: {
-        minSharedDomains: args.minShared,
-        minJaccard: args.minJaccard,
-      },
-      algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
-    };
+    if (!isResume) {
+      const logger: EnrichmentLogger = (line: string) => console.log(line);
+      console.log('Utility Research Runner — Enrichment');
+      console.log('');
+    }
 
-    const logger: EnrichmentLogger = (line: string) => {
-      console.log(line);
-    };
-
-    console.log('Utility Research Runner — Enrichment');
-    console.log('');
+    const logger: EnrichmentLogger = (line: string) => console.log(line);
 
     const outcome = await runEnrichment({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
-      sourceRunId: args.sourceRunId,
+      sourceRunId,
       enrichmentStore: store,
       enrichmentDirectory,
-      modules: args.modules,
-      shortlist: args.shortlist,
+      modules,
+      shortlist,
       config: { clusters: clusteringConfig },
       logger,
       signal,
@@ -211,13 +274,11 @@ async function main(): Promise<void> {
       await writeKeywordClustersCsv(csvPath, clusters);
       await writeKeywordClustersJson(jsonPath, {
         enrichmentId,
+        sourceRunId: args.sourceRunId,
         outputDirectory: enrichmentDirectory,
         clusters,
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
-        config: {
-          topN: clusteringConfig.topN,
-          edgeRule: clusteringConfig.edgeRule,
-        },
+        config: clusteringConfig,
       });
 
       console.log('');

@@ -209,7 +209,7 @@ test('runEnrichment: persists exclusions for keywords without SERP', async () =>
   const exclusions = enrichmentStore.loadEnrichmentExclusions('test-excl');
   assert.equal(exclusions.length, 1);
   assert.equal(exclusions[0]!.normalizedKeyword, 'no serp');
-  assert.equal(exclusions[0]!.reason, 'no_domains');
+  assert.equal(exclusions[0]!.reason, 'no_serp');
 
   sourceStore.close();
   enrichmentStore.close();
