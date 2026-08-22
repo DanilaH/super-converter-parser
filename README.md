@@ -400,3 +400,39 @@ Therefore:
 Proceed directly to the full production-ready local runner.
 
 Do not spend another project phase re-proving the same single-query spike.
+
+## Enrichment
+
+After a discovery run completes, enrichment modules derive additional signals from the persisted data without opening Chrome or calling external APIs.
+
+```bash
+npm run enrich -- --run <source-run-id> --modules clusters
+
+# Resume the same enrichment ID after Ctrl+C
+npm run enrich -- --resume <enrichment-id>
+```
+
+### SERP-overlap clustering
+
+Clusters keywords by comparing normalized registrable-domain sets from their organic SERPs (top N, default 10).
+
+**Algorithm:**
+- For each pair: compute intersection count, union count, Jaccard coefficient, and shared domain list
+- Edge rule (default): `>= 3` shared domains AND `>= 0.30` Jaccard
+- Clusters = deterministic connected components
+- Canonical keyword = graph medoid (highest in-cluster Jaccard sum; tie-break by volume, then lexical order)
+- Representative domains = ordered by in-cluster frequency, then average rank, then domain
+- Median/average volume are descriptive only (never summed)
+
+**Configurable flags:**
+- `--top-n <n>` — domain comparison window (default 10)
+- `--min-shared <n>` — minimum shared domains for an edge (default 3)
+- `--min-jaccard <n>` — minimum Jaccard for an edge (default 0.30)
+
+**Outputs:**
+- `keyword-clusters.csv` — cluster_id, canonical_keyword, member_count, members, median_volume, average_volume, representative_domains
+- `keyword-clusters.json` — full algorithm version, source run, config, thresholds, all pair evidence, exclusions, and metrics
+- `manifest.json` — persisted modules/config/shortlist, artifact list, and summary counts
+- `status.json` — machine-readable terminal status and the same summary counts
+
+The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. Enrichment checkpoints are stored in `enrichments/<enrichment-id>/enrichment.sqlite`; Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.

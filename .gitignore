@@ -4,6 +4,7 @@ node_modules/
 /runs/
 /output/
 /data/
+/enrichments/
 .research-profile/
 .research-cft/
 .research-cft2/

@@ -7,7 +7,8 @@
   "scripts": {
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "enrich": "tsx src/cli/enrich.ts",
+    "test": "node --import tsx --test",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

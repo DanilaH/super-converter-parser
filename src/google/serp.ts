@@ -16,6 +16,7 @@ export type RawOrganicLink = {
 
 export type SerpResult = {
   keyword: string;
+  keywordIdx?: number;
   position: number;
   title: string;
   url: string;
