@@ -9,6 +9,7 @@ export type ResearchErrorCode =
   | 'AHREFS_NOT_CONFIGURED'
   | 'GOOGLE_UNAVAILABLE'
   | 'CAPTCHA_REQUIRED'
+  | 'RUN_PAUSED'
   | 'INPUT_SCHEMA_ERROR'
   | 'OUTPUT_WRITE_ERROR'
   | 'DB_ERROR'

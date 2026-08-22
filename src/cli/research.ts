@@ -10,6 +10,7 @@ import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
+import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { buildRunStatus } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
@@ -41,18 +42,24 @@ type CliOptions = {
 // without a Chrome instance; the defaults are the production implementations.
 export type CliDeps = {
   connect: (cdpUrl: string) => Promise<Browser>;
-  preflight: (context: BrowserContext, config: ResearchConfig) => Promise<void>;
+  preflight: (
+    context: BrowserContext,
+    config: ResearchConfig,
+    signal: CancellationSignal,
+  ) => Promise<void>;
   collect: (
     context: BrowserContext,
     config: ResearchConfig,
     record: KeywordRecord,
     debugRoot: string,
+    signal: CancellationSignal,
   ) => Promise<CollectionResult>;
   collectRelated?: (
     context: BrowserContext,
     config: ResearchConfig,
     record: KeywordRecord,
     debugRoot: string,
+    signal: CancellationSignal,
   ) => Promise<RelatedCollectionResult>;
 };
 
@@ -441,12 +448,18 @@ export async function runCli(
     );
     const needsBrowser = plan.needsBrowser;
 
+    // Single cancellation signal threaded through the collector and CAPTCHA
+    // helper. The CAPTCHA helper polls this instead of owning a SIGINT listener,
+    // so the CLI keeps sole control of first-Ctrl+C (pause) / second-Ctrl+C
+    // (force-quit).
+    const signal: CancellationSignal = { isCancelled: () => pauseRequested };
+
     let context: BrowserContext | null = null;
     if (needsBrowser) {
       browser = await deps.connect(runConfig.browser.cdpUrl);
       console.log(`  ✓ Research Chrome connected (${runConfig.browser.cdpUrl})`);
       context = getPrimaryContext(browser);
-      await deps.preflight(context, runConfig);
+      await deps.preflight(context, runConfig, signal);
       console.log('  ✓ Google reachable');
       console.log(`  ✓ Keyword Surfer injection detected; configured market: ${runConfig.research.market}`);
     } else if (pendingNormalized.length === 0) {
@@ -476,7 +489,7 @@ export async function runCli(
       // collect only runs when there are pending keywords, which implies the
       // browser was connected and context assigned.
       collect: (record, debugRootForKeyword) =>
-        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword),
+        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword, signal),
       ...(relatedCollector
         ? {
             collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
@@ -485,10 +498,12 @@ export async function runCli(
                 runConfig,
                 record,
                 debugRootForKeyword,
+                signal,
               ),
           }
         : {}),
       hooks,
+      signal,
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
@@ -521,6 +536,11 @@ export async function runCli(
   } catch (error) {
     console.error('');
     console.error('Run failed:');
+    if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
+      // A cancellation that escaped the engine's collect wrapper (e.g. during
+      // preflight) is a graceful pause, not an internal failure.
+      return EXIT_PAUSED;
+    }
     if (error instanceof ResearchError) {
       console.error(`  ${error.code}: ${error.message}`);
       return exitCodeForError(error);

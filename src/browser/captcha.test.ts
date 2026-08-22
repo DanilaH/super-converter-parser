@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import type { Page } from 'playwright-core';
-import { waitForManualCaptcha, pauseForManualCaptcha } from './captcha.js';
+import { waitForManualCaptcha, pauseForManualCaptcha, NEVER_CANCELLED } from './captcha.js';
 import { ResearchError } from '../shared/errors.js';
 
 function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
@@ -40,7 +40,7 @@ test('waitForManualCaptcha detects captcha by body text', async () => {
   );
 });
 
-test('pauseForManualCaptcha (non-TTY) waits for the marker file and removes it', async () => {
+test('pauseForManualCaptcha (non-TTY) waits for the marker file, removes it, and returns solved=true', async () => {
   const marker = join(await mkdtemp(join(tmpdir(), 'captcha-marker-')), 'done.txt');
   rmSync(marker, { force: true });
 
@@ -55,8 +55,9 @@ test('pauseForManualCaptcha (non-TTY) waits for the marker file and removes it',
   }, 300);
 
   const start = Date.now();
+  let solved: boolean;
   try {
-    await pauseForManualCaptcha(page);
+    solved = await pauseForManualCaptcha(page, NEVER_CANCELLED);
   } finally {
     clearTimeout(timer);
     Object.defineProperty(process.stdin, 'isTTY', { value: originalTty, configurable: true });
@@ -64,11 +65,12 @@ test('pauseForManualCaptcha (non-TTY) waits for the marker file and removes it',
     else process.env.CAPTCHA_DONE_MARKER = originalMarker;
   }
 
+  assert.equal(solved, true, 'returning after the marker must report solved=true');
   assert.ok(Date.now() - start >= 150, 'should have waited for the marker before resuming');
   assert.equal(existsSync(marker), false, 'marker must be consumed/removed after resume');
 });
 
-test('pauseForManualCaptcha (non-TTY) returns on the first Ctrl+C instead of waiting for the marker', async () => {
+test('pauseForManualCaptcha (non-TTY) returns solved=false when the shared signal is cancelled', async () => {
   const marker = join(await mkdtemp(join(tmpdir(), 'captcha-marker-int-')), 'done.txt');
   rmSync(marker, { force: true });
 
@@ -77,14 +79,16 @@ test('pauseForManualCaptcha (non-TTY) returns on the first Ctrl+C instead of wai
   const originalMarker = process.env.CAPTCHA_DONE_MARKER;
   process.env.CAPTCHA_DONE_MARKER = marker;
 
+  const signal = { isCancelled: () => false };
   const page = { waitForLoadState: async () => undefined } as unknown as Page;
   const timer = setTimeout(() => {
-    process.emit('SIGINT');
+    signal.isCancelled = () => true;
   }, 300);
 
   const start = Date.now();
+  let solved: boolean;
   try {
-    await pauseForManualCaptcha(page);
+    solved = await pauseForManualCaptcha(page, signal);
   } finally {
     clearTimeout(timer);
     Object.defineProperty(process.stdin, 'isTTY', { value: originalTty, configurable: true });
@@ -92,6 +96,19 @@ test('pauseForManualCaptcha (non-TTY) returns on the first Ctrl+C instead of wai
     else process.env.CAPTCHA_DONE_MARKER = originalMarker;
   }
 
+  assert.equal(solved, false, 'a cancelled wait must report solved=false (never pretend the CAPTCHA was solved)');
   assert.ok(Date.now() - start < 5000, 'must not wait for the (absent) marker or the timeout');
   assert.equal(existsSync(marker), false, 'no marker was created, so nothing to remove');
+});
+
+test('pauseForManualCaptcha does not register its own SIGINT listener (force-quit stays with the CLI)', async () => {
+  const before = process.listenerCount('SIGINT');
+  const page = { waitForLoadState: async () => undefined } as unknown as Page;
+  // The CLI owns SIGINT handling; the helper must poll the shared signal rather
+  // than adding its own listener. With an already-cancelled signal it returns at
+  // once, so the listener count must be unchanged afterwards.
+  const solved = await pauseForManualCaptcha(page, { isCancelled: () => true });
+  const after = process.listenerCount('SIGINT');
+  assert.equal(solved, false, 'cancelled signal returns solved=false');
+  assert.equal(after, before, 'the helper must not add or leak a SIGINT listener');
 });

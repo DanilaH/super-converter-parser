@@ -5,35 +5,31 @@ import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Browser, BrowserContext, Page, Locator } from 'playwright-core';
-import { runCli, EXIT_PAUSED } from './research.js';
+import { runCli, EXIT_PAUSED, EXIT_OK } from './research.js';
 import { collectKeyword } from '../browser/collect.js';
 import type { CollectionResult } from '../browser/collect.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { KeywordRecord } from '../runs/run.js';
+import type { CancellationSignal } from '../browser/captcha.js';
+import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 
-function fakePage(): Page {
+function fakePage(captcha: boolean): Page {
   const isCaptcha = (sel: string) => sel.toLowerCase().includes('captcha');
   const isSurfer = (sel: string) => sel.toLowerCase().includes('surfer');
+  const bodyText = captcha ? 'unusual traffic' : 'normal search results';
   const evaluate = async (script: string): Promise<unknown> => {
-    if (script.includes('ORGANIC_EXTRACT_SCRIPT')) {
-      return {
-        rows: [
-          {
-            position: 1,
-            title: 'C',
-            url: 'https://c.example',
-            displayUrl: 'c.example',
-            snippet: 'snip',
-            googleLocation: null,
-          },
-        ],
-      };
-    }
+        if (script.includes('return out')) {
+          return [{ href: 'https://c.example', title: 'C Example' }];
+        }
     if (script.includes('GEO_EXTRACT_SCRIPT')) return null;
     return undefined;
   };
-  const textFor = (sel: string) => (isSurfer(sel) ? '$49,500' : 'unusual traffic');
-  const page = {
+  const textFor = (sel: string) => {
+    if (sel === 'body') return bodyText;
+    if (isSurfer(sel)) return '$49,500';
+    return '';
+  };
+  return {
     async goto(_url: string) {},
     url: () => 'https://www.google.com/search?q=k1&gl=us&hl=en',
     async screenshot(_opts?: unknown) {
@@ -49,7 +45,7 @@ function fakePage(): Page {
     async waitForLoadState(_state?: string) {},
     async close() {},
     locator: (sel: string): Locator => {
-      const count = isCaptcha(sel) || isSurfer(sel) ? 1 : 0;
+      const count = captcha && isCaptcha(sel) ? 1 : isSurfer(sel) ? 1 : 0;
       return {
         count: async () => count,
         first: () => ({ innerText: async () => textFor(sel) }),
@@ -58,7 +54,6 @@ function fakePage(): Page {
     },
     evaluate,
   } as unknown as Page;
-  return page;
 }
 
 function fakeBrowser(page: Page): Browser {
@@ -74,54 +69,92 @@ function fakeBrowser(page: Page): Browser {
   } as unknown as Browser;
 }
 
-test('capcha marker-wait is interruptible by the first Ctrl+C -> run pauses with 130', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'research-captcha-int-'));
+test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume collects it for real', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'research-captcha-resume-'));
   mkdirSync(join(directory, 'input'), { recursive: true });
-  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\nk2\n', 'utf8');
+  await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\n', 'utf8');
   rmSync(join(directory, 'runs'), { recursive: true, force: true });
 
-  // Ensure no stray marker exists anywhere the watcher could pick up.
-  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
   delete process.env.CAPTCHA_DONE_MARKER;
 
-  const page = fakePage();
-  const deps = {
-    connect: async () => fakeBrowser(page),
+  const depsCaptcha = {
+    connect: async () => fakeBrowser(fakePage(true)),
     preflight: async () => undefined,
     collect: async (
       ctx: BrowserContext,
       cfg: ResearchConfig,
       record: KeywordRecord,
       debugRoot: string,
-    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot),
+      signal: CancellationSignal,
+    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+  };
+  const depsClean = {
+    connect: async () => fakeBrowser(fakePage(false)),
+    preflight: async () => undefined,
+    collect: async (
+      ctx: BrowserContext,
+      cfg: ResearchConfig,
+      record: KeywordRecord,
+      debugRoot: string,
+      signal: CancellationSignal,
+    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
   };
 
   const previousCwd = process.cwd();
   process.chdir(directory);
+  const marker = join(directory, 'captcha-done.txt');
+  rmSync(marker, { force: true });
+  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
+  process.env.CAPTCHA_DONE_MARKER = marker;
   try {
-    const run = runCli(['--seeds', 'input/seeds.csv'], deps, {
+    // Phase 1: interrupt while the active keyword is stuck on the CAPTCHA wait.
+    const run1 = runCli(['--seeds', 'input/seeds.csv'], depsCaptcha, {
       AHREFS_API_KEY: undefined,
       EXPANSION_ENABLED: 'false',
     } as unknown as NodeJS.ProcessEnv);
-
-    // Fire the first Ctrl+C while the keyword is stuck in the captcha wait.
     const timer = setTimeout(() => {
       process.emit('SIGINT');
     }, 400);
-    const code = await run;
+    const code1 = await run1;
     clearTimeout(timer);
 
-    assert.equal(code, EXIT_PAUSED, 'run must exit paused (130) after the first Ctrl+C');
+    assert.equal(code1, EXIT_PAUSED, 'run must exit paused (130) after Ctrl+C during CAPTCHA wait');
 
     const runId = (await readdir(join(directory, 'runs')))[0] as string;
-    const status = JSON.parse(
+    const status1 = JSON.parse(
       await readFile(join(directory, 'runs', runId, 'status.json'), 'utf8'),
     ) as { status: string };
-    assert.equal(status.status, 'paused', 'persisted run status must be paused');
-    assert.equal(existsSync('C:\\tmp\\captcha-done.txt'), false, 'no marker was created');
+    assert.equal(status1.status, 'paused', 'persisted run status must be paused');
+
+    // The active keyword must NOT be committed as a terminal result: it stays
+    // resumable so a later --resume re-collects it for real.
+    const store = RunStore.open(join(directory, 'runs', runId, 'run.sqlite'));
+    const stored = store.loadKeywords(runId);
+    assert.equal(stored.length, 1, 'exactly one keyword was queued');
+    assert.equal(stored[0]!.status, 'running', 'interrupted keyword must remain running (resumable), not terminal');
+    assert.equal(isTerminalKeywordStatus(stored[0]!.status), false, 'interrupted keyword must not be terminal');
+    assert.equal(existsSync(marker), false, 'no marker was created (cancel, not solve)');
+    store.close();
+
+    // Phase 2: resume; the keyword is re-collected for real (no CAPTCHA this time).
+    const code2 = await runCli(['--resume', runId], depsClean, {
+      AHREFS_API_KEY: undefined,
+      EXPANSION_ENABLED: 'false',
+    } as unknown as NodeJS.ProcessEnv);
+    assert.equal(code2, EXIT_OK, 'resumed run must complete');
+
+    const store2 = RunStore.open(join(directory, 'runs', runId, 'run.sqlite'));
+    const resumed = store2.loadKeywords(runId);
+    assert.equal(resumed.length, 1, 'keyword count is unchanged after resume');
+    assert.equal(isTerminalKeywordStatus(resumed[0]!.status), true, 'keyword must be terminal after real collection');
+    assert.equal(resumed[0]!.surfer?.volume, 49500, 'real collection must have parsed the Surfer volume');
+    store2.close();
+
+    const serpCsv = await readFile(join(directory, 'runs', runId, 'serp.csv'), 'utf8');
+    assert.ok(serpCsv.includes('c.example'), 'resumed run must contain the real organic SERP rows');
   } finally {
-    process.chdir(previousCwd);
     if (originalMarker === undefined) delete process.env.CAPTCHA_DONE_MARKER;
     else process.env.CAPTCHA_DONE_MARKER = originalMarker;
+    process.chdir(previousCwd);
   }
 });

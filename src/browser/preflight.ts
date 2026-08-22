@@ -3,7 +3,7 @@ import type { ResearchConfig } from '../config/config.js';
 import { ResearchError } from '../shared/errors.js';
 import { buildSearchUrl } from '../google/serp.js';
 import { SURFER_MARKERS } from '../surfer/selectors.js';
-import { pauseForManualCaptcha, waitForManualCaptcha } from './captcha.js';
+import { pauseForManualCaptcha, waitForManualCaptcha, type CancellationSignal, NEVER_CANCELLED } from './captcha.js';
 
 const PREFLIGHT_QUERY = 'preflight probe';
 const PREFLIGHT_POLL_INTERVAL_MS = 2_000;
@@ -18,6 +18,7 @@ const PREFLIGHT_SURFER_MARKER_SCRIPT = String.raw`(() => {
 export async function preflightGoogleAndSurfer(
   context: BrowserContext,
   config: ResearchConfig,
+  signal: CancellationSignal = NEVER_CANCELLED,
 ): Promise<void> {
   const page = await context.newPage();
   try {
@@ -31,7 +32,13 @@ export async function preflightGoogleAndSurfer(
       await waitForManualCaptcha(page);
     } catch (error) {
       if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
-        await pauseForManualCaptcha(page);
+        const solved = await pauseForManualCaptcha(page, signal);
+        if (!solved) {
+          throw new ResearchError(
+            'RUN_PAUSED',
+            'Preflight cancelled while a CAPTCHA was pending.',
+          );
+        }
       } else {
         throw error;
       }
