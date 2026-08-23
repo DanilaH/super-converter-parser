@@ -62,6 +62,7 @@ export type SsrfCheckResult = {
   allowed: boolean;
   reason?: string;
   ip?: string;
+  ips?: string[];
 };
 
 const ALLOWED_SCHEMES = new Set(['http:', 'https:']);
@@ -93,7 +94,7 @@ export async function checkUrlAllowed(url: string): Promise<SsrfCheckResult> {
     const ip = ipMatch[1]!;
     return isPrivateIp(ip)
       ? { allowed: false, reason: `Blocked IP: ${ip}`, ip }
-      : { allowed: true, ip };
+      : { allowed: true, ip, ips: [ip] };
   }
 
   try {
@@ -102,11 +103,37 @@ export async function checkUrlAllowed(url: string): Promise<SsrfCheckResult> {
     if (blocked) {
       return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address };
     }
-    const first = addresses[0];
-    return first
-      ? { allowed: true, ip: first.address }
-      : { allowed: false, reason: 'No addresses resolved' };
+    if (addresses.length === 0) {
+      return { allowed: false, reason: 'No addresses resolved' };
+    }
+    const first = addresses[0]!;
+    return {
+      allowed: true,
+      ip: first.address,
+      ips: addresses.map((a) => a.address),
+    };
   } catch (error) {
     return { allowed: false, reason: `DNS resolution failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+export function buildPinnedUrl(originalUrl: string, validatedIp: string): string {
+  try {
+    const parsed = new URL(originalUrl);
+    const isIpv6 = validatedIp.includes(':');
+    const hostForUrl = isIpv6 ? `[${validatedIp}]` : validatedIp;
+    parsed.hostname = hostForUrl;
+    return parsed.href;
+  } catch {
+    return originalUrl;
+  }
+}
+
+export function getValidatedHostHeader(originalUrl: string): string {
+  try {
+    const parsed = new URL(originalUrl);
+    return parsed.host;
+  } catch {
+    return '';
   }
 }

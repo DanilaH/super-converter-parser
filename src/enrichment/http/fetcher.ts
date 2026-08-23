@@ -1,4 +1,4 @@
-import { checkUrlAllowed } from './ssrf.js';
+import { checkUrlAllowed, buildPinnedUrl, getValidatedHostHeader } from './ssrf.js';
 
 export type SsrfChecker = (url: string) => Promise<{ allowed: boolean; reason?: string; ip?: string }>;
 
@@ -108,8 +108,15 @@ export async function boundedFetch(
     };
   }
 
+  let pinnedUrl = url;
+  let hostHeader = getValidatedHostHeader(url);
+  if (ssrfResult.ip) {
+    pinnedUrl = buildPinnedUrl(url, ssrfResult.ip);
+    hostHeader = getValidatedHostHeader(url);
+  }
+
   for (let redirect = 0; redirect <= cfg.maxRedirects; redirect++) {
-    const domain = getDomain(currentUrl);
+    const domain = getDomain(pinnedUrl);
     if (domain) {
       await applyDomainDelay(domain, cfg);
     }
@@ -119,12 +126,13 @@ export async function boundedFetch(
 
     let response: Response;
     try {
-      response = await fetch(currentUrl, {
+      response = await fetch(pinnedUrl, {
         method: 'GET',
         headers: {
           'User-Agent': cfg.userAgent,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.5',
+          ...(hostHeader ? { 'Host': hostHeader } : {}),
         },
         redirect: 'manual',
         signal: controller.signal,
@@ -135,7 +143,7 @@ export async function boundedFetch(
       return {
         status: 0,
         contentType: null,
-        finalUrl: currentUrl,
+        finalUrl: pinnedUrl,
         redirectChain,
         body: null,
         error: message,
@@ -144,7 +152,6 @@ export async function boundedFetch(
         bodyError: false,
       };
     }
-    clearTimeout(timeout);
 
     const { status } = response;
     const contentType = response.headers.get('content-type');
@@ -153,10 +160,11 @@ export async function boundedFetch(
     if (status >= 300 && status < 400) {
       const location = response.headers.get('location');
       if (!location) {
+        clearTimeout(timeout);
         return {
           status,
           contentType,
-          finalUrl: currentUrl,
+          finalUrl: pinnedUrl,
           redirectChain,
           body: null,
           error: 'Redirect without Location header',
@@ -168,12 +176,13 @@ export async function boundedFetch(
 
       let nextUrl: string;
       try {
-        nextUrl = new URL(location, currentUrl).href;
+        nextUrl = new URL(location, pinnedUrl).href;
       } catch {
+        clearTimeout(timeout);
         return {
           status,
           contentType,
-          finalUrl: currentUrl,
+          finalUrl: pinnedUrl,
           redirectChain,
           body: null,
           error: `Invalid redirect URL: ${location}`,
@@ -185,10 +194,11 @@ export async function boundedFetch(
 
       const targetSsrf = await ssrfCheck(nextUrl);
       if (!targetSsrf.allowed) {
+        clearTimeout(timeout);
         return {
           status,
           contentType,
-          finalUrl: currentUrl,
+          finalUrl: pinnedUrl,
           redirectChain,
           body: null,
           error: `SSRF blocked redirect: ${targetSsrf.reason}`,
@@ -198,12 +208,20 @@ export async function boundedFetch(
         };
       }
 
+      clearTimeout(timeout);
+      pinnedUrl = nextUrl;
+      hostHeader = getValidatedHostHeader(nextUrl);
+      if (targetSsrf.ip) {
+        pinnedUrl = buildPinnedUrl(nextUrl, targetSsrf.ip);
+        hostHeader = getValidatedHostHeader(nextUrl);
+      }
       redirectChain.push(currentUrl);
-      currentUrl = nextUrl;
+      currentUrl = pinnedUrl;
       continue;
     }
 
     if (status === 429 || (status === 503 && retryAfter)) {
+      clearTimeout(timeout);
       if (retryCount < cfg.maxRetries) {
         const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retryCount + 1));
         retryCount++;
@@ -223,7 +241,9 @@ export async function boundedFetch(
       };
     }
 
-    const bodyResult = await readBody(response, cfg.maxBytes);
+    const bodyResult = await readBody(response, cfg.maxBytes, controller);
+
+    clearTimeout(timeout);
 
     return {
       status,
@@ -258,7 +278,7 @@ type BodyResult = {
   bodyError: boolean;
 };
 
-async function readBody(response: Response, maxBytes: number): Promise<BodyResult> {
+async function readBody(response: Response, maxBytes: number, controller: AbortController): Promise<BodyResult> {
   if (!response.body) {
     try {
       const text = await response.text();
@@ -278,7 +298,19 @@ async function readBody(response: Response, maxBytes: number): Promise<BodyResul
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const readPromise = reader.read();
+      const abortPromise = new Promise<never>((_, reject) => {
+        const onAbort = (): void => {
+          reject(new Error('abort'));
+        };
+        if (controller.signal.aborted) {
+          onAbort();
+          return;
+        }
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+      });
+
+      const { done, value } = await Promise.race([readPromise, abortPromise]);
       if (done) break;
 
       totalBytes += value.byteLength;

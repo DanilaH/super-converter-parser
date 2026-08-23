@@ -1529,7 +1529,7 @@ export class RunStore {
       url: row.url,
       finalUrl: row.final_url,
       redirectCount: row.redirect_count,
-      redirectChain: JSON.parse(row.redirect_chain),
+      redirectChain: row.redirect_chain,
       httpStatus: row.http_status,
       contentType: row.content_type,
       fetchStatus: row.fetch_status,
@@ -1859,6 +1859,64 @@ export class RunStore {
       else pending += row.cnt;
     }
     return { total, completed, pending, error };
+  }
+
+  insertPageTargetIfAbsent(
+    enrichmentId: string,
+    target: {
+      url: string;
+      status: 'pending';
+      sourceKeywords: string;
+      sourcePositions: string;
+    },
+  ): boolean {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare('SELECT url FROM enrichment_page_targets WHERE enrichment_id = ? AND url = ?')
+      .get(enrichmentId, target.url);
+    if (existing) return false;
+
+    this.db.prepare(`
+      INSERT INTO enrichment_page_targets
+        (enrichment_id, url, status, data, error, fetched_at, cache_status, source_keywords, source_positions, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, NULL, NULL, 'none', ?, ?, ?, ?)
+    `).run(
+      enrichmentId,
+      target.url,
+      target.status,
+      target.sourceKeywords,
+      target.sourcePositions,
+      now,
+      now,
+    );
+    return true;
+  }
+
+  insertSiteStructureTargetIfAbsent(
+    enrichmentId: string,
+    target: {
+      domain: string;
+      status: 'pending';
+    },
+  ): boolean {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare('SELECT domain FROM enrichment_site_structure_targets WHERE enrichment_id = ? AND domain = ?')
+      .get(enrichmentId, target.domain);
+    if (existing) return false;
+
+    this.db.prepare(`
+      INSERT INTO enrichment_site_structure_targets
+        (enrichment_id, domain, status, data, error, fetched_at, cache_status, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, NULL, NULL, 'none', ?, ?)
+    `).run(
+      enrichmentId,
+      target.domain,
+      target.status,
+      now,
+      now,
+    );
+    return true;
   }
 }
 

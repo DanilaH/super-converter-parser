@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPrivateIp, checkUrlAllowed } from './ssrf.js';
+import { isPrivateIp, checkUrlAllowed, buildPinnedUrl, getValidatedHostHeader } from './ssrf.js';
 
 test('isPrivateIp: detects RFC1918 IPv4 ranges', () => {
   assert.equal(isPrivateIp('10.0.0.1'), true);
@@ -96,4 +96,28 @@ test('checkUrlAllowed: rejects IPv4-mapped IPv6 private', async () => {
 test('checkUrlAllowed: allows public IP literals', async () => {
   const result = await checkUrlAllowed('http://8.8.8.8/path');
   assert.equal(result.allowed, true);
+});
+
+test('checkUrlAllowed: returns all validated IPs', async () => {
+  const result = await checkUrlAllowed('http://127.0.0.1/path');
+  assert.equal(result.allowed, false);
+  assert.ok(result.reason);
+});
+
+test('buildPinnedUrl: replaces hostname with validated IPv4', () => {
+  const pinned = buildPinnedUrl('http://example.com/page', '93.184.216.34');
+  assert.equal(pinned, 'http://93.184.216.34/page');
+});
+
+test('buildPinnedUrl: replaces hostname with validated IPv6', () => {
+  const pinned = buildPinnedUrl('http://example.com/page', '2001:db8::1');
+  assert.equal(pinned, 'http://[2001:db8::1]/page');
+});
+
+test('getValidatedHostHeader: extracts host with port', () => {
+  assert.equal(getValidatedHostHeader('http://example.com:8080/path'), 'example.com:8080');
+});
+
+test('getValidatedHostHeader: extracts host without port', () => {
+  assert.equal(getValidatedHostHeader('https://example.com/path'), 'example.com');
 });

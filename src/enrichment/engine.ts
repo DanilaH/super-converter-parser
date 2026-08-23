@@ -270,38 +270,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       );
       if (existingItem?.status === 'completed') {
         logger('Skipping completed pages module');
-        const pages = enrichmentStore.loadEnrichmentPages(enrichmentId);
-        result.pages = pages.map((p) => {
-          const redirectChain: string[] = JSON.parse(p.redirectChain);
-          return {
-            url: p.url,
-            finalUrl: p.finalUrl,
-            redirectCount: p.redirectCount,
-            redirectChain,
-            httpStatus: p.httpStatus,
-            contentType: p.contentType,
-            fetchStatus: p.fetchStatus as PageRecord['fetchStatus'],
-            fetchError: p.fetchError,
-            fetchedAt: p.fetchedAt,
-            cacheStatus: p.cacheStatus as PageRecord['cacheStatus'],
-            title: p.title,
-            metaDescription: p.metaDescription,
-            h1: p.h1,
-            canonical: p.canonical,
-            language: p.language,
-            wordCount: p.wordCount,
-            forms: JSON.parse(p.forms) as FormCounts,
-            structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
-            sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
-            sourcePositions: JSON.parse(p.sourcePositions) as number[],
-          };
-        });
-      } else {
-        const targetStatus = enrichmentStore.getPageTargetStatus(enrichmentId);
-        if (targetStatus.total > 0 && targetStatus.pending === 0) {
-          logger('Skipping completed pages module (all targets done)');
-          const pages = enrichmentStore.loadEnrichmentPages(enrichmentId);
-          result.pages = pages.map((p) => {
+        const batchPages = enrichmentStore.loadEnrichmentPages(enrichmentId);
+        if (batchPages.length > 0) {
+          result.pages = batchPages.map((p) => {
             const redirectChain: string[] = JSON.parse(p.redirectChain);
             return {
               url: p.url,
@@ -326,6 +297,130 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
               sourcePositions: JSON.parse(p.sourcePositions) as number[],
             };
           });
+        } else {
+          logger('Rebuilding pages from target checkpoints (completed item, empty batch)');
+          result.pages = rebuildPagesFromTargets(enrichmentStore, enrichmentId);
+          enrichmentStore.saveEnrichmentPages(
+            enrichmentId,
+            result.pages.map((p) => ({
+              url: p.url,
+              finalUrl: p.finalUrl,
+              redirectCount: p.redirectCount,
+              redirectChain: JSON.stringify(p.redirectChain),
+              httpStatus: p.httpStatus,
+              contentType: p.contentType,
+              fetchStatus: p.fetchStatus,
+              fetchError: p.fetchError,
+              fetchedAt: p.fetchedAt,
+              cacheStatus: p.cacheStatus,
+              title: p.title,
+              metaDescription: p.metaDescription,
+              h1: p.h1,
+              canonical: p.canonical,
+              language: p.language,
+              wordCount: p.wordCount,
+              forms: JSON.stringify(p.forms),
+              structuredDataTypes: JSON.stringify(p.structuredDataTypes),
+              sourceKeywords: JSON.stringify(p.sourceKeywords),
+              sourcePositions: JSON.stringify(p.sourcePositions),
+            })),
+          );
+        }
+      } else {
+        const targetStatus = enrichmentStore.getPageTargetStatus(enrichmentId);
+        if (targetStatus.total > 0 && targetStatus.pending === 0) {
+          logger('Skipping completed pages module (all targets done)');
+          const batchPages = enrichmentStore.loadEnrichmentPages(enrichmentId);
+          if (batchPages.length > 0) {
+            result.pages = batchPages.map((p) => {
+              const redirectChain: string[] = JSON.parse(p.redirectChain);
+              return {
+                url: p.url,
+                finalUrl: p.finalUrl,
+                redirectCount: p.redirectCount,
+                redirectChain,
+                httpStatus: p.httpStatus,
+                contentType: p.contentType,
+                fetchStatus: p.fetchStatus as PageRecord['fetchStatus'],
+                fetchError: p.fetchError,
+                fetchedAt: p.fetchedAt,
+                cacheStatus: p.cacheStatus as PageRecord['cacheStatus'],
+                title: p.title,
+                metaDescription: p.metaDescription,
+                h1: p.h1,
+                canonical: p.canonical,
+                language: p.language,
+                wordCount: p.wordCount,
+                forms: JSON.parse(p.forms) as FormCounts,
+                structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
+                sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
+                sourcePositions: JSON.parse(p.sourcePositions) as number[],
+              };
+            });
+          } else {
+            logger('Rebuilding pages from target checkpoints (batch table empty)');
+            const targets = enrichmentStore.loadPageTargets(enrichmentId);
+            const rebuiltPages: PageRecord[] = [];
+            for (const t of targets) {
+              if (t.status === 'completed' && t.data) {
+                try {
+                  const parsed = JSON.parse(t.data) as PageRecord;
+                  rebuiltPages.push({ ...parsed, cacheStatus: 'hit' });
+                } catch {
+                  // skip corrupted target
+                }
+              } else if (t.status === 'error' && t.error) {
+                rebuiltPages.push({
+                  url: t.url,
+                  finalUrl: t.url,
+                  redirectCount: 0,
+                  redirectChain: [],
+                  httpStatus: 0,
+                  contentType: null,
+                  fetchStatus: 'error',
+                  fetchError: t.error,
+                  fetchedAt: t.fetchedAt ?? new Date().toISOString(),
+                  cacheStatus: 'none',
+                  title: null,
+                  metaDescription: null,
+                  h1: null,
+                  canonical: null,
+                  language: null,
+                  wordCount: null,
+                  forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
+                  structuredDataTypes: [],
+                  sourceKeywords: JSON.parse(t.sourceKeywords),
+                  sourcePositions: JSON.parse(t.sourcePositions),
+                });
+              }
+            }
+            result.pages = rebuiltPages;
+            enrichmentStore.saveEnrichmentPages(
+              enrichmentId,
+              rebuiltPages.map((p) => ({
+                url: p.url,
+                finalUrl: p.finalUrl,
+                redirectCount: p.redirectCount,
+                redirectChain: JSON.stringify(p.redirectChain),
+                httpStatus: p.httpStatus,
+                contentType: p.contentType,
+                fetchStatus: p.fetchStatus,
+                fetchError: p.fetchError,
+                fetchedAt: p.fetchedAt,
+                cacheStatus: p.cacheStatus,
+                title: p.title,
+                metaDescription: p.metaDescription,
+                h1: p.h1,
+                canonical: p.canonical,
+                language: p.language,
+                wordCount: p.wordCount,
+                forms: JSON.stringify(p.forms),
+                structuredDataTypes: JSON.stringify(p.structuredDataTypes),
+                sourceKeywords: JSON.stringify(p.sourceKeywords),
+                sourcePositions: JSON.stringify(p.sourcePositions),
+              })),
+            );
+          }
         } else {
           const pagesResult = await runPagesModule(
             enrichmentId,
@@ -353,27 +448,67 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       const targetStatus = enrichmentStore.getSiteStructureTargetStatus(enrichmentId);
       if (targetStatus.total > 0 && targetStatus.pending === 0) {
         logger('Skipping completed site_structure module (all targets done)');
-        const records = enrichmentStore.loadEnrichmentSiteStructure(enrichmentId);
-        result.siteStructure = records.map((r) => ({
-          domain: r.domain,
-          homepageStatus: r.homepageStatus as SiteStructureRecord['homepageStatus'],
-          homepageHttpStatus: r.homepageHttpStatus,
-          robotsStatus: r.robotsStatus as SiteStructureRecord['robotsStatus'],
-          robotsHttpStatus: r.robotsHttpStatus,
-          robotsUrl: r.robotsUrl,
-          sitemapUrlsFromRobots: r.sitemapUrlsFromRobots,
-          sitemapFallbackUrl: r.sitemapFallbackUrl,
-          sitemapType: r.sitemapType as SiteStructureRecord['sitemapType'],
-          declaredSitemapCount: r.declaredSitemapCount,
-          discoveredUrlCount: r.discoveredUrlCount,
-          sampledUrls: r.sampledUrls,
-          sampledUtilityUrls: r.sampledUtilityUrls,
-          errors: r.errors,
-          fetchedAt: r.fetchedAt,
-          cacheStatus: r.cacheStatus as SiteStructureRecord['cacheStatus'],
-          sourceKeywords: r.sourceKeywords,
-          sourceBestPosition: r.sourceBestPosition,
-        }));
+        const batchRecords = enrichmentStore.loadEnrichmentSiteStructure(enrichmentId);
+        if (batchRecords.length > 0) {
+          result.siteStructure = batchRecords.map((r) => ({
+            domain: r.domain,
+            homepageStatus: r.homepageStatus as SiteStructureRecord['homepageStatus'],
+            homepageHttpStatus: r.homepageHttpStatus,
+            robotsStatus: r.robotsStatus as SiteStructureRecord['robotsStatus'],
+            robotsHttpStatus: r.robotsHttpStatus,
+            robotsUrl: r.robotsUrl,
+            sitemapUrlsFromRobots: r.sitemapUrlsFromRobots,
+            sitemapFallbackUrl: r.sitemapFallbackUrl,
+            sitemapType: r.sitemapType as SiteStructureRecord['sitemapType'],
+            declaredSitemapCount: r.declaredSitemapCount,
+            discoveredUrlCount: r.discoveredUrlCount,
+            sampledUrls: r.sampledUrls,
+            sampledUtilityUrls: r.sampledUtilityUrls,
+            errors: r.errors,
+            fetchedAt: r.fetchedAt,
+            cacheStatus: r.cacheStatus as SiteStructureRecord['cacheStatus'],
+            sourceKeywords: r.sourceKeywords,
+            sourceBestPosition: r.sourceBestPosition,
+          }));
+        } else {
+          logger('Rebuilding site structure from target checkpoints (batch table empty)');
+          const targets = enrichmentStore.loadSiteStructureTargets(enrichmentId);
+          const rebuiltRecords: SiteStructureRecord[] = [];
+          for (const t of targets) {
+            if (t.status === 'completed' && t.data) {
+              try {
+                const parsed = JSON.parse(t.data) as SiteStructureRecord;
+                rebuiltRecords.push({ ...parsed, cacheStatus: 'hit' });
+              } catch {
+                // skip corrupted target
+              }
+            }
+          }
+          result.siteStructure = rebuiltRecords;
+          enrichmentStore.saveEnrichmentSiteStructure(
+            enrichmentId,
+            rebuiltRecords.map((r) => ({
+              domain: r.domain,
+              homepageStatus: r.homepageStatus,
+              homepageHttpStatus: r.homepageHttpStatus,
+              robotsStatus: r.robotsStatus,
+              robotsHttpStatus: r.robotsHttpStatus,
+              robotsUrl: r.robotsUrl,
+              sitemapUrlsFromRobots: JSON.stringify(r.sitemapUrlsFromRobots),
+              sitemapFallbackUrl: r.sitemapFallbackUrl,
+              sitemapType: r.sitemapType,
+              declaredSitemapCount: r.declaredSitemapCount,
+              discoveredUrlCount: r.discoveredUrlCount,
+              sampledUrls: JSON.stringify(r.sampledUrls),
+              sampledUtilityUrls: JSON.stringify(r.sampledUtilityUrls),
+              errors: JSON.stringify(r.errors),
+              fetchedAt: r.fetchedAt,
+              cacheStatus: r.cacheStatus,
+              sourceKeywords: JSON.stringify(r.sourceKeywords),
+              sourceBestPosition: r.sourceBestPosition,
+            })),
+          );
+        }
       } else {
         const ssResult = await runSiteStructureModule(
           enrichmentId,
@@ -729,7 +864,7 @@ async function runPagesModule(
 
   for (const url of uniqueUrls) {
     const provenance = urlProvenance.get(url)!;
-    enrichmentStore.upsertPageTarget(enrichmentId, {
+    enrichmentStore.insertPageTargetIfAbsent(enrichmentId, {
       url,
       status: 'pending',
       sourceKeywords: JSON.stringify(provenance.keywords),
@@ -1082,7 +1217,7 @@ async function runSiteStructureModule(
   logger(`Inspecting site structure for ${domains.length} domains (${omittedDomains.length} omitted due to maxDomains=${siteStructureConfig.maxDomains})`);
 
   for (const domain of domains) {
-    enrichmentStore.upsertSiteStructureTarget(enrichmentId, { domain, status: 'pending' });
+    enrichmentStore.insertSiteStructureTargetIfAbsent(enrichmentId, { domain, status: 'pending' });
   }
   for (const domain of omittedDomains) {
     enrichmentStore.upsertSiteStructureTarget(enrichmentId, {
@@ -1358,6 +1493,61 @@ async function inspectDomain(
     sourceKeywords,
     sourceBestPosition,
   };
+}
+
+function rebuildPagesFromTargets(enrichmentStore: RunStore, enrichmentId: string): PageRecord[] {
+  const targets = enrichmentStore.loadPageTargets(enrichmentId);
+  const rebuiltPages: PageRecord[] = [];
+  for (const t of targets) {
+    if (t.status === 'completed' && t.data) {
+      try {
+        const parsed = JSON.parse(t.data) as PageRecord;
+        rebuiltPages.push({ ...parsed, cacheStatus: 'hit' });
+      } catch {
+        // skip corrupted target
+      }
+    } else if (t.status === 'error' && t.error) {
+      rebuiltPages.push({
+        url: t.url,
+        finalUrl: t.url,
+        redirectCount: 0,
+        redirectChain: [],
+        httpStatus: 0,
+        contentType: null,
+        fetchStatus: 'error',
+        fetchError: t.error,
+        fetchedAt: t.fetchedAt ?? new Date().toISOString(),
+        cacheStatus: 'none',
+        title: null,
+        metaDescription: null,
+        h1: null,
+        canonical: null,
+        language: null,
+        wordCount: null,
+        forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
+        structuredDataTypes: [],
+        sourceKeywords: JSON.parse(t.sourceKeywords),
+        sourcePositions: JSON.parse(t.sourcePositions),
+      });
+    }
+  }
+  return rebuiltPages;
+}
+
+function rebuildSiteStructureFromTargets(enrichmentStore: RunStore, enrichmentId: string): SiteStructureRecord[] {
+  const targets = enrichmentStore.loadSiteStructureTargets(enrichmentId);
+  const rebuiltRecords: SiteStructureRecord[] = [];
+  for (const t of targets) {
+    if (t.status === 'completed' && t.data) {
+      try {
+        const parsed = JSON.parse(t.data) as SiteStructureRecord;
+        rebuiltRecords.push({ ...parsed, cacheStatus: 'hit' });
+      } catch {
+        // skip corrupted target
+      }
+    }
+  }
+  return rebuiltRecords;
 }
 
 function defaultClusteringConfig(): ClusteringConfig {

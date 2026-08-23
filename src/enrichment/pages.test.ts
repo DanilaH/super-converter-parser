@@ -453,3 +453,122 @@ test('pages module: aborts oversized body', async () => {
   enrichmentStore.close();
   await rm(enrichmentDir, { recursive: true, force: true });
 });
+
+test('pages module: completed target survives planning on resume', async () => {
+  const runId = 'pages-resume-checkpoint';
+  const sourceStore = createSourceStoreWithSerp(runId, [`${baseUrl}/page1`]);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'pages-resume-checkpoint-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'test.sqlite'));
+
+  const firstOutcome = await runEnrichment({
+    enrichmentId: 'pages-enrichment-resume-cp',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['pages'],
+    shortlist: TEST_SHORTLIST,
+    config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
+    ssrfChecker: allowTestSsrf,
+    logger: () => {},
+  });
+
+  assert.equal(firstOutcome.kind, 'completed');
+  assert.ok(firstOutcome.result!.pages);
+  assert.equal(firstOutcome.result!.pages!.length, 1);
+
+  const targetsBefore = enrichmentStore.loadPageTargets('pages-enrichment-resume-cp');
+  assert.equal(targetsBefore.length, 1);
+  assert.equal(targetsBefore[0]!.status, 'completed');
+  assert.ok(targetsBefore[0]!.data, 'Target should have data after first run');
+
+  const secondOutcome = await runEnrichment({
+    enrichmentId: 'pages-enrichment-resume-cp',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['pages'],
+    shortlist: TEST_SHORTLIST,
+    config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
+    ssrfChecker: allowTestSsrf,
+    logger: () => {},
+    resume: true,
+  });
+
+  assert.equal(secondOutcome.kind, 'completed');
+  assert.ok(secondOutcome.result!.pages);
+  assert.equal(secondOutcome.result!.pages!.length, 1);
+  assert.equal(secondOutcome.result!.pages![0]!.title, 'Test Page One');
+
+  const targetsAfter = enrichmentStore.loadPageTargets('pages-enrichment-resume-cp');
+  assert.equal(targetsAfter[0]!.status, 'completed');
+  assert.ok(targetsAfter[0]!.data, 'Target data should survive planning on resume');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});
+
+test('pages module: rebuilds from target.data when batch table is empty (crash window)', async () => {
+  const runId = 'pages-crash-window';
+  const sourceStore = createSourceStoreWithSerp(runId, [`${baseUrl}/page1`, `${baseUrl}/page2`]);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'pages-crash-window-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'test.sqlite'));
+
+  const firstOutcome = await runEnrichment({
+    enrichmentId: 'pages-enrichment-crash',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['pages'],
+    shortlist: TEST_SHORTLIST,
+    config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
+    ssrfChecker: allowTestSsrf,
+    logger: () => {},
+  });
+
+  assert.equal(firstOutcome.kind, 'completed');
+  assert.equal(firstOutcome.result!.pages!.length, 2);
+
+  enrichmentStore.saveEnrichmentPages('pages-enrichment-crash', []);
+
+  const secondOutcome = await runEnrichment({
+    enrichmentId: 'pages-enrichment-crash',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['pages'],
+    shortlist: TEST_SHORTLIST,
+    config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
+    ssrfChecker: allowTestSsrf,
+    logger: () => {},
+    resume: true,
+  });
+
+  assert.equal(secondOutcome.kind, 'completed');
+  assert.ok(secondOutcome.result!.pages);
+  assert.equal(secondOutcome.result!.pages!.length, 2);
+
+  const page1 = secondOutcome.result!.pages!.find((p) => p.url === `${baseUrl}/page1`);
+  assert.ok(page1);
+  assert.equal(page1!.title, 'Test Page One');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});

@@ -57,6 +57,12 @@ before(() => {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end('<html>slow</html>');
         }, 200);
+      } else if (url === '/slow-body') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.write('<html>partial');
+        setTimeout(() => {
+          res.end('</html>');
+        }, 500);
       } else if (url === '/not-found') {
         res.writeHead(404, { 'Content-Type': 'text/html' });
         res.end('<html><body>Not found</body></html>');
@@ -201,4 +207,28 @@ test('parseRetryAfter: parses HTTP-date', () => {
 test('parseRetryAfter: returns null for invalid', () => {
   assert.equal(parseRetryAfter(null), null);
   assert.equal(parseRetryAfter('invalid'), null);
+});
+
+test('boundedFetch: timeout covers body read (stalled body after headers)', async () => {
+  const startTime = Date.now();
+  const result = await boundedFetch(`${baseUrl}/slow-body`, {
+    ...testConfig,
+    timeoutMs: 100,
+  });
+  const elapsed = Date.now() - startTime;
+
+  assert.ok(result.aborted, 'Should be aborted due to timeout');
+  assert.ok(result.bodyError, 'Should have body error');
+  assert.equal(result.body, null, 'Body should be null');
+  assert.ok(elapsed < 500, `Timeout should fire quickly, took ${elapsed}ms`);
+  assert.match(result.error ?? '', /abort/i);
+});
+
+test('slow-body endpoint test', async () => {
+  const result = await boundedFetch(`${baseUrl}/slow-body`, {
+    ...testConfig,
+    timeoutMs: 2000,
+  });
+  console.log('SLOW BODY FULL: status=', result.status, 'body=', result.body?.slice(0, 50));
+  assert.equal(result.status, 200);
 });
