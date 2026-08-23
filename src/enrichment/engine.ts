@@ -5,13 +5,18 @@ import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { writeTextAtomic } from '../runs/run.js';
 import type { SerpResult } from '../google/serp.js';
-import type { ResearchConfig } from '../config/config.js';
 import type { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson } from './outputs.js';
-import { runDomainAgeModule, renderDomainAgeCsv, renderDomainAgeJson, type DomainAgeRecord } from '../runs/domainAge.js';
+import {
+  runDomainAgeModule,
+  renderDomainAgeCsv,
+  renderDomainAgeJson,
+  type DomainAgeConfigSnapshot,
+  type DomainAgeRecord,
+} from '../runs/domainAge.js';
 import type {
   EnrichmentItemSource,
   EnrichmentModuleConfig,
@@ -54,7 +59,7 @@ export type EnrichmentOptions = {
    * to keep that path unchanged.
    */
   cacheStore?: CacheStore;
-  researchConfig?: ResearchConfig;
+  domainAgeConfig?: DomainAgeConfigSnapshot;
   rdapClient?: RdapClient;
   firstSeenClient?: FirstSeenClient;
 };
@@ -106,26 +111,48 @@ function buildClusteringInputs(
   return inputs;
 }
 
-// Collects the deduplicated set of registrable domains from a source run's
-// organic SERP rows, preserving first-seen order so progress and outputs are
-// deterministic. domain_age operates on domains; the keyword-level shortlist is
-// a clustering concern, so all observed organic domains are resolved here (the
-// TTL cache deduplicates across runs and a domain shared by many keywords is
-// fetched only once within a run).
-function collectSourceDomains(sourceStore: RunStore, sourceRunId: string, logger: EnrichmentLogger): string[] {
+// Collects the bounded, deduplicated set of registrable domains from a source run's
+// organic SERP rows, restricted to the shortlist (TASK-014 is shortlist-only deep
+// enrichment, 5-30 targets). Every keyword a domain was observed in is recorded in
+// the returned provenance map so outputs stay traceable back to the ranking rows.
+function collectSourceDomains(
+  sourceStore: RunStore,
+  sourceRunId: string,
+  shortlist: string[] | undefined,
+  logger: EnrichmentLogger,
+): { domains: string[]; provenance: Map<string, string[]> } {
+  const shortlistSet =
+    shortlist && shortlist.length > 0 ? new Set(shortlist.map(normalizeKeyword)) : null;
+  if (!shortlistSet) {
+    logger('Domain-age: no shortlist provided; skipping domain enrichment (use --shortlist to bound targets).');
+    return { domains: [], provenance: new Map() };
+  }
+
+  const keywords = sourceStore.loadKeywords(sourceRunId);
+  const idxToKeyword = new Map<number, string>();
+  for (const k of keywords) {
+    idxToKeyword.set(k.idx, normalizeKeyword(k.normalizedKeyword ?? k.keyword));
+  }
+
   const serpRows = sourceStore.loadSerpRows(sourceRunId);
-  const order: string[] = [];
-  const seen = new Set<string>();
+  const domains: string[] = [];
+  const provenance = new Map<string, string[]>();
   for (const row of serpRows) {
     if (row.resultType !== 'organic') continue;
+    const keyword = idxToKeyword.get(row.keywordIdx ?? -1);
+    if (keyword === undefined || !shortlistSet.has(keyword)) continue;
     const domain = row.registrableDomain ?? '';
-    if (domain && !seen.has(domain)) {
-      seen.add(domain);
-      order.push(domain);
+    if (!domain) continue;
+    if (!provenance.has(domain)) {
+      provenance.set(domain, []);
+      domains.push(domain);
     }
+    const kws = provenance.get(domain) as string[];
+    if (!kws.includes(keyword)) kws.push(keyword);
   }
-  logger(`Domain-age: ${order.length} unique domains observed in organic SERPs.`);
-  return order;
+
+  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords.`);
+  return { domains, provenance };
 }
 
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
@@ -214,28 +241,31 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     if (modules.includes('domain_age')) {
       const cacheStore = options.cacheStore;
-      const researchConfig = options.researchConfig;
-      if (!cacheStore || !researchConfig) {
+      const domainAgeConfig = options.domainAgeConfig;
+      if (!cacheStore || !domainAgeConfig) {
         throw new Error(
-          "The 'domain_age' module requires cacheStore and researchConfig options (CacheStore + ResearchConfig).",
+          "The 'domain_age' module requires cacheStore and domainAgeConfig options (CacheStore + DomainAgeConfigSnapshot).",
         );
       }
       checkCancellation(signal);
-      const domains = collectSourceDomains(sourceConn.store, sourceRunId, logger);
-      // runDomainAgeModule is cache-idempotent: a resume re-entry cache-hits
-      // completed domains and never re-fetches them, satisfying the
-      // "completed work is not repeated" acceptance.
+      // Shortlist-only: domains are bounded to the enrolled shortlist and carry
+      // provenance (which shortlisted keywords observed each domain). On resume the
+      // completion is derived from per-domain checkpoints in enrichment_items, not
+      // from the mutable TTL cache.
+      const { domains, provenance } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
       domainAgeRecords = await runDomainAgeModule({
         domains,
+        provenance,
         cache: cacheStore,
         rdap: options.rdapClient ?? null,
         firstSeen: options.firstSeenClient ?? null,
-        ttl: researchConfig.cache.ttl.domainAge,
+        ttl: domainAgeConfig.ttl,
         forceRefresh: false,
         store: enrichmentStore,
         runId: enrichmentId,
         logger,
         signal,
+        resume,
         now: Date.now,
         onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
       });

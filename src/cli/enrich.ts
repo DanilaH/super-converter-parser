@@ -10,9 +10,13 @@ import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
 import { createRdapClient } from '../rdap/client.js';
 import { createFirstSeenClient } from '../firstseen/client.js';
+import {
+  buildDomainAgeConfigSnapshot,
+  snapshotToFirstSeenClientConfig,
+  snapshotToRdapClientConfig,
+  type DomainAgeConfigSnapshot,
+} from '../runs/domainAge.js';
 import type { ResearchConfig } from '../config/config.js';
-import type { RdapClientConfig } from '../rdap/types.js';
-import type { FirstSeenClientConfig } from '../firstseen/types.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   KNOWN_ENRICHMENT_MODULES,
@@ -242,6 +246,7 @@ async function main(): Promise<void> {
     let shortlist: string[] = [];
     let modules: EnrichmentModuleId[];
     let isResume = false;
+    let domainAgeSnapshot: DomainAgeConfigSnapshot | undefined;
 
     if (args.resumeEnrichmentId) {
       isResume = true;
@@ -269,6 +274,9 @@ async function main(): Promise<void> {
       };
       shortlist = existingRun.shortlistKeywords;
       modules = existingRun.modules;
+      // Restore the domain_age config snapshot so resume reproduces the original
+      // provider/endpoints/TTL semantics instead of the current environment.
+      domainAgeSnapshot = existingRun.config.domain_age as DomainAgeConfigSnapshot | undefined;
     } else {
       sourceRunId = args.sourceRunId;
       const sourceDir = findSourceRunDirectory(sourceRunId);
@@ -284,40 +292,30 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-      shortlist = validateShortlist(sourceStorePath, sourceRunId, args.shortlist);
-      modules = args.modules;
-    }
+       shortlist = validateShortlist(sourceStorePath, sourceRunId, args.shortlist);
+       modules = args.modules;
+       if (modules.includes('domain_age')) {
+         domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
+       }
+     }
 
     store ??= RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
 
     const needsDomainAge = modules.includes('domain_age');
+    if (needsDomainAge && !domainAgeSnapshot) {
+      throw new ResearchError(
+        'RESUME_CONFIG_MISMATCH',
+        'The "domain_age" module requires a domain_age config snapshot; it was not found on the stored run.',
+      );
+    }
     if (needsDomainAge) {
       cacheStore = CacheStore.open(resolve(config.cache.path));
     }
-    const rdapClient = needsDomainAge
-      ? createRdapClient({
-          bootstrapBase: config.rdap.bootstrapBase,
-          bootstrapFile: config.rdap.bootstrapFile,
-          bootstrapTtlMs: config.rdap.bootstrapTtlMs,
-          queryTimeoutMs: config.rdap.queryTimeoutMs,
-          perHostMinDelayMs: config.rdap.perHostMinDelayMs,
-          maxAttempts: config.rdap.maxAttempts,
-          baseDelayMs: config.rdap.baseDelayMs,
-          maxDelayMs: config.rdap.maxDelayMs,
-          random: Math.random,
-        } as RdapClientConfig)
+    const rdapClient = needsDomainAge && domainAgeSnapshot
+      ? createRdapClient(snapshotToRdapClientConfig(domainAgeSnapshot, { random: Math.random }))
       : null;
-    const firstSeenClient = needsDomainAge
-      ? createFirstSeenClient({
-          provider: config.firstSeen.provider,
-          endpoint: config.firstSeen.endpoint,
-          apiKey: null,
-          timeoutMs: config.firstSeen.timeoutMs,
-          minDelayMs: config.firstSeen.minDelayMs,
-          maxAttempts: config.firstSeen.maxAttempts,
-          baseDelayMs: config.firstSeen.baseDelayMs,
-          maxDelayMs: config.firstSeen.maxDelayMs,
-        } as FirstSeenClientConfig)
+    const firstSeenClient = needsDomainAge && domainAgeSnapshot
+      ? createFirstSeenClient(snapshotToFirstSeenClientConfig(domainAgeSnapshot, {}))
       : null;
 
     console.log('Utility Research Runner — Enrichment');
@@ -332,8 +330,11 @@ async function main(): Promise<void> {
       enrichmentDirectory,
       modules,
       shortlist,
-      config: { clusters: clusteringConfig },
-      ...(needsDomainAge ? { researchConfig: config } : {}),
+      config: {
+        clusters: clusteringConfig,
+        ...(domainAgeSnapshot ? { domain_age: domainAgeSnapshot } : {}),
+      },
+      ...(domainAgeSnapshot ? { domainAgeConfig: domainAgeSnapshot } : {}),
       ...(cacheStore ? { cacheStore } : {}),
       ...(rdapClient ? { rdapClient } : {}),
       ...(firstSeenClient ? { firstSeenClient } : {}),

@@ -34,13 +34,16 @@ export type EnrichmentItemSource =
   | 'google'
   | 'rdap'
   | 'first_seen'
-  | 'ahrefs';
+  | 'ahrefs'
+  | 'cache'
+  | 'checkpoint';
 
 export type EnrichmentCacheStatus =
   | 'hit'
   | 'miss'
   | 'expired'
   | 'refreshed'
+  | 'partial'
   | 'none';
 
 export type ClusterEdgeRule = {

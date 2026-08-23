@@ -77,20 +77,36 @@ export function selectRegistrationDate(events: RdapEventCandidate[]): {
   date: string | null;
   rule: string;
 } {
-  const candidates: string[] = [];
+  // Compare candidates by parsed instant, never lexically: ISO-8601 values with
+  // different offsets/timezones/frac-second formats are not string-orderable, and
+  // malformed dates must be dropped rather than retained as the chosen earliest.
+  // The raw eventDate string is preserved on the chosen candidate for audit.
+  const candidates: Array<{ date: string; instant: number }> = [];
+  let invalidCount = 0;
   for (const event of events) {
-    if (REGISTRATION_ACTION_SET.has(event.eventAction) && event.eventDate) {
-      candidates.push(event.eventDate);
+    if (!REGISTRATION_ACTION_SET.has(event.eventAction) || !event.eventDate) continue;
+    const instant = Date.parse(event.eventDate);
+    if (!Number.isNaN(instant)) {
+      candidates.push({ date: event.eventDate, instant });
+    } else {
+      invalidCount += 1;
     }
   }
   if (candidates.length === 0) {
-    return { date: null, rule: REGISTRATION_RULE_NO_EVENT };
+    const rule = invalidCount > 0
+      ? `${REGISTRATION_RULE_NO_EVENT} (dropped ${invalidCount} unparseable registration-class date(s))`
+      : REGISTRATION_RULE_NO_EVENT;
+    return { date: null, rule };
   }
-  candidates.sort();
-  const chosen = candidates[0] as string;
+  candidates.sort((a, b) => a.instant - b.instant);
+  const chosen = candidates[0] as { date: string; instant: number };
   const rule =
-    candidates.length === 1 ? REGISTRATION_RULE_SINGLE : REGISTRATION_RULE_EARLIEST;
-  return { date: chosen, rule };
+    candidates.length === 1
+      ? `${REGISTRATION_RULE_SINGLE}${invalidCount > 0 ? ` (dropped ${invalidCount} unparseable date(s))` : ''}`
+      : invalidCount > 0
+        ? `${REGISTRATION_RULE_EARLIEST} (dropped ${invalidCount} unparseable date(s))`
+        : REGISTRATION_RULE_EARLIEST;
+  return { date: chosen.date, rule };
 }
 
 function readEvents(obj: Record<string, unknown>): RdapEventCandidate[] {

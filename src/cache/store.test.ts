@@ -817,50 +817,83 @@ test('domain cache roundtrip with explicit TTL', () => {
   store.close();
 });
 
-test('domain_age_cache roundtrip preserves registration/first-seen data and TTL-derived expiry', () => {
+test('domain_age_cache roundtrip preserves per-source registration/first-seen data and TTLs', () => {
   const store = CacheStore.openInMemory();
+  const regExpires = '2026-06-30T00:00:00.000Z'; // registration ok -> 180d
+  const fsExpires = '2026-01-31T00:00:00.000Z'; // first-seen ok -> 30d
+  const storedAt = '2026-01-01T00:00:00.000Z';
   store.putDomainAge(
     'example.com',
     {
       registrationDate: '2010-05-03T04:00:00Z',
       registrationStatus: 'ok',
-      registrationRule: 'earliest eventDate',
+      registrationRule: 'earliest eventDate among eventAction in {registration, add, create}',
       registrationIsRedacted: false,
+      registrationFetchedAt: storedAt,
+      registrationExpiresAt: regExpires,
+      registrationError: null,
+      registrationRequestCount: 1,
+      registrationHttpStatus: 200,
       firstSeenDate: '2001-04-09T13:50:45Z',
       firstSeenStatus: 'ok',
       firstSeenSource: 'wayback',
+      firstSeenFetchedAt: storedAt,
+      firstSeenExpiresAt: fsExpires,
+      firstSeenError: null,
+      firstSeenRequestCount: 1,
+      firstSeenHttpStatus: 200,
       error: null,
     },
-    '2026-01-01T00:00:00.000Z',
-    180 * 24 * 60 * 60 * 1000,
+    storedAt,
   );
   const loaded = store.getDomainAge('example.com');
   assert.equal(loaded?.registrationDate, '2010-05-03T04:00:00Z');
   assert.equal(loaded?.registrationStatus, 'ok');
+  assert.equal(loaded?.registrationExpiresAt, regExpires);
+  assert.equal(loaded?.registrationRequestCount, 1);
+  assert.equal(loaded?.registrationHttpStatus, 200);
   assert.equal(loaded?.firstSeenDate, '2001-04-09T13:50:45Z');
   assert.equal(loaded?.firstSeenStatus, 'ok');
   assert.equal(loaded?.firstSeenSource, 'wayback');
+  assert.equal(loaded?.firstSeenExpiresAt, fsExpires);
   assert.equal(loaded?.registrationIsRedacted, false);
-  assert.equal(loaded?.expiresAt, '2026-06-30T00:00:00.000Z');
+  // Row-level expiry is the min of the independent per-source expiries.
+  assert.equal(loaded?.expiresAt, fsExpires);
+
+  // Redaction/unavailable facts are preserved per source.
   store.putDomainAge(
     'redacted.example',
     {
       registrationDate: null,
       registrationStatus: 'ok',
-      registrationRule: 'no registration-class event present',
+      registrationRule: 'no registration-class event present; registrationDate unavailable',
       registrationIsRedacted: true,
+      registrationFetchedAt: storedAt,
+      registrationExpiresAt: regExpires,
+      registrationError: 'registration event redacted or absent',
+      registrationRequestCount: 1,
+      registrationHttpStatus: 200,
       firstSeenDate: null,
       firstSeenStatus: 'unavailable',
       firstSeenSource: 'unconfigured',
+      firstSeenFetchedAt: null,
+      firstSeenExpiresAt: null,
+      firstSeenError: null,
+      firstSeenRequestCount: 0,
+      firstSeenHttpStatus: null,
       error: 'registration event redacted or absent',
     },
-    '2026-01-01T00:00:00.000Z',
-    24 * 60 * 60 * 1000,
+    storedAt,
   );
   const redacted = store.getDomainAge('redacted.example');
   assert.equal(redacted?.registrationDate, null);
   assert.equal(redacted?.registrationIsRedacted, true);
+  assert.equal(redacted?.registrationFetchedAt, storedAt);
   assert.equal(redacted?.firstSeenStatus, 'unavailable');
+  assert.equal(redacted?.firstSeenExpiresAt, null);
+  // No provider -> unavailable has no self-renewing expiry; row expiry follows
+  // the registration fact only.
+  assert.equal(redacted?.expiresAt, regExpires);
   store.close();
 });
 
@@ -905,13 +938,22 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
       registrationStatus: 'error',
       registrationRule: 'unreachable',
       registrationIsRedacted: false,
+      registrationFetchedAt: '2020-01-01T00:00:00.000Z',
+      registrationExpiresAt: '2020-01-01T00:00:01.000Z',
+      registrationError: 'timeout',
+      registrationRequestCount: 1,
+      registrationHttpStatus: 503,
       firstSeenDate: null,
       firstSeenStatus: 'error',
       firstSeenSource: 'wayback',
+      firstSeenFetchedAt: '2020-01-01T00:00:00.000Z',
+      firstSeenExpiresAt: '2020-01-01T00:00:01.000Z',
+      firstSeenError: 'timeout',
+      firstSeenRequestCount: 1,
+      firstSeenHttpStatus: 503,
       error: 'timeout',
     },
     '2020-01-01T00:00:00.000Z',
-    1000,
   );
 
   const deleted = store.cleanup(Date.parse('2026-01-01T00:00:00.000Z'));

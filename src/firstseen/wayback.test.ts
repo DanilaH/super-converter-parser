@@ -45,14 +45,18 @@ test('buildWaybackQuery targets the CDX endpoint with first-seen params', () => 
   assert.equal(params.get('output'), 'json');
   assert.equal(params.get('limit'), '1');
   assert.equal(params.get('from'), '1990');
+  // fl=timestamp so row[0] is the capture timestamp, not urlkey.
+  assert.equal(params.get('fl'), 'timestamp');
+});
+
+test('match semantics: url=<registrable domain> is documented in the query', () => {
+  const params = new URL(buildWaybackQuery('https://web.archive.org/cdx/search/cdx', 'example.com')).searchParams;
+  assert.equal(params.get('url'), 'example.com');
 });
 
 test('returns firstSeenDate from the earliest CDX capture', async () => {
   const fetchImpl = (async () =>
-    cdxResponse([
-      ['timestamp', 'original'],
-      ['20100409135045', 'http://example.com/'],
-    ])) as unknown as typeof fetch;
+    cdxResponse([['timestamp'], ['20100409135045']])) as unknown as typeof fetch;
   const client = createFirstSeenClient(baseConfig(fetchImpl))!;
   const result = await client('example.com');
 
@@ -64,13 +68,21 @@ test('returns firstSeenDate from the earliest CDX capture', async () => {
 });
 
 test('no snapshots -> ok with null date and a source reason', async () => {
-  const fetchImpl = (async () => cdxResponse([['timestamp', 'original']])) as unknown as typeof fetch;
+  const fetchImpl = (async () => cdxResponse([['timestamp']])) as unknown as typeof fetch;
   const client = createFirstSeenClient(baseConfig(fetchImpl))!;
   const result = await client('example.com');
 
   assert.equal(result.status, 'ok');
   assert.equal(result.firstSeenDate, null);
   assert.match(result.sourceReason ?? '', /no archived snapshots/);
+});
+
+test('header missing timestamp column -> error', async () => {
+  const fetchImpl = (async () => cdxResponse([['urlkey', 'original'], ['org_6/example.com/', 'http://example.com/']])) as unknown as typeof fetch;
+  const client = createFirstSeenClient(baseConfig(fetchImpl))!;
+  const result = await client('example.com');
+  assert.equal(result.status, 'error');
+  assert.match(result.error ?? '', /missing 'timestamp'/);
 });
 
 test('HTTP 404 -> error', async () => {
@@ -95,7 +107,7 @@ test('429 then 200 succeeds after retry', async () => {
     calls += 1;
     return calls === 1
       ? cdxResponse({}, { status: 429, headers: { 'Retry-After': '0' } })
-      : cdxResponse([['timestamp', 'original'], ['20050101000000', 'x']]);
+      : cdxResponse([['timestamp'], ['20050101000000']]);
   }) as unknown as typeof fetch;
   const config = baseConfig(fetchImpl);
   config.maxAttempts = 3;

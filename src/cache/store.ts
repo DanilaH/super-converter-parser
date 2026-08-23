@@ -8,7 +8,7 @@ import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 import type { RdapRegistrationStatus } from '../rdap/types.js';
 import type { FirstSeenStatus } from '../firstseen/types.js';
 
-export const CACHE_SCHEMA_VERSION = 5;
+export const CACHE_SCHEMA_VERSION = 6;
 
 // Rows that expired less than this long ago survive an open-time cleanup so
 // the next run can still classify them as expired (real expired accounting
@@ -93,21 +93,50 @@ const MIGRATIONS: string[] = [
   // (RDAP) and first-seen date plus their statuses so each fact carries its own
   // TTL, but the row expires at the freshest-facts-first minimum. Registration
   // and first-seen are separate facts and never alias one another.
-  `
-  CREATE TABLE domain_age_cache (
-    domain TEXT PRIMARY KEY,
-    registration_date TEXT,
-    registration_status TEXT NOT NULL,
-    registration_rule TEXT NOT NULL DEFAULT '',
-    registration_is_redacted INTEGER NOT NULL DEFAULT 0,
-    first_seen_date TEXT,
-    first_seen_status TEXT NOT NULL,
-    first_seen_source TEXT NOT NULL DEFAULT '',
-    error TEXT,
-    stored_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-  );
-  `,
+   `
+   CREATE TABLE domain_age_cache (
+     domain TEXT PRIMARY KEY,
+     registration_date TEXT,
+     registration_status TEXT NOT NULL,
+     registration_rule TEXT NOT NULL DEFAULT '',
+     registration_is_redacted INTEGER NOT NULL DEFAULT 0,
+     first_seen_date TEXT,
+     first_seen_status TEXT NOT NULL,
+     first_seen_source TEXT NOT NULL DEFAULT '',
+     error TEXT,
+     stored_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );
+   `,
+   // v6: split the single-row TTL/expiry into independent RDAP vs first-seen
+   // freshness so a short first-seen TTL no longer forces a refetch of a valid
+   // 180-day registration fact. Each source now carries its own fetchedAt/
+   // expiresAt/error/requestCount/httpStatus; the row-level expires_at becomes the
+   // min of the two (for cleanup). Legacy v5 rows are back-filled from the combined
+   // columns so they remain consumable; they are refreshed under the per-source
+   // contract on next access.
+   `
+   ALTER TABLE domain_age_cache ADD COLUMN registration_fetched_at TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN registration_expires_at TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN registration_error TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN registration_request_count INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE domain_age_cache ADD COLUMN registration_http_status INTEGER;
+   ALTER TABLE domain_age_cache ADD COLUMN first_seen_fetched_at TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN first_seen_expires_at TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN first_seen_error TEXT;
+   ALTER TABLE domain_age_cache ADD COLUMN first_seen_request_count INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE domain_age_cache ADD COLUMN first_seen_http_status INTEGER;
+   ALTER TABLE domain_age_cache ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+   UPDATE domain_age_cache
+      SET registration_fetched_at = stored_at,
+          registration_expires_at = expires_at,
+          registration_error = error,
+          first_seen_fetched_at = stored_at,
+          first_seen_expires_at = expires_at,
+          first_seen_error = error,
+          updated_at = stored_at
+    WHERE registration_expires_at IS NULL;
+   `,
 ];
 
 export type CachedKeywordEntry = {
@@ -150,13 +179,26 @@ export type CachedDomainEntry = {
 
 export type CachedDomainAgeEntry = {
   domain: string;
+  // Registration fact (RDAP). Independent TTL/provenance from first-seen.
   registrationDate: string | null;
   registrationStatus: RdapRegistrationStatus;
   registrationRule: string;
   registrationIsRedacted: boolean;
+  registrationFetchedAt: string | null;
+  registrationExpiresAt: string | null;
+  registrationError: string | null;
+  registrationRequestCount: number;
+  registrationHttpStatus: number | null;
+  // First-seen fact (first-seen provider). Independent TTL/provenance.
   firstSeenDate: string | null;
-  firstSeenStatus: FirstSeenStatus;
+  firstSeenStatus: FirstSeenStatus | 'not_attempted';
   firstSeenSource: string;
+  firstSeenFetchedAt: string | null;
+  firstSeenExpiresAt: string | null;
+  firstSeenError: string | null;
+  firstSeenRequestCount: number;
+  firstSeenHttpStatus: number | null;
+  // Aggregate error (union of both sources) for convenience; null when both are clean.
   error: string | null;
   storedAt: string;
   expiresAt: string;
@@ -308,7 +350,6 @@ export interface KeywordCache {
     domain: string,
     entry: Omit<CachedDomainAgeEntry, 'domain' | 'storedAt' | 'expiresAt'>,
     storedAt: string,
-    ttlMs: number,
   ): void;
 }
 
@@ -471,7 +512,14 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
-        const ageResult = this.db.prepare('DELETE FROM domain_age_cache WHERE expires_at <= ?').run(cutoff);
+        // New v6 rows: expire by the row-level min TTL. Legacy v5 rows have NULL
+        // per-source expiry and are refreshed under the per-source contract on
+        // next access, so purge them here rather than serving a stale composite.
+        const ageResult = this.db
+          .prepare(
+            'DELETE FROM domain_age_cache WHERE expires_at IS NOT NULL AND expires_at <= ? OR registration_expires_at IS NULL',
+          )
+          .run(cutoff);
         deleted += ageResult.changes;
       });
       purge();
@@ -714,12 +762,23 @@ export class CacheStore implements KeywordCache {
             registration_status: string;
             registration_rule: string;
             registration_is_redacted: number;
+            registration_fetched_at: string | null;
+            registration_expires_at: string | null;
+            registration_error: string | null;
+            registration_request_count: number;
+            registration_http_status: number | null;
             first_seen_date: string | null;
             first_seen_status: string;
             first_seen_source: string;
+            first_seen_fetched_at: string | null;
+            first_seen_expires_at: string | null;
+            first_seen_error: string | null;
+            first_seen_request_count: number;
+            first_seen_http_status: number | null;
             error: string | null;
             stored_at: string;
-            expires_at: string;
+            expires_at: string | null;
+            updated_at: string;
           }
         | undefined;
       if (!row) return null;
@@ -729,12 +788,22 @@ export class CacheStore implements KeywordCache {
         registrationStatus: row.registration_status as RdapRegistrationStatus,
         registrationRule: row.registration_rule,
         registrationIsRedacted: row.registration_is_redacted !== 0,
+        registrationFetchedAt: row.registration_fetched_at,
+        registrationExpiresAt: row.registration_expires_at,
+        registrationError: row.registration_error,
+        registrationRequestCount: row.registration_request_count,
+        registrationHttpStatus: row.registration_http_status,
         firstSeenDate: row.first_seen_date,
-        firstSeenStatus: row.first_seen_status as FirstSeenStatus,
+        firstSeenStatus: (row.first_seen_status as FirstSeenStatus | 'not_attempted'),
         firstSeenSource: row.first_seen_source,
+        firstSeenFetchedAt: row.first_seen_fetched_at,
+        firstSeenExpiresAt: row.first_seen_expires_at,
+        firstSeenError: row.first_seen_error,
+        firstSeenRequestCount: row.first_seen_request_count,
+        firstSeenHttpStatus: row.first_seen_http_status,
         error: row.error,
         storedAt: row.stored_at,
-        expiresAt: row.expires_at,
+        expiresAt: row.expires_at ?? '',
       };
     });
   }
@@ -743,17 +812,27 @@ export class CacheStore implements KeywordCache {
     domain: string,
     entry: Omit<CachedDomainAgeEntry, 'domain' | 'storedAt' | 'expiresAt'>,
     storedAt: string,
-    ttlMs: number,
   ): void {
     this.wrap('putDomainAge', () => {
-      const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
+      // Row-level expiry is the minimum of the two independent source expiries so
+      // cleanup purges the row only once both facts are stale. A NULL source
+      // expiry (e.g. an unavailable fact that never expires on its own) is ignored
+      // when computing the minimum.
+      const regExpires = entry.registrationExpiresAt ? Date.parse(entry.registrationExpiresAt) : Number.POSITIVE_INFINITY;
+      const fsExpires = entry.firstSeenExpiresAt ? Date.parse(entry.firstSeenExpiresAt) : Number.POSITIVE_INFINITY;
+      const rowExpires = Math.min(regExpires, fsExpires);
+      const expiresAt = Number.isFinite(rowExpires) ? new Date(rowExpires).toISOString() : '';
+      const now = new Date().toISOString();
       this.db
         .prepare(
           `INSERT OR REPLACE INTO domain_age_cache
              (domain, registration_date, registration_status, registration_rule,
-              registration_is_redacted, first_seen_date, first_seen_status,
-              first_seen_source, error, stored_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              registration_is_redacted, registration_fetched_at, registration_expires_at,
+              registration_error, registration_request_count, registration_http_status,
+              first_seen_date, first_seen_status, first_seen_source, first_seen_fetched_at,
+              first_seen_expires_at, first_seen_error, first_seen_request_count,
+              first_seen_http_status, error, stored_at, expires_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           domain,
@@ -761,12 +840,23 @@ export class CacheStore implements KeywordCache {
           entry.registrationStatus,
           entry.registrationRule,
           entry.registrationIsRedacted ? 1 : 0,
+          entry.registrationFetchedAt,
+          entry.registrationExpiresAt,
+          entry.registrationError,
+          entry.registrationRequestCount,
+          entry.registrationHttpStatus,
           entry.firstSeenDate,
           entry.firstSeenStatus,
           entry.firstSeenSource,
+          entry.firstSeenFetchedAt,
+          entry.firstSeenExpiresAt,
+          entry.firstSeenError,
+          entry.firstSeenRequestCount,
+          entry.firstSeenHttpStatus,
           entry.error,
           storedAt,
           expiresAt,
+          now,
         );
     });
   }

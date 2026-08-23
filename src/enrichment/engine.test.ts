@@ -9,6 +9,7 @@ import { createRunDirectory } from '../runs/run.js';
 import { loadConfig } from '../config/config.js';
 import { runEnrichment, type EnrichmentOptions } from './engine.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from './clustering.js';
+import { buildDomainAgeConfigSnapshot } from '../runs/domainAge.js';
 import type { RdapClient, RdapRegistrationResult } from '../rdap/types.js';
 import type { FirstSeenClient, FirstSeenResult } from '../firstseen/types.js';
 
@@ -427,8 +428,9 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
     enrichmentStore,
     enrichmentDirectory: enrichmentDir,
     modules: ['domain_age'],
+    shortlist: ['json diff', 'json compare'],
     config: {},
-    researchConfig: BASE_CONFIG,
+    domainAgeConfig: buildDomainAgeConfigSnapshot(BASE_CONFIG),
     cacheStore,
     rdapClient: makeRdap(rdapCalls),
     firstSeenClient: makeFirstSeen(fsCalls),
@@ -437,7 +439,7 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
 
   assert.equal(outcome.kind, 'completed');
   assert.ok(outcome.domainAgeRecords);
-  // 5 unique organic domains across the two source keywords (a/b/c/e/f).
+  // Shortlist-bounded: 5 unique organic domains across the two shortlisted keywords (a/b/c/e/f).
   assert.equal(outcome.domainAgeRecords!.size, 5);
   assert.equal(rdapCalls.value, 5);
   assert.equal(fsCalls.value, 5);
@@ -445,13 +447,16 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
   // Resolved once and cached for resume.
   assert.ok(cacheStore.getDomainAge('a.com'));
   assert.equal(cacheStore.getDomainAge('a.com')?.registrationDate, '2010-05-03T04:00:00Z');
+  // Provenance links each domain to the shortlisted keyword(s) that observed it.
+  const aRecord = [...outcome.domainAgeRecords!.values()].find((r) => r.domain === 'a.com');
+  assert.deepEqual(aRecord?.sourceKeywords.sort(), ['json compare', 'json diff']);
 
   const csv = await readFile(join(enrichmentDir, 'domain-age.csv'), 'utf8');
   assert.match(csv, /^"domain"/);
   assert.equal(csv.split('\r\n').filter((l) => l.length > 0).length, 6); // header + 5
 
   const jsonText = await readFile(join(enrichmentDir, 'domain-age.json'), 'utf8');
-  const json = JSON.parse(jsonText) as Array<{ domain: string; registrationDate: string }>;
+  const json = JSON.parse(jsonText) as Array<{ domain: string; registrationDate: string; sourceKeywords: string[] }>;
   assert.equal(json.length, 5);
   assert.equal(json.find((r) => r.domain === 'a.com')?.registrationDate, '2010-05-03T04:00:00Z');
 
@@ -476,8 +481,9 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
     enrichmentStore,
     enrichmentDirectory: enrichmentDir,
     modules: ['domain_age'],
+    shortlist: ['json diff', 'json compare'],
     config: {},
-    researchConfig: BASE_CONFIG,
+    domainAgeConfig: buildDomainAgeConfigSnapshot(BASE_CONFIG),
     cacheStore,
     rdapClient: makeRdap(rdapCalls),
     firstSeenClient: makeFirstSeen({ value: 0 }),
@@ -489,7 +495,7 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
 
   const resumed = await runEnrichment({ ...options, resume: true });
   assert.equal(resumed.kind, 'completed');
-  assert.equal(rdapCalls.value, 5); // no fresh calls: all cache hits
+  assert.equal(rdapCalls.value, 5); // no fresh calls: checkpoint resume skips completed domains
   assert.equal(resumed.domainAgeRecords?.size, 5);
 
   sourceStore.close();

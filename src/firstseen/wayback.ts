@@ -1,13 +1,24 @@
 // Wayback Machine CDX API first-seen provider.
 //
 // Source: https://github.com/internetarchive/wayback/tree/master/wayback-cdx-server
-// Query: GET https://web.archive.org/cdx/search/cdx?url=<domain>&output=json&limit=1&from=1990
-// Response: JSON array of rows; row[0] is the CDX header, row[1][0] is the
-// earliest capture's timestamp in compact `YYYYMMDDhhmmss` form (UTC).
+// Query: GET https://web.archive.org/cdx/search/cdx?url=<domain>&output=json&limit=1&from=1990&fl=timestamp
 //
-// CDX returns captures chronologically ascending by default, so `limit=1`
-// yields the oldest (first-seen) snapshot. This is a real, documented,
-// unauthenticated first-seen signal — NOT registration data, NOT SERP presence.
+// Match semantics: `url` is the registrable domain. CDX's `url` filter matches the
+// registrable domain and any of its subdomains (host equals the domain or ends with
+// `.<domain>`), and does NOT match unrelated hosts that merely contain the domain
+// string (e.g. `example.com` will not match `example.com.evil.net`). This is the
+// intended domain first-seen signal: the earliest archived snapshot of the domain
+// or any subdomain.
+//
+// Response shape (with `fl=timestamp`): a JSON array of rows. Row 0 is the column
+// header (["timestamp"]); the first capture follows. The timestamp column index is
+// resolved from the header rather than assumed, so the parser stays correct even if
+// CDX's default column ordering changes. CDX timestamps are compact UTC
+// `YYYYMMDDhhmmss` (left-truncated prefixes are accepted).
+//
+// CDX returns captures chronologically ascending by default, so `limit=1` yields the
+// oldest (first-seen) snapshot. This is a real, documented, unauthenticated first-seen
+// signal — NOT registration data, NOT SERP presence.
 import type { FirstSeenClient, FirstSeenClientConfig, FirstSeenResult } from './types.js';
 
 export const WAYBACK_SOURCE = 'wayback';
@@ -36,11 +47,14 @@ export function parseWaybackTimestamp(ts: string): string | null {
 
 export function buildWaybackQuery(endpoint: string, domain: string): string {
   const base = endpoint || WAYBACK_DEFAULT_ENDPOINT;
+  // `fl=timestamp` pins the response column so row[0] is guaranteed to be the
+  // capture timestamp (the undocumented default columns start with urlkey).
   const params = new URLSearchParams({
     url: domain,
     output: 'json',
     limit: '1',
     from: '1990',
+    fl: 'timestamp',
   });
   return `${base}/?${params.toString()}`;
 }
@@ -135,7 +149,8 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
         return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response (not an array)');
       }
 
-      // Row 0 is the CDX header; row 1 is the earliest capture.
+      // Row 0 is the column header; the first data row follows. Resolve the
+      // timestamp column index from the header so we never assume a position.
       if (data.length < 2) {
         return {
           domain,
@@ -149,9 +164,20 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
           httpStatus: response.status,
         };
       }
+      const header = Array.isArray(data[0]) ? (data[0] as unknown[]) : [];
+      const tsIndex = header.findIndex((col) => col === 'timestamp');
+      if (tsIndex < 0) {
+        return errorResult(
+          domain,
+          fetchedAt,
+          attempt,
+          response.status,
+          `Wayback CDX header missing 'timestamp' column: ${JSON.stringify(header)}`,
+        );
+      }
       const row = data[1] as unknown[];
-      const ts = typeof row[0] === 'string' ? row[0] : null;
-      const iso = ts ? parseWaybackTimestamp(ts) : null;
+      const ts = tsIndex < row.length ? row[tsIndex] : null;
+      const iso = typeof ts === 'string' ? parseWaybackTimestamp(ts) : null;
       if (iso === null) {
         return errorResult(domain, fetchedAt, attempt, response.status, `unparseable Wayback timestamp: ${ts}`);
       }
