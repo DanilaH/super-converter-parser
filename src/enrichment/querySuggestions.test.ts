@@ -232,6 +232,18 @@ test('one normalized suggestion retains every (parent, source) occurrence', asyn
   assert.ok(shared);
   // 3 distinct occurrences: json diff autocomplete, json diff related, compare lists autocomplete
   assert.equal(shared?.occurrences.length, 3);
+
+  // Verify persisted occurrences match cold result
+  const saved = enrichmentStore.loadQuerySuggestions('enr-2');
+  const savedShared = saved.find((s) => s.normalizedSuggestion === normalizeKeyword('shared phrase'));
+  assert.ok(savedShared);
+  assert.equal(savedShared?.occurrences.length, 3);
+
+  // Verify rebuild from store matches cold result
+  const rebuilt = buildQueryResultFromStore('enr-2', enrichmentStore, defaultQuerySuggestionsConfig(), config);
+  const rebuiltShared = rebuilt.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('shared phrase'));
+  assert.ok(rebuiltShared);
+  assert.equal(rebuiltShared?.occurrences.length, 3);
 });
 
 test('resume does not re-hit the browser for completed (parent, source) items', async () => {

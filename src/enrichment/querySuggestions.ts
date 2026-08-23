@@ -67,6 +67,7 @@ export interface CollectResult {
   collections: RawSourceCollection[];
   navigationRequests: number;
   xhrRequests: number;
+  partialError?: ResearchError | null;
 }
 
 export interface SuggestionCollector {
@@ -260,21 +261,28 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
 
     let xhrRequests = 0;
     const results: RawSourceCollection[] = [];
-    if (sources.includes('surfer_related')) {
-      results.push(await this.collectSurferRelated(page, parentKeyword, normalizedParent));
-    }
-    if (sources.includes('google_related_search')) {
-      results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
-    }
-    if (sources.includes('google_paa')) {
-      results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
-    }
-    if (sources.includes('google_autocomplete')) {
-      xhrRequests += 1;
-      results.push(await this.collectAutocomplete(page, parentKeyword, normalizedParent));
+    let partialError: ResearchError | null = null;
+    try {
+      if (sources.includes('surfer_related')) {
+        results.push(await this.collectSurferRelated(page, parentKeyword, normalizedParent));
+      }
+      if (sources.includes('google_related_search')) {
+        results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
+      }
+      if (sources.includes('google_paa')) {
+        results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
+      }
+      if (sources.includes('google_autocomplete')) {
+        xhrRequests += 1;
+        results.push(await this.collectAutocomplete(page, parentKeyword, normalizedParent));
+      }
+    } catch (error) {
+      partialError = error instanceof ResearchError
+        ? error
+        : new ResearchError('ENRICHMENT_ERROR', error instanceof Error ? error.message : String(error));
     }
 
-    return { collections: results, navigationRequests: 1, xhrRequests };
+    return { collections: results, navigationRequests: 1, xhrRequests, partialError };
   }
 
   private async collectSurferRelated(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
@@ -545,8 +553,14 @@ export async function runQuerySuggestionsModule(
         const result = await collector.collect(parentKeyword, normalizedParent, sources);
         totalNavigations += result.navigationRequests;
         totalXhrs += result.xhrRequests;
+        if (result.partialError) {
+          lastError = result.partialError.code;
+          if (attempt < maxAttempts) await sleep(1000 * attempt);
+          continue;
+        }
         return { result, attempts: attempt, totalNavigations, totalXhrs };
       } catch (error) {
+        if (error instanceof EnrichmentCancelledError) throw error;
         totalNavigations += 1;
         const code = error instanceof ResearchError ? error.code : 'GOOGLE_UNAVAILABLE';
         if (code === 'RUN_PAUSED') throw error;
@@ -697,13 +711,9 @@ export async function runQuerySuggestionsModule(
           }
           seenSuggestionKeys.add(key);
           occurrences.push(occ);
-          keywordSuggestions.set(occ.normalizedSuggestion, {
-            rawText: occ.rawText,
-            volume: occ.volume,
-            cpc: occ.cpc,
-            ordinal: occ.ordinal,
-            collectionStatus: 'ok',
-            occurrences: [{
+          const existingSuggestion = keywordSuggestions.get(occ.normalizedSuggestion);
+          if (existingSuggestion) {
+            existingSuggestion.occurrences.push({
               parentKeyword: occ.parentKeyword,
               normalizedParent: occ.normalizedParent,
               source: occ.source,
@@ -712,8 +722,26 @@ export async function runQuerySuggestionsModule(
               gl,
               parserVersion: parserVersionForSource(occ.source),
               collectionStatus: 'ok',
-            }],
-          });
+            });
+          } else {
+            keywordSuggestions.set(occ.normalizedSuggestion, {
+              rawText: occ.rawText,
+              volume: occ.volume,
+              cpc: occ.cpc,
+              ordinal: occ.ordinal,
+              collectionStatus: 'ok',
+              occurrences: [{
+                parentKeyword: occ.parentKeyword,
+                normalizedParent: occ.normalizedParent,
+                source: occ.source,
+                market,
+                hl,
+                gl,
+                parserVersion: parserVersionForSource(occ.source),
+                collectionStatus: 'ok',
+              }],
+            });
+          }
         }
 
         const status = perSourceStatus.get(collection.source)!;
@@ -734,38 +762,59 @@ export async function runQuerySuggestionsModule(
         }
       }
 
+      const sourceResults: Array<{
+        source: QuerySuggestionSource;
+        status: string;
+        error: string | null;
+        fetchedAt: string;
+        requestCount: number;
+        cacheStatus: string;
+        market: string;
+        hl: string;
+        gl: string;
+        parserVersion: string;
+      }> = [];
       let countedRequestForParent = false;
+      const fetchedAt = new Date().toISOString();
       for (const collection of fetched) {
         const isBrowserSource = collection.cacheStatus !== 'hit';
         const requestCount = isBrowserSource && !countedRequestForParent ? transportRequests : 0;
         if (isBrowserSource) {
           countedRequestForParent = true;
         }
-        const suggestionsForSource = [...keywordSuggestions.entries()].map(([normalizedSuggestion, s]) => ({
-          normalizedSuggestion,
-          rawText: s.rawText,
-          volume: s.volume,
-          cpc: s.cpc,
-          ordinal: s.ordinal,
-          collectionStatus: s.collectionStatus,
-          occurrences: s.occurrences,
-        }));
-        enrichmentStore.persistSourceCollectionAtomic(
-          enrichmentId,
-          keyword.normalizedKeyword,
-          collection.source,
-          collection.status,
-          collection.error,
-          new Date().toISOString(),
+        sourceResults.push({
+          source: collection.source,
+          status: collection.status,
+          error: collection.error,
+          fetchedAt,
           requestCount,
-          collection.cacheStatus,
+          cacheStatus: collection.cacheStatus,
           market,
           hl,
           gl,
-          parserVersionForSource(collection.source),
-          suggestionsForSource,
-        );
+          parserVersion: parserVersionForSource(collection.source),
+        });
       }
+
+      const suggestionsPayload = [...keywordSuggestions.entries()].map(([normalizedSuggestion, s]) => ({
+        normalizedSuggestion,
+        rawText: s.rawText,
+        volume: s.volume,
+        cpc: s.cpc,
+        ordinal: s.ordinal,
+        collectionStatus: s.collectionStatus,
+        occurrences: s.occurrences,
+      }));
+
+      enrichmentStore.persistParentAtomic(
+        enrichmentId,
+        keyword.normalizedKeyword,
+        market,
+        hl,
+        gl,
+        sourceResults,
+        suggestionsPayload,
+      );
 
       logger(
         `  ${keyword.keyword}: ${fetched.map((f) => `${f.source}=${f.status}`).join(', ')}`,

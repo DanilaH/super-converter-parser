@@ -1455,19 +1455,21 @@ export class RunStore {
     }));
   }
 
-  persistSourceCollectionAtomic(
+  persistParentAtomic(
     enrichmentId: string,
     normalizedParent: string,
-    source: QuerySuggestionSource,
-    status: string,
-    error: string | null,
-    fetchedAt: string,
-    requestCount: number,
-    cacheStatus: EnrichmentCacheStatus,
-    market: string = '',
-    hl: string = '',
-    gl: string = '',
-    parserVersion: string = '',
+    market: string,
+    hl: string,
+    gl: string,
+    sourceResults: Array<{
+      source: QuerySuggestionSource;
+      status: string;
+      error: string | null;
+      fetchedAt: string;
+      requestCount: number;
+      cacheStatus: string;
+      parserVersion: string;
+    }>,
     suggestions: Array<{
       normalizedSuggestion: string;
       rawText: string;
@@ -1485,14 +1487,13 @@ export class RunStore {
         parserVersion: string;
         collectionStatus: string;
       }>;
-    }> = [],
+    }>,
   ): void {
-    const stmt = this.db.prepare(
+    const sourceStmt = this.db.prepare(
       `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
         (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const itemStatus = status === 'error' ? 'error' : 'completed';
     const itemStmt = this.db.prepare(
       `INSERT INTO enrichment_items
         (enrichment_id, item_id, module, status, source, created_at, updated_at, request_count, fetched_at, cache_status, error, payload)
@@ -1505,42 +1506,85 @@ export class RunStore {
          cache_status = excluded.cache_status,
          error = excluded.error`,
     );
-    const suggestionStmt = this.db.prepare(
+    const suggestionReadStmt = this.db.prepare(
+      'SELECT occurrences_json FROM enrichment_query_suggestions WHERE enrichment_id = ? AND normalized_suggestion = ?',
+    );
+    const suggestionWriteStmt = this.db.prepare(
       `INSERT OR REPLACE INTO enrichment_query_suggestions
         (enrichment_id, normalized_suggestion, raw_text, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const now = fetchedAt;
+    const now = new Date().toISOString();
+    const parserVersionBySource = new Map(sourceResults.map((sr) => [sr.source, sr.parserVersion]));
+    const defaultParserVersion = sourceResults[0]?.parserVersion ?? '';
     const tx = this.db.transaction(() => {
+      for (const sr of sourceResults) {
+        sourceStmt.run(
+          enrichmentId,
+          normalizedParent,
+          sr.source,
+          sr.status,
+          sr.error,
+          sr.fetchedAt,
+          sr.cacheStatus,
+          sr.requestCount,
+          market,
+          hl,
+          gl,
+          sr.parserVersion,
+        );
+        const itemStatus = sr.status === 'error' ? 'error' : 'completed';
+        itemStmt.run(
+          enrichmentId,
+          `${sr.source}:${normalizedParent}`,
+          itemStatus,
+          sr.source === 'surfer_related' ? 'surfer' : 'google',
+          now,
+          now,
+          sr.requestCount,
+          sr.fetchedAt,
+          sr.cacheStatus,
+          sr.error,
+        );
+      }
       for (const s of suggestions) {
-        suggestionStmt.run(
+        const existing = suggestionReadStmt.get(enrichmentId, s.normalizedSuggestion) as
+          | { occurrences_json: string }
+          | undefined;
+        let mergedOccurrences: Array<Record<string, unknown>> = [...s.occurrences];
+        if (existing) {
+          try {
+            const existingOccurrences = JSON.parse(existing.occurrences_json) as Array<Record<string, unknown>>;
+            const seen = new Set(s.occurrences.map((o) => `${o.normalizedParent}:${o.source}`));
+            for (const eo of existingOccurrences) {
+              const key = `${String(eo.normalizedParent)}:${String(eo.source)}`;
+              if (!seen.has(key)) {
+                mergedOccurrences = [...mergedOccurrences, eo];
+                seen.add(key);
+              }
+            }
+          } catch {
+            // keep new occurrences only
+          }
+        }
+        const parserVersion = s.occurrences[0]?.source
+          ? parserVersionBySource.get(s.occurrences[0].source as QuerySuggestionSource) ?? defaultParserVersion
+          : defaultParserVersion;
+        suggestionWriteStmt.run(
           enrichmentId,
           s.normalizedSuggestion,
           s.rawText,
           s.volume,
           s.cpc,
           s.ordinal,
-          market,
-          hl,
-          gl,
+          s.occurrences[0]?.market ?? market,
+          s.occurrences[0]?.hl ?? hl,
+          s.occurrences[0]?.gl ?? gl,
           parserVersion,
           s.collectionStatus,
-          JSON.stringify(s.occurrences),
+          JSON.stringify(mergedOccurrences),
         );
       }
-      stmt.run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
-      itemStmt.run(
-        enrichmentId,
-        `${source}:${normalizedParent}`,
-        itemStatus,
-        source === 'surfer_related' ? 'surfer' : 'google',
-        now,
-        now,
-        requestCount,
-        fetchedAt,
-        cacheStatus,
-        error,
-      );
     });
     tx();
   }
