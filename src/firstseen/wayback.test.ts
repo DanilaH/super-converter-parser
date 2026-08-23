@@ -37,6 +37,15 @@ test('parseWaybackTimestamp rejects garbage', () => {
   assert.equal(parseWaybackTimestamp('1234567'), null);
 });
 
+test('parseWaybackTimestamp rejects invalid calendar dates', () => {
+  // Month 13 is invalid.
+  assert.equal(parseWaybackTimestamp('20201301000000'), null);
+  // Day 32 is invalid.
+  assert.equal(parseWaybackTimestamp('20200132000000'), null);
+  // Hour 25 is invalid.
+  assert.equal(parseWaybackTimestamp('20200101250000'), null);
+});
+
 test('buildWaybackQuery targets the CDX endpoint with first-seen params', () => {
   const url = buildWaybackQuery('', 'example.com');
   assert.equal(url.startsWith('https://web.archive.org/cdx/search/cdx/?'), true);
@@ -47,6 +56,8 @@ test('buildWaybackQuery targets the CDX endpoint with first-seen params', () => 
   assert.equal(params.get('from'), '1990');
   // fl=timestamp so row[0] is the capture timestamp, not urlkey.
   assert.equal(params.get('fl'), 'timestamp');
+  // matchType=domain to capture subdomains for domain first-seen.
+  assert.equal(params.get('matchType'), 'domain');
 });
 
 test('match semantics: url=<registrable domain> is documented in the query', () => {
@@ -67,12 +78,12 @@ test('returns firstSeenDate from the earliest CDX capture', async () => {
   assert.equal(result.requestCount, 1);
 });
 
-test('no snapshots -> ok with null date and a source reason', async () => {
+test('no snapshots -> not_found with null date and a source reason', async () => {
   const fetchImpl = (async () => cdxResponse([['timestamp']])) as unknown as typeof fetch;
   const client = createFirstSeenClient(baseConfig(fetchImpl))!;
   const result = await client('example.com');
 
-  assert.equal(result.status, 'ok');
+  assert.equal(result.status, 'not_found');
   assert.equal(result.firstSeenDate, null);
   assert.match(result.sourceReason ?? '', /no archived snapshots/);
 });

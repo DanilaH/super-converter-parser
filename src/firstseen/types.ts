@@ -4,7 +4,7 @@
 // different, explicitly configured source. The two can never alias one another:
 // a null firstSeenDate is never back-filled from registrationDate.
 
-export type FirstSeenStatus = 'ok' | 'unavailable' | 'error';
+export type FirstSeenStatus = 'ok' | 'not_found' | 'unavailable' | 'error';
 
 // A first-seen lookup result. `source` is the provider name (e.g. 'wayback') or
 // 'unconfigured'/'none' when no provider was configured, so provenance is always
@@ -33,4 +33,8 @@ export type FirstSeenClientConfig = {
   baseDelayMs: number;
   maxDelayMs: number;
   fetchImpl?: typeof fetch | undefined;
+  // Test seams (mirror the hooks pattern used by runs/engine applyDomainRatings).
+  now?: () => number;
+  random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 };

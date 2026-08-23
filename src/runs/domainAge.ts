@@ -51,13 +51,30 @@ export type DomainAgeRecord = {
   registrationRule: string;
   registrationIsRedacted: boolean;
   registrationFetchedAt: string | null;
+  // Raw RDAP event candidates for auditability (source: parsed RDAP events).
+  registrationEvents: Array<{ eventAction: string; eventDate: string | null }>;
   firstSeenDate: string | null;
   firstSeenStatus: FirstSeenStatus;
   firstSeenSource: string | null;
   firstSeenFetchedAt: string | null;
+  // Keyword provenance: which shortlisted keywords observed this domain.
   sourceKeywords: string[];
+  // Domain age in days from registration date to observedAt (null if no registration date).
+  domainAgeDays: number | null;
+  // When this record was observed/fetched.
+  observedAt: string;
   cacheHit: boolean;
+  cacheStatus: 'hit' | 'miss' | 'expired' | 'partial';
   fetchedAt: string;
+  // Per-source error details.
+  registrationError: string | null;
+  firstSeenError: string | null;
+  firstSeenSourceReason: string | null;
+  // Per-source HTTP status and request count.
+  registrationHttpStatus: number | null;
+  registrationRequestCount: number;
+  firstSeenHttpStatus: number | null;
+  firstSeenRequestCount: number;
   error: string | null;
 };
 
@@ -227,10 +244,11 @@ export async function runDomainAgeModule(
     if (resumed && resumed.payload) {
       const record = JSON.parse(resumed.payload) as DomainAgeRecord;
       record.sourceKeywords = prov;
-      record.cacheHit = true;
+      // Preserve the original cacheHit/cacheStatus from the checkpoint payload.
+      // Do not overwrite to true — the original record may have been a fresh fetch.
       results.set(domain, record);
       completed += 1;
-      checkpoint(store, runId, domain, 'completed', 'checkpoint', resumed.cacheStatus ?? 'hit', null, record);
+      checkpoint(store, runId, domain, 'completed', 'checkpoint', record.cacheStatus ?? 'hit', null, record);
       onProgress?.({ stage: 'domain_age', completed, total: unique.length, errors, cacheHits });
       continue;
     }
@@ -277,7 +295,7 @@ export async function runDomainAgeModule(
           : 'hit';
     }
 
-    const record = assembleRecord(domain, regResult, fsResult, prov, nowIso, cacheHit);
+    const record = assembleRecord(domain, regResult, fsResult, prov, nowIso, cacheHit, cacheStatus, nowMs);
 
     // Cache: write the full per-source record with independent expiries so a
     // fresh fact is preserved when its sibling is refreshed.
@@ -288,9 +306,8 @@ export async function runDomainAgeModule(
       cache?.putDomainAge(domain, entry, nowIso);
     }
 
-    if (record.registrationStatus === 'error' || record.firstSeenStatus === 'error') {
-      errors += 1;
-    }
+    const hasError = record.registrationStatus === 'error' || record.firstSeenStatus === 'error';
+    if (hasError) errors += 1;
 
     results.set(domain, record);
     completed += 1;
@@ -299,7 +316,7 @@ export async function runDomainAgeModule(
       store,
       runId,
       domain,
-      'completed',
+      hasError ? 'error' : 'completed',
       cacheHit ? 'cache' : 'rdap',
       cacheStatus,
       record.error,
@@ -309,8 +326,9 @@ export async function runDomainAgeModule(
     onProgress?.({ stage: 'domain_age', completed, total: unique.length, errors, cacheHits });
   }
 
+  const freshCount = completed - cacheHits - errors;
   logger(
-    `Domain-age enrichment complete: ${cacheHits} cached, ${completed - cacheHits} fetched, ${errors} error(s).`,
+    `Domain-age enrichment complete: ${cacheHits} cached, ${freshCount} fetched, ${errors} error(s) of ${completed} total.`,
   );
   return results;
 }
@@ -434,6 +452,8 @@ function assembleRecord(
   prov: string[],
   fetchedAt: string,
   cacheHit: boolean,
+  cacheStatus: 'hit' | 'miss' | 'expired' | 'partial',
+  nowMs: number,
 ): DomainAgeRecord {
   // firstSeen takes precedence for the combined error; registration is independent
   // and never aliases the first-seen date.
@@ -443,6 +463,14 @@ function assembleRecord(
       : reg.status === 'error'
         ? reg.error
         : null;
+  // Domain age in days from registration date to observedAt.
+  let domainAgeDays: number | null = null;
+  if (reg.registrationDate) {
+    const regInstant = Date.parse(reg.registrationDate);
+    if (!Number.isNaN(regInstant)) {
+      domainAgeDays = Math.floor((nowMs - regInstant) / (24 * 60 * 60 * 1000));
+    }
+  }
   return {
     domain,
     registrationDate: reg.registrationDate,
@@ -450,13 +478,24 @@ function assembleRecord(
     registrationRule: reg.rule,
     registrationIsRedacted: reg.isRedacted,
     registrationFetchedAt: reg.fetchedAt,
+    registrationEvents: reg.events.map((e) => ({ eventAction: e.eventAction, eventDate: e.eventDate })),
     firstSeenDate: fs ? fs.firstSeenDate : null,
     firstSeenStatus: fs ? fs.status : 'unavailable',
     firstSeenSource: fs ? fs.source : 'unconfigured',
     firstSeenFetchedAt: fs ? fs.fetchedAt : null,
     sourceKeywords: prov,
+    domainAgeDays,
+    observedAt: fetchedAt,
     cacheHit,
+    cacheStatus,
     fetchedAt,
+    registrationError: reg.status === 'error' ? reg.error : null,
+    firstSeenError: fs && fs.status === 'error' ? fs.error : null,
+    firstSeenSourceReason: fs ? fs.sourceReason : null,
+    registrationHttpStatus: reg.httpStatus,
+    registrationRequestCount: reg.requestCount,
+    firstSeenHttpStatus: fs ? fs.httpStatus : null,
+    firstSeenRequestCount: fs ? fs.requestCount : 0,
     error: combinedError,
   };
 }
@@ -561,12 +600,23 @@ export const DOMAIN_AGE_CSV_HEADERS = [
   'registration_is_redacted',
   'registration_rule',
   'registration_fetched_at',
+  'registration_events',
+  'registration_error',
+  'registration_http_status',
+  'registration_request_count',
   'first_seen_date',
   'first_seen_status',
   'first_seen_source',
+  'first_seen_source_reason',
   'first_seen_fetched_at',
+  'first_seen_error',
+  'first_seen_http_status',
+  'first_seen_request_count',
+  'domain_age_days',
+  'observed_at',
   'source_keywords',
   'cache_hit',
+  'cache_status',
   'fetched_at',
   'error',
 ];
@@ -581,12 +631,23 @@ export function renderDomainAgeCsv(records: DomainAgeRecord[]): string {
       r.registrationIsRedacted ? 'true' : 'false',
       r.registrationRule,
       r.registrationFetchedAt ?? '',
+      (r.registrationEvents ?? []).map((e) => `${e.eventAction}=${e.eventDate ?? ''}`).join('|'),
+      r.registrationError ?? '',
+      r.registrationHttpStatus !== null && r.registrationHttpStatus !== undefined ? String(r.registrationHttpStatus) : '',
+      String(r.registrationRequestCount),
       r.firstSeenDate ?? '',
       r.firstSeenStatus,
       r.firstSeenSource ?? '',
+      r.firstSeenSourceReason ?? '',
       r.firstSeenFetchedAt ?? '',
+      r.firstSeenError ?? '',
+      r.firstSeenHttpStatus !== null && r.firstSeenHttpStatus !== undefined ? String(r.firstSeenHttpStatus) : '',
+      String(r.firstSeenRequestCount),
+      r.domainAgeDays !== null && r.domainAgeDays !== undefined ? String(r.domainAgeDays) : '',
+      r.observedAt,
       (r.sourceKeywords ?? []).join(','),
       r.cacheHit ? 'true' : 'false',
+      r.cacheStatus,
       r.fetchedAt,
       r.error ?? '',
     ]);

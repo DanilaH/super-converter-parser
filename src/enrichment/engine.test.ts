@@ -88,6 +88,64 @@ function createTestSourceStore(runId: string): RunStore {
   return store;
 }
 
+// Creates a source store with 5 keywords for domain_age tests (shortlist validation requires 5+).
+function createDomainAgeTestSourceStore(runId: string): RunStore {
+  const store = RunStore.openInMemory();
+  const configSnapshot = {
+    ...BASE_CONFIG,
+    cache: { ...BASE_CONFIG.cache, path: ':memory:' },
+  };
+  store.createRun({
+    runId,
+    configSnapshot,
+    parserVersions: { surfer: '1.0.0', google: '1.0.0' },
+    input: { kind: 'seeds', path: 'test.csv' },
+    keywords: [
+      { keyword: 'json diff', normalizedKeyword: 'json diff', sourceRows: [1] },
+      { keyword: 'json compare', normalizedKeyword: 'json compare', sourceRows: [2] },
+      { keyword: 'json parse', normalizedKeyword: 'json parse', sourceRows: [3] },
+      { keyword: 'json format', normalizedKeyword: 'json format', sourceRows: [4] },
+      { keyword: 'json validate', normalizedKeyword: 'json validate', sourceRows: [5] },
+    ],
+  });
+
+  const now = new Date().toISOString();
+  const makeKeyword = (idx: number, keyword: string) => ({
+    id: `k${idx}`,
+    idx,
+    keyword,
+    normalizedKeyword: keyword,
+    sources: [{ type: 'seed' as const, rowNumbers: [idx + 1] }],
+    status: 'completed' as const,
+    surfer: { volume: 800, cpc: 2.5, market: 'US', fetchedAt: now },
+    google: { hl: 'en', gl: 'us', pageUrl: 'https://example.com', detectedLocation: null, geoWarning: false },
+    error: null,
+    collectedAt: now,
+    cacheStatus: 'refreshed' as const,
+  });
+
+  const makeSerps = (keyword: string, domains: Array<{ d: string; p: number }>) =>
+    domains.map(({ d, p }) => ({
+      keyword,
+      position: p,
+      title: '',
+      url: `https://${d}`,
+      hostname: d,
+      registrableDomain: d,
+      dr: 50,
+      drStatus: 'ok' as const,
+      resultType: 'organic' as const,
+    }));
+
+  store.commitKeyword(runId, makeKeyword(0, 'json diff'), makeSerps('json diff', [{ d: 'a.com', p: 1 }, { d: 'b.com', p: 2 }, { d: 'c.com', p: 3 }, { d: 'e.com', p: 4 }]));
+  store.commitKeyword(runId, makeKeyword(1, 'json compare'), makeSerps('json compare', [{ d: 'a.com', p: 1 }, { d: 'b.com', p: 2 }, { d: 'c.com', p: 3 }, { d: 'f.com', p: 4 }]));
+  store.commitKeyword(runId, makeKeyword(2, 'json parse'), makeSerps('json parse', [{ d: 'a.com', p: 1 }, { d: 'g.com', p: 2 }]));
+  store.commitKeyword(runId, makeKeyword(3, 'json format'), makeSerps('json format', [{ d: 'h.com', p: 1 }, { d: 'a.com', p: 2 }]));
+  store.commitKeyword(runId, makeKeyword(4, 'json validate'), makeSerps('json validate', [{ d: 'a.com', p: 1 }, { d: 'i.com', p: 2 }]));
+
+  return store;
+}
+
 test('runEnrichment: clusters keywords from source run', async () => {
   const runId = 'test-source-run';
   const sourceStore = createTestSourceStore(runId);
@@ -414,7 +472,7 @@ const makeFirstSeen = (counts: { value: number }): FirstSeenClient => {
 
 test('runEnrichment: domain_age resolves domains and writes artifacts', async () => {
   const runId = 'da-source';
-  const sourceStore = createTestSourceStore(runId);
+  const sourceStore = createDomainAgeTestSourceStore(runId);
   const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-domain-age-'));
   const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
   const cacheStore = CacheStore.openInMemory();
@@ -428,7 +486,7 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
     enrichmentStore,
     enrichmentDirectory: enrichmentDir,
     modules: ['domain_age'],
-    shortlist: ['json diff', 'json compare'],
+    shortlist: ['json diff', 'json compare', 'json parse', 'json format', 'json validate'],
     config: {},
     domainAgeConfig: buildDomainAgeConfigSnapshot(BASE_CONFIG),
     cacheStore,
@@ -439,25 +497,25 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
 
   assert.equal(outcome.kind, 'completed');
   assert.ok(outcome.domainAgeRecords);
-  // Shortlist-bounded: 5 unique organic domains across the two shortlisted keywords (a/b/c/e/f).
-  assert.equal(outcome.domainAgeRecords!.size, 5);
-  assert.equal(rdapCalls.value, 5);
-  assert.equal(fsCalls.value, 5);
+  // Shortlist-bounded: 8 unique organic domains across the five shortlisted keywords.
+  assert.equal(outcome.domainAgeRecords!.size, 8);
+  assert.equal(rdapCalls.value, 8);
+  assert.equal(fsCalls.value, 8);
 
   // Resolved once and cached for resume.
   assert.ok(cacheStore.getDomainAge('a.com'));
   assert.equal(cacheStore.getDomainAge('a.com')?.registrationDate, '2010-05-03T04:00:00Z');
   // Provenance links each domain to the shortlisted keyword(s) that observed it.
   const aRecord = [...outcome.domainAgeRecords!.values()].find((r) => r.domain === 'a.com');
-  assert.deepEqual(aRecord?.sourceKeywords.sort(), ['json compare', 'json diff']);
+  assert.deepEqual(aRecord?.sourceKeywords.sort(), ['json compare', 'json diff', 'json format', 'json parse', 'json validate']);
 
   const csv = await readFile(join(enrichmentDir, 'domain-age.csv'), 'utf8');
   assert.match(csv, /^"domain"/);
-  assert.equal(csv.split('\r\n').filter((l) => l.length > 0).length, 6); // header + 5
+  assert.equal(csv.split('\r\n').filter((l) => l.length > 0).length, 9); // header + 8
 
   const jsonText = await readFile(join(enrichmentDir, 'domain-age.json'), 'utf8');
   const json = JSON.parse(jsonText) as Array<{ domain: string; registrationDate: string; sourceKeywords: string[] }>;
-  assert.equal(json.length, 5);
+  assert.equal(json.length, 8);
   assert.equal(json.find((r) => r.domain === 'a.com')?.registrationDate, '2010-05-03T04:00:00Z');
 
   sourceStore.close();
@@ -468,7 +526,7 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
 
 test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls', async () => {
   const runId = 'da-resume-source';
-  const sourceStore = createTestSourceStore(runId);
+  const sourceStore = createDomainAgeTestSourceStore(runId);
   const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-domain-age-resume-'));
   const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
   const cacheStore = CacheStore.openInMemory();
@@ -481,7 +539,7 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
     enrichmentStore,
     enrichmentDirectory: enrichmentDir,
     modules: ['domain_age'],
-    shortlist: ['json diff', 'json compare'],
+    shortlist: ['json diff', 'json compare', 'json parse', 'json format', 'json validate'],
     config: {},
     domainAgeConfig: buildDomainAgeConfigSnapshot(BASE_CONFIG),
     cacheStore,
@@ -491,12 +549,12 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
   };
 
   await runEnrichment(options);
-  assert.equal(rdapCalls.value, 5);
+  assert.equal(rdapCalls.value, 8);
 
   const resumed = await runEnrichment({ ...options, resume: true });
   assert.equal(resumed.kind, 'completed');
-  assert.equal(rdapCalls.value, 5); // no fresh calls: checkpoint resume skips completed domains
-  assert.equal(resumed.domainAgeRecords?.size, 5);
+  assert.equal(rdapCalls.value, 8); // no fresh calls: checkpoint resume skips completed domains
+  assert.equal(resumed.domainAgeRecords?.size, 8);
 
   sourceStore.close();
   enrichmentStore.close();

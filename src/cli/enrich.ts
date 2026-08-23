@@ -347,6 +347,17 @@ async function main(): Promise<void> {
       console.log('Run paused. Resume with:');
       console.log(`  npm run enrich -- --resume ${enrichmentId}`);
       exitCode = EXIT_PAUSED;
+    } else if (outcome.kind === 'completed' && outcome.result && outcome.domainAgeRecords) {
+      console.log('');
+      console.log(`Clusters: ${outcome.result.clusters.length}`);
+      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+      console.log(`Artifacts: ${enrichmentDirectory}/`);
+      console.log('  keyword-clusters.csv');
+      console.log('  keyword-clusters.json');
+      console.log('  domain-age.csv');
+      console.log('  domain-age.json');
+      console.log('  manifest.json');
+      console.log('  status.json');
     } else if (outcome.kind === 'completed' && outcome.result) {
       console.log('');
       console.log(`Clusters: ${outcome.result.clusters.length}`);
@@ -359,17 +370,6 @@ async function main(): Promise<void> {
       console.log('');
       console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  domain-age.csv');
-      console.log('  domain-age.json');
-      console.log('  manifest.json');
-      console.log('  status.json');
-    } else if (outcome.kind === 'completed' && outcome.result && outcome.domainAgeRecords) {
-      console.log('');
-      console.log(`Clusters: ${outcome.result.clusters.length}`);
-      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
-      console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  keyword-clusters.csv');
-      console.log('  keyword-clusters.json');
       console.log('  domain-age.csv');
       console.log('  domain-age.json');
       console.log('  manifest.json');

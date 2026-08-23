@@ -115,17 +115,26 @@ function buildClusteringInputs(
 // organic SERP rows, restricted to the shortlist (TASK-014 is shortlist-only deep
 // enrichment, 5-30 targets). Every keyword a domain was observed in is recorded in
 // the returned provenance map so outputs stay traceable back to the ranking rows.
+const DOMAIN_AGE_MIN_SHORTLIST = 5;
+const DOMAIN_AGE_MAX_DOMAINS = 30;
+
 function collectSourceDomains(
   sourceStore: RunStore,
   sourceRunId: string,
   shortlist: string[] | undefined,
   logger: EnrichmentLogger,
-): { domains: string[]; provenance: Map<string, string[]> } {
+): { domains: string[]; provenance: Map<string, string[]>; omitted: number } {
   const shortlistSet =
     shortlist && shortlist.length > 0 ? new Set(shortlist.map(normalizeKeyword)) : null;
   if (!shortlistSet) {
-    logger('Domain-age: no shortlist provided; skipping domain enrichment (use --shortlist to bound targets).');
-    return { domains: [], provenance: new Map() };
+    throw new Error(
+      `The 'domain_age' module requires a shortlist of ${DOMAIN_AGE_MIN_SHORTLIST}-${DOMAIN_AGE_MAX_DOMAINS} keywords to bound enrichment targets. Use --shortlist to specify targets.`,
+    );
+  }
+  if (shortlistSet.size < DOMAIN_AGE_MIN_SHORTLIST) {
+    throw new Error(
+      `The 'domain_age' module requires at least ${DOMAIN_AGE_MIN_SHORTLIST} shortlisted keywords (got ${shortlistSet.size}). Add more keywords to the shortlist.`,
+    );
   }
 
   const keywords = sourceStore.loadKeywords(sourceRunId);
@@ -137,6 +146,7 @@ function collectSourceDomains(
   const serpRows = sourceStore.loadSerpRows(sourceRunId);
   const domains: string[] = [];
   const provenance = new Map<string, string[]>();
+  let omitted = 0;
   for (const row of serpRows) {
     if (row.resultType !== 'organic') continue;
     const keyword = idxToKeyword.get(row.keywordIdx ?? -1);
@@ -144,6 +154,10 @@ function collectSourceDomains(
     const domain = row.registrableDomain ?? '';
     if (!domain) continue;
     if (!provenance.has(domain)) {
+      if (domains.length >= DOMAIN_AGE_MAX_DOMAINS) {
+        omitted += 1;
+        continue;
+      }
       provenance.set(domain, []);
       domains.push(domain);
     }
@@ -151,8 +165,8 @@ function collectSourceDomains(
     if (!kws.includes(keyword)) kws.push(keyword);
   }
 
-  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords.`);
-  return { domains, provenance };
+  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords${omitted > 0 ? ` (${omitted} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
+  return { domains, provenance, omitted };
 }
 
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
@@ -252,7 +266,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       // provenance (which shortlisted keywords observed each domain). On resume the
       // completion is derived from per-domain checkpoints in enrichment_items, not
       // from the mutable TTL cache.
-      const { domains, provenance } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
+      const { domains, provenance, omitted } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
       domainAgeRecords = await runDomainAgeModule({
         domains,
         provenance,
@@ -269,6 +283,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         now: Date.now,
         onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
       });
+      if (omitted > 0) {
+        logger(`  domain_age: ${omitted} domains omitted (exceeded ${30} cap).`);
+      }
     }
 
     if (!result && !domainAgeRecords) {
@@ -326,7 +343,14 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
             edgeCount: result.edgeCount,
           }
         : {}),
-      ...(domainAgeRecords ? { domainCount: domainAgeRecords.size } : {}),
+      ...(domainAgeRecords
+        ? {
+            domainCount: domainAgeRecords.size,
+            domainsWithRegistration: [...domainAgeRecords.values()].filter((r) => r.registrationDate !== null).length,
+            domainsWithFirstSeen: [...domainAgeRecords.values()].filter((r) => r.firstSeenDate !== null).length,
+            domainErrors: [...domainAgeRecords.values()].filter((r) => r.error !== null).length,
+          }
+        : {}),
     };
     const artifacts = [
       ...(result ? ['keyword-clusters.csv', 'keyword-clusters.json'] : []),
@@ -368,7 +392,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       );
     }
     if (domainAgeRecords) {
-      logger(`Domain-age: resolved ${domainAgeRecords.size} domains.`);
+      const resolvedCount = [...domainAgeRecords.values()].filter((r) => r.error === null).length;
+      const errorCount = [...domainAgeRecords.values()].filter((r) => r.error !== null).length;
+      logger(`Domain-age: ${resolvedCount} resolved, ${errorCount} error(s) of ${domainAgeRecords.size} domains.`);
     }
     return {
       kind: 'completed',

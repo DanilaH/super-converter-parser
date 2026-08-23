@@ -1,14 +1,14 @@
 // Wayback Machine CDX API first-seen provider.
 //
 // Source: https://github.com/internetarchive/wayback/tree/master/wayback-cdx-server
-// Query: GET https://web.archive.org/cdx/search/cdx?url=<domain>&output=json&limit=1&from=1990&fl=timestamp
+// Query: GET https://web.archive.org/cdx/search/cdx?url=<domain>&output=json&limit=1&from=1990&fl=timestamp&matchType=domain
 //
-// Match semantics: `url` is the registrable domain. CDX's `url` filter matches the
-// registrable domain and any of its subdomains (host equals the domain or ends with
-// `.<domain>`), and does NOT match unrelated hosts that merely contain the domain
-// string (e.g. `example.com` will not match `example.com.evil.net`). This is the
-// intended domain first-seen signal: the earliest archived snapshot of the domain
-// or any subdomain.
+// Match semantics: `matchType=domain` matches the registrable domain and any of
+// its subdomains (host equals the domain or ends with `.<domain>`), and does NOT
+// match unrelated hosts that merely contain the domain string (e.g. `example.com`
+// will not match `example.com.evil.net`). This is the intended domain first-seen
+// signal: the earliest archived snapshot of the domain or any subdomain.
+// See: https://github.com/internetarchive/wayback/tree/master/wayback-cdx-server#url-match-scope
 //
 // Response shape (with `fl=timestamp`): a JSON array of rows. Row 0 is the column
 // header (["timestamp"]); the first capture follows. The timestamp column index is
@@ -27,10 +27,6 @@ export const WAYBACK_DEFAULT_ENDPOINT = 'https://web.archive.org/cdx/search/cdx'
 const MAX_ATTEMPTS = 3;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export function parseWaybackTimestamp(ts: string): string | null {
   const digits = ts.replace(/[^0-9]/g, '');
   if (digits.length < 8) return null;
@@ -41,6 +37,15 @@ export function parseWaybackTimestamp(ts: string): string | null {
   const h = padded.slice(8, 10);
   const mi = padded.slice(10, 12);
   const s = padded.slice(12, 14);
+  // Validate calendar date ranges.
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = Number(h);
+  const min = Number(mi);
+  const sec = Number(s);
+  if (year < 1990 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || min > 59 || sec > 59) return null;
   // ISO 8601 UTC; CDX timestamps are UTC.
   return `${y}-${mo}-${d}T${h}:${mi}:${s}Z`;
 }
@@ -49,20 +54,22 @@ export function buildWaybackQuery(endpoint: string, domain: string): string {
   const base = endpoint || WAYBACK_DEFAULT_ENDPOINT;
   // `fl=timestamp` pins the response column so row[0] is guaranteed to be the
   // capture timestamp (the undocumented default columns start with urlkey).
+  // `matchType=domain` matches the registrable domain and its subdomains.
   const params = new URLSearchParams({
     url: domain,
     output: 'json',
     limit: '1',
     from: '1990',
     fl: 'timestamp',
+    matchType: 'domain',
   });
   return `${base}/?${params.toString()}`;
 }
 
 // Exponential backoff with full jitter, matching the RDAP/Ahrefs cadence.
-function backoffMs(attempt: number, min: number, max: number): number {
+function backoffMs(attempt: number, min: number, max: number, random: () => number): number {
   const base = Math.min(max, min * Math.pow(2, attempt - 1));
-  const jitter = base * 0.25 * Math.random();
+  const jitter = base * 0.25 * random();
   return Math.floor(Math.min(max, base + jitter));
 }
 
@@ -95,20 +102,28 @@ function errorResult(
   };
 }
 
-export function createWaybackClient(config: FirstSeenClientConfig, now: () => number = Date.now): FirstSeenClient {
-  /* eslint-disable @typescript-eslint/no-unused-vars */
-  void now;
-  void DEFAULT_TIMEOUT_MS;
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+export function createWaybackClient(
+  config: FirstSeenClientConfig,
+  now: () => number = Date.now,
+): FirstSeenClient {
   const fetchImpl = config.fetchImpl ?? fetch;
   const timeoutMs = config.timeoutMs;
   const attempts = config.maxAttempts ?? MAX_ATTEMPTS;
+  const random = config.random ?? Math.random;
+  const sleep = config.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
   return async (domain: string): Promise<FirstSeenResult> => {
     const fetchedAt = new Date().toISOString();
+    let lastAttempt = 0;
 
-    let attempt = 0;
-    for (attempt = 1; attempt <= attempts; attempt += 1) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      lastAttempt = attempt;
+      // Per-host rate limiting: enforce minimum delay between requests.
+      const waitMs = config.minDelayMs > 0 ? config.minDelayMs : 0;
+      if (waitMs > 0 && attempt > 1) {
+        await sleep(waitMs);
+      }
+
       const url = buildWaybackQuery(config.endpoint, domain);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -121,7 +136,7 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
       } catch {
         clearTimeout(timer);
         if (attempt < attempts) {
-          await sleep(backoffMs(attempt, config.baseDelayMs, config.maxDelayMs));
+          await sleep(backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
           continue;
         }
         return errorResult(domain, fetchedAt, attempt, null, 'network error contacting Wayback CDX');
@@ -132,7 +147,7 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
       if (!response.ok) {
         if (response.status === 429 && attempt < attempts) {
           const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
-          await sleep(retryAfter > 0 ? retryAfter : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs));
+          await sleep(retryAfter > 0 ? retryAfter : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
           continue;
         }
         return errorResult(
@@ -144,7 +159,14 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
         );
       }
 
-      const data = await response.json().catch(() => null) as unknown;
+      // Read JSON body with timeout still active (not cleared before reading).
+      let data: unknown;
+      try {
+        data = await response.json().catch(() => null) as unknown;
+      } catch {
+        return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response');
+      }
+
       if (!Array.isArray(data)) {
         return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response (not an array)');
       }
@@ -155,7 +177,7 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
         return {
           domain,
           firstSeenDate: null,
-          status: 'ok',
+          status: 'not_found',
           error: null,
           source: WAYBACK_SOURCE,
           sourceReason: 'no archived snapshots returned by Wayback CDX',
@@ -194,6 +216,6 @@ export function createWaybackClient(config: FirstSeenClientConfig, now: () => nu
       };
     }
 
-    return errorResult(domain, fetchedAt, attempt, null, 'Wayback CDX lookup exhausted retries');
+    return errorResult(domain, fetchedAt, lastAttempt, null, 'Wayback CDX lookup exhausted retries');
   };
 }

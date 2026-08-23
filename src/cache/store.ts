@@ -273,6 +273,7 @@ export function ttlMsForRdapStatus(status: RdapRegistrationStatus, ttl: DomainAg
 export function ttlMsForFirstSeenStatus(status: FirstSeenStatus, ttl: DomainAgeTtlSettings): number {
   switch (status) {
     case 'ok':
+    case 'not_found':
       return ttl.firstSeenOkMs;
     case 'error':
       return ttl.firstSeenErrorMs;
@@ -295,6 +296,10 @@ export function ttlMsForDomainAgeEntry(
   const regTtl = ttlMsForRdapStatus(regStatus, ttl);
   if (firstSeenStatus === 'not_attempted' || firstSeenStatus === 'unavailable') {
     return regTtl;
+  }
+  // 'not_found' is a stable fact (no snapshots), use ok TTL.
+  if (firstSeenStatus === 'not_found') {
+    return Math.min(regTtl, ttl.firstSeenOkMs);
   }
   return Math.min(regTtl, ttlMsForFirstSeenStatus(firstSeenStatus, ttl));
 }
@@ -512,14 +517,21 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
-        // New v6 rows: expire by the row-level min TTL. Legacy v5 rows have NULL
-        // per-source expiry and are refreshed under the per-source contract on
-        // next access, so purge them here rather than serving a stale composite.
+        // domain_age_cache: only delete the row when BOTH per-source facts are
+        // stale (or the row has no per-source expiry yet — legacy v5 rows that
+        // must be refreshed under the per-source contract on next access).
+        // Using min() for cleanup would incorrectly purge a row when only one
+        // source is expired, losing the still-valid sibling fact.
         const ageResult = this.db
           .prepare(
-            'DELETE FROM domain_age_cache WHERE expires_at IS NOT NULL AND expires_at <= ? OR registration_expires_at IS NULL',
+            `DELETE FROM domain_age_cache
+              WHERE registration_expires_at IS NOT NULL
+                AND first_seen_expires_at IS NOT NULL
+                AND registration_expires_at <= ?
+                AND first_seen_expires_at <= ?
+                 OR registration_expires_at IS NULL`,
           )
-          .run(cutoff);
+          .run(cutoff, cutoff);
         deleted += ageResult.changes;
       });
       purge();
