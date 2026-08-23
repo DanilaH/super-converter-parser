@@ -4,7 +4,16 @@ import { isPrivateIp } from './ssrf.js';
 
 type Response = any;
 
-export type SsrfChecker = (url: string) => Promise<{ allowed: boolean; reason?: string; ip?: string }>;
+export type DnsResolver = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
+
+export type SsrfCheckResult = {
+  allowed: boolean;
+  reason?: string;
+  ip?: string;
+  kind?: 'ok' | 'blocked' | 'timeout' | 'error';
+};
+
+export type SsrfChecker = (url: string) => Promise<SsrfCheckResult>;
 
 export type FetcherConfig = {
   maxRedirects: number;
@@ -16,9 +25,9 @@ export type FetcherConfig = {
   minDomainDelayMs: number;
   maxDomainDelayMs: number;
   ssrfChecker?: SsrfChecker;
+  dnsResolver?: DnsResolver;
   maxRetries: number;
   baseRetryDelayMs: number;
-  rejectUnauthorized?: boolean;
 };
 
 export const DEFAULT_FETCHER_CONFIG: FetcherConfig = {
@@ -94,7 +103,6 @@ export function parseRetryAfter(header: string | null): number | null {
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
-  rejectUnauthorized?: boolean | undefined;
 }
 
 function createPinnedAgent(ctx: PinnedConnectContext): Agent {
@@ -108,7 +116,6 @@ function createPinnedAgent(ctx: PinnedConnectContext): Agent {
           cb(null, ctx.validatedIp, family || 4);
         }
       },
-      ...(ctx.rejectUnauthorized === false ? { rejectUnauthorized: false } : {}),
     },
   });
 }
@@ -230,23 +237,25 @@ export async function boundedFetch(
   config: Partial<FetcherConfig> = {},
 ): Promise<FetchResult> {
   const cfg = { ...DEFAULT_FETCHER_CONFIG, ...config };
-  const ssrfCheck = cfg.ssrfChecker ?? checkUrlAllowed;
+  const defaultChecker = (u: string) => checkUrlAllowed(u, cfg.dnsResolver);
+  const ssrfCheck = cfg.ssrfChecker ?? defaultChecker;
   const redirectChain: string[] = [];
   let logicalUrl = url;
 
   const ssrfResult = await ssrfCheck(url);
   if (!ssrfResult.allowed) {
+    const failureReason = ssrfResult.kind === 'timeout' ? 'timeout' : 'blocked';
     return {
       status: 0,
       contentType: null,
       finalUrl: url,
       redirectChain: [],
       body: null,
-      error: `SSRF blocked: ${ssrfResult.reason}`,
+      error: `SSRF ${ssrfResult.kind === 'timeout' ? 'timeout' : 'blocked'}: ${ssrfResult.reason}`,
       aborted: false,
       retryAfter: null,
       bodyError: false,
-      failureReason: 'blocked',
+      failureReason,
     };
   }
 
@@ -254,7 +263,7 @@ export async function boundedFetch(
   let servername = new URL(url).hostname;
   let dispatcher: Agent | undefined;
   if (validatedIp) {
-    dispatcher = createPinnedAgent({ validatedIp, servername, rejectUnauthorized: cfg.rejectUnauthorized });
+    dispatcher = createPinnedAgent({ validatedIp, servername });
   }
 
   const cleanupAgents: Agent[] = [];
@@ -399,17 +408,18 @@ export async function boundedFetch(
         const targetSsrf = await ssrfCheck(nextUrl);
         if (!targetSsrf.allowed) {
           await cleanupTerminalResponse(response, attemptController!, attemptTimer);
+          const failureReason = targetSsrf.kind === 'timeout' ? 'timeout' : 'blocked';
           return {
             status,
             contentType,
             finalUrl: logicalUrl,
             redirectChain,
             body: null,
-            error: `SSRF blocked redirect: ${targetSsrf.reason}`,
+            error: `SSRF ${targetSsrf.kind === 'timeout' ? 'timeout' : 'blocked'} redirect: ${targetSsrf.reason}`,
             aborted: false,
             retryAfter,
             bodyError: false,
-            failureReason: 'blocked',
+            failureReason,
           };
         }
 
@@ -463,25 +473,28 @@ export async function boundedFetch(
   }
 }
 
-export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; reason?: string; ip?: string }> {
+export async function checkUrlAllowed(
+  url: string,
+  dnsResolver?: DnsResolver,
+): Promise<SsrfCheckResult> {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return { allowed: false, reason: 'Invalid URL' };
+    return { allowed: false, reason: 'Invalid URL', kind: 'error' };
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { allowed: false, reason: `Disallowed scheme: ${parsed.protocol}` };
+    return { allowed: false, reason: `Disallowed scheme: ${parsed.protocol}`, kind: 'blocked' };
   }
 
   const hostname = parsed.hostname;
   if (!hostname) {
-    return { allowed: false, reason: 'Missing hostname' };
+    return { allowed: false, reason: 'Missing hostname', kind: 'error' };
   }
 
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    return { allowed: false, reason: 'Blocked hostname: localhost', ip: '127.0.0.1' };
+    return { allowed: false, reason: 'Blocked hostname: localhost', ip: '127.0.0.1', kind: 'blocked' };
   }
 
   const { isIP: netIsIP } = await import('node:net');
@@ -490,50 +503,61 @@ export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; 
   if (ipMatch && netIsIP(ipMatch[1]!) !== 0) {
     const ip = ipMatch[1]!;
     return isPrivateIp(ip)
-      ? { allowed: false, reason: `Blocked IP: ${ip}`, ip }
-      : { allowed: true, ip };
+      ? { allowed: false, reason: `Blocked IP: ${ip}`, ip, kind: 'blocked' }
+      : { allowed: true, ip, kind: 'ok' };
   }
 
   try {
-    const { lookup } = await import('node:dns/promises');
-    const addresses = await lookupWithTimeout(hostname, DNS_TIMEOUT_MS);
+    const resolver = dnsResolver ?? ((h: string) => lookupWithTimeout(h, DNS_TIMEOUT_MS));
+    const addresses = await withTimeout(resolver(hostname), DNS_TIMEOUT_MS, `DNS resolution timeout after ${DNS_TIMEOUT_MS}ms`);
     const blocked = addresses.find((a) => isPrivateIp(a.address));
     if (blocked) {
-      return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address };
+      return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address, kind: 'blocked' };
     }
     if (addresses.length === 0) {
-      return { allowed: false, reason: 'No addresses resolved' };
+      return { allowed: false, reason: 'No addresses resolved', kind: 'error' };
     }
     const first = addresses[0]!;
     return {
       allowed: true,
       ip: first.address,
+      kind: 'ok',
     };
   } catch (error) {
-    return { allowed: false, reason: `DNS resolution failed: ${error instanceof Error ? error.message : String(error)}` };
+    const message = error instanceof Error ? error.message : String(error);
+    const isTimeout = message.includes('DNS resolution timeout') || message.includes('timeout');
+    return {
+      allowed: false,
+      reason: `DNS resolution failed: ${message}`,
+      kind: isTimeout ? 'timeout' : 'error',
+    };
   }
 }
 
 const DNS_TIMEOUT_MS = 5000;
 
-async function lookupWithTimeout(
-  hostname: string,
-  timeoutMs: number,
-): Promise<Array<{ address: string; family: number }>> {
-  const { lookup } = await import('node:dns/promises');
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`DNS resolution timeout after ${timeoutMs}ms`));
+      reject(new Error(message));
     }, timeoutMs);
 
-    lookup(hostname, { all: true })
-      .then((addresses) => {
+    promise
+      .then((value) => {
         clearTimeout(timer);
-        resolve(addresses);
+        resolve(value);
       })
       .catch((err) => {
         clearTimeout(timer);
         reject(err);
       });
   });
+}
+
+async function lookupWithTimeout(
+  hostname: string,
+  timeoutMs: number,
+): Promise<Array<{ address: string; family: number }>> {
+  const { lookup } = await import('node:dns/promises');
+  return withTimeout(lookup(hostname, { all: true }), timeoutMs, `DNS resolution timeout after ${timeoutMs}ms`);
 }

@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { boundedFetch, parseRetryAfter } from './fetcher.js';
+import { boundedFetch, parseRetryAfter, type DnsResolver } from './fetcher.js';
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -534,16 +534,17 @@ test('boundedFetch: connector sets correct SNI context', async () => {
   }
 });
 
-test('boundedFetch: DNS validation timeout does not hang', async () => {
+test('boundedFetch: DNS validation timeout does not hang (initial hop)', async () => {
   const startTime = Date.now();
-  const result = await boundedFetch(`http://never-resolve-example-12345.test/path`, {
-    ...testConfig,
+  const neverResolvingResolver: DnsResolver = () => new Promise(() => {});
+  const result = await boundedFetch(`http://never-resolve-example-initial.test/path`, {
     timeoutMs: 2000,
+    dnsResolver: neverResolvingResolver,
   });
   const elapsed = Date.now() - startTime;
 
   assert.equal(result.status, 0);
-  assert.match(result.error!, /DNS resolution|timeout|aborted/i);
+  assert.match(result.error!, /DNS resolution|timeout/i);
   assert.ok(elapsed < 10000, `DNS timeout should be bounded, took ${elapsed}ms`);
 });
 
@@ -595,4 +596,38 @@ test('boundedFetch: DNS validation timeout does not hang', async () => {
   assert.equal(result.status, 0);
   assert.match(result.error!, /DNS resolution|timeout|aborted/i);
   assert.ok(elapsed < 10000, `DNS timeout should be bounded, took ${elapsed}ms`);
+});
+
+test('boundedFetch: DNS validation timeout does not hang (redirect hop)', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') {
+      res.writeHead(302, { Location: 'http://never-resolve-example-redirect.test/destination' });
+      res.end();
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>destination</body></html>');
+    }
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const startTime = Date.now();
+    const neverResolvingResolver: DnsResolver = () => new Promise(() => {});
+    const result = await boundedFetch(`http://127.0.0.1:${serverPort}/redirect`, {
+      ...testConfig,
+      timeoutMs: 2000,
+      dnsResolver: neverResolvingResolver,
+    });
+    const elapsed = Date.now() - startTime;
+
+    assert.equal(result.status, 0);
+    assert.match(result.error!, /DNS resolution|timeout|SSRF|aborted/i);
+    assert.ok(elapsed < 10000, `Redirect DNS timeout should be bounded, took ${elapsed}ms`);
+  } finally {
+    server.close();
+  }
 });
