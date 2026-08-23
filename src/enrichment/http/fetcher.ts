@@ -18,6 +18,7 @@ export type FetcherConfig = {
   ssrfChecker?: SsrfChecker;
   maxRetries: number;
   baseRetryDelayMs: number;
+  rejectUnauthorized?: boolean;
 };
 
 export const DEFAULT_FETCHER_CONFIG: FetcherConfig = {
@@ -93,6 +94,7 @@ export function parseRetryAfter(header: string | null): number | null {
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
+  rejectUnauthorized?: boolean | undefined;
 }
 
 function createPinnedAgent(ctx: PinnedConnectContext): Agent {
@@ -106,6 +108,7 @@ function createPinnedAgent(ctx: PinnedConnectContext): Agent {
           cb(null, ctx.validatedIp, family || 4);
         }
       },
+      ...(ctx.rejectUnauthorized === false ? { rejectUnauthorized: false } : {}),
     },
   });
 }
@@ -251,7 +254,7 @@ export async function boundedFetch(
   let servername = new URL(url).hostname;
   let dispatcher: Agent | undefined;
   if (validatedIp) {
-    dispatcher = createPinnedAgent({ validatedIp, servername });
+    dispatcher = createPinnedAgent({ validatedIp, servername, rejectUnauthorized: cfg.rejectUnauthorized });
   }
 
   const cleanupAgents: Agent[] = [];
@@ -493,7 +496,7 @@ export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; 
 
   try {
     const { lookup } = await import('node:dns/promises');
-    const addresses = await lookup(hostname, { all: true });
+    const addresses = await lookupWithTimeout(hostname, DNS_TIMEOUT_MS);
     const blocked = addresses.find((a) => isPrivateIp(a.address));
     if (blocked) {
       return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address };
@@ -509,4 +512,28 @@ export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; 
   } catch (error) {
     return { allowed: false, reason: `DNS resolution failed: ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+const DNS_TIMEOUT_MS = 5000;
+
+async function lookupWithTimeout(
+  hostname: string,
+  timeoutMs: number,
+): Promise<Array<{ address: string; family: number }>> {
+  const { lookup } = await import('node:dns/promises');
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`DNS resolution timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    lookup(hostname, { all: true })
+      .then((addresses) => {
+        clearTimeout(timer);
+        resolve(addresses);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
