@@ -10,7 +10,7 @@ export const KNOWN_ENRICHMENT_MODULES = [
 
 export type EnrichmentModuleId = (typeof KNOWN_ENRICHMENT_MODULES)[number];
 
-export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters'] as const satisfies readonly EnrichmentModuleId[];
+export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters', 'domain_age'] as const satisfies readonly EnrichmentModuleId[];
 
 export type EnrichmentItemStatus =
   | 'pending'
@@ -34,13 +34,16 @@ export type EnrichmentItemSource =
   | 'google'
   | 'rdap'
   | 'first_seen'
-  | 'ahrefs';
+  | 'ahrefs'
+  | 'cache'
+  | 'checkpoint';
 
 export type EnrichmentCacheStatus =
   | 'hit'
   | 'miss'
   | 'expired'
   | 'refreshed'
+  | 'partial'
   | 'none';
 
 export type ClusterEdgeRule = {

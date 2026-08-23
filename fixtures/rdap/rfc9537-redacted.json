@@ -1,0 +1,10 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "redacted.rfc9537",
+  "redacted": [
+    { "selectionOfList": "ua", "replacementObi": [""], "name": "Registrant" }
+  ],
+  "events": [
+    { "eventAction": "registration", "eventDate": "2001-05-17T03:42:00Z" }
+  ]
+}

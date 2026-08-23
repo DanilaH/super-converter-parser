@@ -1,0 +1,5 @@
+{
+  "errorCode": 400,
+  "title": "invalid query argument",
+  "description": ["The query string did not comply with RFC 9082."]
+}
