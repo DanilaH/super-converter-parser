@@ -63,6 +63,7 @@ interface ParsedArgs {
   shortlist: string[];
   sources: QuerySuggestionSource[];
   maxSuggestions: number;
+  maxParents: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -76,6 +77,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shortlist: string[] = [];
   let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
   let maxSuggestions = 20;
+  let maxParents = 30;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -152,6 +154,16 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-suggestions-per-source must be a positive integer, got ${value}`);
       }
       maxSuggestions = parsed;
+    } else if (arg === '--max-parents') {
+      const value = args.shift();
+      if (!value || Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-parents requires a numeric value');
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be a positive integer, got ${value}`);
+      }
+      maxParents = parsed;
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
@@ -170,7 +182,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions };
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions, maxParents };
 }
 
 function buildEnrichmentConfig(
@@ -178,12 +190,14 @@ function buildEnrichmentConfig(
   clusteringConfig: ClusteringConfig,
   sources: QuerySuggestionSource[],
   maxSuggestions: number,
+  maxParents: number,
 ): EnrichmentModuleConfig {
   const config: EnrichmentModuleConfig = { clusters: clusteringConfig };
   if (modules.includes('query_suggestions')) {
     config.query_suggestions = {
       sources,
       maxSuggestionsPerSource: maxSuggestions,
+      maxParents,
       rateLimitMinDelayMs: 1000,
       rateLimitMaxDelayMs: 10000,
       algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,
@@ -266,7 +280,7 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
     }
     if (args.resumeEnrichmentId) {
-      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--sources', '--max-suggestions-per-source'];
+      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--sources', '--max-suggestions-per-source', '--max-parents'];
       const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
       if (supplied.length > 0) {
         throw new ResearchError(
@@ -338,6 +352,16 @@ async function main(): Promise<void> {
     console.log('');
     const logger: EnrichmentLogger = (line: string) => console.log(line);
 
+    const resumeSources = isResume
+      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.sources ?? args.sources)
+      : args.sources;
+    const resumeMaxSuggestions = isResume
+      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.maxSuggestionsPerSource ?? args.maxSuggestions)
+      : args.maxSuggestions;
+    const resumeMaxParents = isResume
+      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.maxParents ?? args.maxParents)
+      : args.maxParents;
+
     const outcome = await runEnrichment({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
@@ -346,7 +370,7 @@ async function main(): Promise<void> {
       enrichmentDirectory,
       modules,
       shortlist,
-      config: buildEnrichmentConfig(modules, clusteringConfig, args.sources, args.maxSuggestions),
+      config: buildEnrichmentConfig(modules, clusteringConfig, resumeSources, resumeMaxSuggestions, resumeMaxParents),
       logger,
       signal,
       resume: isResume,

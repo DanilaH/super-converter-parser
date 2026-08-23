@@ -102,6 +102,7 @@ type ReservedModuleConfig = Record<string, unknown>;
 export type QuerySuggestionsConfig = {
   sources: QuerySuggestionSource[];
   maxSuggestionsPerSource: number;
+  maxParents: number;
   rateLimitMinDelayMs: number;
   rateLimitMaxDelayMs: number;
   algorithmVersion: string;

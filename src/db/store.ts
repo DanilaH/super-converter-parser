@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
-import type { ClusteringConfig, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord } from '../enrichment/types.js';
+import type { ClusteringConfig, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionSource } from '../enrichment/types.js';
 
 // Helper: add a column to a table only if it does not already exist.
 // SQLite's ALTER TABLE ADD COLUMN does not support IF NOT EXISTS in the
@@ -30,7 +30,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -238,6 +238,20 @@ const MIGRATIONS: string[] = [
     collection_status TEXT NOT NULL,
     occurrences_json TEXT NOT NULL,
     PRIMARY KEY (enrichment_id, normalized_suggestion)
+  );
+  `,
+  // v11: per-(parent, source) collection result. Preserves zero-row states
+  // (empty/unavailable/error) that the deduped suggestion table cannot represent
+  // because it only stores rows for suggestions that were actually found.
+  `
+  CREATE TABLE IF NOT EXISTS enrichment_query_suggestion_sources (
+    enrichment_id TEXT NOT NULL,
+    normalized_parent TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (enrichment_id, normalized_parent, source)
   );
   `,
 ];
@@ -1361,6 +1375,50 @@ export class RunStore {
       parserVersion: row.parser_version,
       collectionStatus: row.collection_status,
       occurrences: JSON.parse(row.occurrences_json),
+    }));
+  }
+
+  saveQuerySuggestionSource(
+    enrichmentId: string,
+    normalizedParent: string,
+    source: QuerySuggestionSource,
+    status: string,
+    error: string | null,
+    fetchedAt: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
+          (enrichment_id, normalized_parent, source, status, error, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(enrichmentId, normalizedParent, source, status, error, fetchedAt);
+  }
+
+  loadQuerySuggestionSources(enrichmentId: string): Array<{
+    normalizedParent: string;
+    source: QuerySuggestionSource;
+    status: string;
+    error: string | null;
+    fetchedAt: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        'SELECT normalized_parent, source, status, error, fetched_at FROM enrichment_query_suggestion_sources WHERE enrichment_id = ?',
+      )
+      .all(enrichmentId) as Array<{
+      normalized_parent: string;
+      source: string;
+      status: string;
+      error: string | null;
+      fetched_at: string;
+    }>;
+    return rows.map((row) => ({
+      normalizedParent: row.normalized_parent,
+      source: row.source as QuerySuggestionSource,
+      status: row.status,
+      error: row.error,
+      fetchedAt: row.fetched_at,
     }));
   }
 

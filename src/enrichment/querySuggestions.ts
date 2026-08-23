@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
@@ -43,10 +43,6 @@ import {
   type QuerySuggestionsConfig,
 } from './types.js';
 
-// One collected raw occurrence before dedup. Dedup keys on normalizedSuggestion;
-// every occurrence is retained so a collision across parents/sources keeps its
-// full provenance. Google-sourced rows keep volume/cpc null — this module never
-// invents demand for them.
 export type RawSuggestionOccurrence = {
   parentKeyword: string;
   normalizedParent: string;
@@ -58,8 +54,6 @@ export type RawSuggestionOccurrence = {
   cpc: number | null;
 };
 
-// One collected result for a single (parent, source) before dedup. The collector
-// returns one of these per requested source.
 export type RawSourceCollection = {
   source: QuerySuggestionSource;
   status: QuerySuggestionCollectionStatus;
@@ -68,9 +62,6 @@ export type RawSourceCollection = {
   cacheStatus: 'hit' | 'miss' | 'expired' | 'refreshed' | 'none';
 };
 
-// Abstraction over the browser so the module is unit-testable without a live
-// Research Chrome. The real implementation navigates one SERP page and reads all
-// requested sources from it (including the autocomplete XHR).
 export interface SuggestionCollector {
   open(): Promise<void>;
   close(): Promise<void>;
@@ -127,9 +118,6 @@ function makeOccurrences(
   return out;
 }
 
-// Deduplicates raw occurrences on normalizedSuggestion, retaining every parent/source
-// occurrence. Representative rawText/volume/cpc/ordinal come from the first-seen
-// occurrence; volume/cpc prefer the first non-null (only surfer_related supplies them).
 export function dedupSuggestions(
   occurrences: RawSuggestionOccurrence[],
   market: string,
@@ -199,14 +187,9 @@ function checkCancellation(signal: CancellationSignal, error: typeof EnrichmentC
   if (signal.cancelled) throw new error();
 }
 
-// Real browser-backed collector. Opens the dedicated Research Chrome (TASK-009
-// profile), navigates one SERP page per parent, and reads every requested source
-// from that single page load: surfer_related via the Surfer sidebar, the Google
-// related-searches and PAA blocks from the rendered DOM, and autocomplete via an
-// XHR from the page context. Collected suggestion text is factual only; volume/CPC
-// stay null for Google sources.
 export class BrowserSuggestionCollector implements SuggestionCollector {
   private readonly context: BrowserContext;
+  private readonly browser: Browser;
   private readonly config: ResearchConfig;
   private readonly debugRoot: string;
   private readonly signal: CancellationSignal;
@@ -214,11 +197,13 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
 
   constructor(
     context: BrowserContext,
+    browser: Browser,
     config: ResearchConfig,
     debugRoot: string,
     signal: CancellationSignal,
   ) {
     this.context = context;
+    this.browser = browser;
     this.config = config;
     this.debugRoot = debugRoot;
     this.signal = signal;
@@ -231,6 +216,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   async close(): Promise<void> {
     await this.page?.close().catch(() => undefined);
     this.page = null;
+    await this.browser.close().catch(() => undefined);
   }
 
   async collect(
@@ -240,28 +226,30 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   ): Promise<RawSourceCollection[]> {
     if (!this.page) throw new ResearchError('ENRICHMENT_ERROR', 'Collector used before open()');
     const page = this.page;
-    const results: RawSourceCollection[] = [];
 
-    await page
+    const gotoResult = await page
       .goto(buildSearchUrl(this.config, parentKeyword), {
         waitUntil: 'domcontentloaded',
         timeout: this.config.browser.navigationTimeoutMs,
       })
-      .catch(() => undefined);
+      .then(() => ({ ok: true as const }))
+      .catch((error) => ({ ok: false as const, error }));
 
-    // surfer_related
+    if (!gotoResult.ok) {
+      const message = gotoResult.error instanceof Error ? gotoResult.error.message : String(gotoResult.error);
+      throw new ResearchError('GOOGLE_UNAVAILABLE', `Navigation failed for "${parentKeyword}": ${message}`);
+    }
+
+    const results: RawSourceCollection[] = [];
     if (sources.includes('surfer_related')) {
-      results.push(await this.collectSurferRelated(page, normalizedParent));
+      results.push(await this.collectSurferRelated(page, parentKeyword, normalizedParent));
     }
-    // google_related_search
     if (sources.includes('google_related_search')) {
-      results.push(await this.collectFromScript(page, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
+      results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
     }
-    // google_paa
     if (sources.includes('google_paa')) {
-      results.push(await this.collectFromScript(page, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
+      results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
     }
-    // google_autocomplete (XHR from the page context)
     if (sources.includes('google_autocomplete')) {
       results.push(await this.collectAutocomplete(page, parentKeyword, normalizedParent));
     }
@@ -269,7 +257,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     return results;
   }
 
-  private async collectSurferRelated(page: Page, normalizedParent: string): Promise<RawSourceCollection> {
+  private async collectSurferRelated(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
     try {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
       await page.waitForTimeout(1000);
@@ -289,7 +277,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
         };
       }
       const occurrences = makeOccurrences(
-        '',
+        parentKeyword,
         normalizedParent,
         'surfer_related',
         [],
@@ -316,6 +304,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
 
   private async collectFromScript(
     page: Page,
+    parentKeyword: string,
     normalizedParent: string,
     source: QuerySuggestionSource,
     script: string,
@@ -324,7 +313,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     try {
       const raw = (await page.evaluate(script)) as string[];
       const texts = parse((raw ?? []).map((r) => String(r)));
-      const occurrences = makeOccurrences('', normalizedParent, source, texts, []);
+      const occurrences = makeOccurrences(parentKeyword, normalizedParent, source, texts, []);
       return {
         source,
         status: occurrences.length > 0 ? 'ok' : 'empty',
@@ -346,7 +335,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
         return response.text();
       }, url)) as string;
       const texts = parseGoogleAutocomplete(payload ?? '');
-      const occurrences = makeOccurrences('', normalizedParent, 'google_autocomplete', texts, []);
+      const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
       return {
         source: 'google_autocomplete',
         status: occurrences.length > 0 ? 'ok' : 'empty',
@@ -361,8 +350,6 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   }
 }
 
-// Builds the real collector from config, opening the dedicated Research Chrome
-// connection so the module never touches the user's daily profile.
 export async function createBrowserSuggestionCollector(
   config: ResearchConfig,
   debugRoot: string,
@@ -370,7 +357,7 @@ export async function createBrowserSuggestionCollector(
 ): Promise<SuggestionCollector> {
   const browser = await connectResearchChrome(config.browser.cdpUrl);
   const context = getPrimaryContext(browser);
-  return new BrowserSuggestionCollector(context, config, debugRoot, signal);
+  return new BrowserSuggestionCollector(context, browser, config, debugRoot, signal);
 }
 
 export type RunQuerySuggestionsOptions = {
@@ -388,12 +375,6 @@ export type RunQuerySuggestionsOptions = {
   debugRoot: string;
 };
 
-// Module runner. Collects factual query-language suggestions for every selected
-// parent keyword across the configured sources. Crucially it ONLY reads existing
-// discovery data and the browser; it never pushes collected suggestions back into
-// the research/expansion queue. State is checkpointed per (parent, source) so an
-// interruption resumes without repeating browser work. The cross-run cache avoids
-// browser hits for already-collected (parent, source) pairs.
 export async function runQuerySuggestionsModule(
   options: RunQuerySuggestionsOptions,
 ): Promise<QuerySuggestionResult> {
@@ -440,7 +421,13 @@ export async function runQuerySuggestionsModule(
     selectedKeywords = allKeywords.filter((k) => shortlistSet.has(k.normalizedKeyword));
   }
 
-  // Completed (parent, source) checkpoints from a prior run/resume.
+  if (selectedKeywords.length > config.maxParents) {
+    throw new ResearchError(
+      'ENRICHMENT_ERROR',
+      `Too many parent keywords (${selectedKeywords.length}) for query_suggestions; limit is ${config.maxParents}. Use --shortlist to limit the set.`,
+    );
+  }
+
   const completedItems = new Set(
     enrichmentStore
       .loadEnrichmentItems(enrichmentId)
@@ -448,7 +435,6 @@ export async function runQuerySuggestionsModule(
       .map((item) => item.itemId),
   );
 
-  // Load already-persisted deduped suggestions (resume) so we keep them.
   const occurrences: RawSuggestionOccurrence[] = [];
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
@@ -472,7 +458,6 @@ export async function runQuerySuggestionsModule(
   const sourceStats = emptySourceStats();
   const seenSuggestionKeys = new Set(occurrences.map((o) => `${o.source}:${o.normalizedParent}:${o.normalizedSuggestion}`));
 
-  // Bounded retry helper for retryable browser/network errors per (parent, source).
   const collectWithRetry = async (
     parentKeyword: string,
     normalizedParent: string,
@@ -499,6 +484,35 @@ export async function runQuerySuggestionsModule(
     }));
   };
 
+  const persistOccurrences = (): void => {
+    const suggestions = dedupSuggestions(occurrences, market, hl, gl);
+    enrichmentStore.saveQuerySuggestions(
+      enrichmentId,
+      suggestions.map((s) => ({
+        normalizedSuggestion: s.normalizedSuggestion,
+        rawText: s.rawText,
+        volume: s.volume,
+        cpc: s.cpc,
+        ordinal: s.ordinal,
+        market: s.market,
+        hl: s.hl,
+        gl: s.gl,
+        parserVersion: s.parserVersion,
+        collectionStatus: s.collectionStatus,
+        occurrences: s.occurrences.map((o) => ({
+          parentKeyword: o.parentKeyword,
+          normalizedParent: o.normalizedParent,
+          source: o.source,
+          market: o.market,
+          hl: o.hl,
+          gl: o.gl,
+          parserVersion: o.parserVersion,
+          collectionStatus: o.collectionStatus,
+        })),
+      })),
+    );
+  };
+
   await collector.open();
   try {
     for (const keyword of selectedKeywords) {
@@ -510,71 +524,63 @@ export async function runQuerySuggestionsModule(
       if (missingSources.length === 0) continue;
 
       const fetched: RawSourceCollection[] = [];
+
+      const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
         if (cached && cached.status !== 'error') {
-          const rows = cached.suggestions;
-          const occurrencesForSource = makeOccurrences(
-            keyword.keyword,
-            keyword.normalizedKeyword,
-            source,
-            rows.map((r) => r.text),
-            rows.map((r, i) => ({ text: r.text, volume: r.volume, cpc: r.cpc, ordinal: r.ordinal ?? i })),
-          );
-          fetched.push({
-            source,
-            status: cached.status === 'ok' ? (occurrencesForSource.length > 0 ? 'ok' : 'empty') : cached.status,
-            occurrences: occurrencesForSource,
-            error: cached.error,
-            cacheStatus: 'hit',
-          });
+          const isExpired = Date.parse(cached.expiresAt) <= Date.now();
+          if (!isExpired) {
+            const rows = cached.suggestions;
+            const occurrencesForSource = makeOccurrences(
+              keyword.keyword,
+              keyword.normalizedKeyword,
+              source,
+              rows.map((r) => r.text),
+              rows.map((r, i) => ({ text: r.text, volume: r.volume, cpc: r.cpc, ordinal: r.ordinal ?? i })),
+            );
+            fetched.push({
+              source,
+              status: cached.status === 'ok' ? (occurrencesForSource.length > 0 ? 'ok' : 'empty') : cached.status,
+              occurrences: occurrencesForSource,
+              error: cached.error,
+              cacheStatus: 'hit',
+            });
+            continue;
+          }
+          cacheMissSources.push(source);
         } else {
-          const collected = (await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, [source]))[0]!;
-          fetched.push(collected);
+          cacheMissSources.push(source);
+        }
+      }
+
+      if (cacheMissSources.length > 0) {
+        const collected = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
+        for (const col of collected) {
+          const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
+          const storedAt = new Date().toISOString();
+          const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
+          cache.putSuggestion(
+            {
+              cacheKey,
+              source: col.source,
+              normalizedParent: keyword.normalizedKeyword,
+              identity,
+              parserVersion: parserVersionForSource(col.source),
+              status: col.status,
+              error: col.error,
+              suggestions: rows,
+            },
+            storedAt,
+            ttlMsForSuggestionStatus(col.status, researchConfig.cache.ttl),
+          );
+          fetched.push({ ...col, cacheStatus: 'miss' });
         }
       }
 
       for (const collection of fetched) {
-        // Persist cache (records texts so a future run skips the browser).
-        const cacheKey = buildSuggestionCacheKey(
-          collection.source,
-          keyword.normalizedKeyword,
-          identity,
-          parserVersionForSource(collection.source),
-        );
-        const storedAt = new Date().toISOString();
-        const rows = collection.occurrences.map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
-        cache.putSuggestion(
-          {
-            cacheKey,
-            source: collection.source,
-            normalizedParent: keyword.normalizedKeyword,
-            identity,
-            parserVersion: parserVersionForSource(collection.source),
-            status: collection.status,
-            error: collection.error,
-            suggestions: rows,
-          },
-          storedAt,
-          ttlMsForSuggestionStatus(collection.status, researchConfig.cache.ttl),
-        );
-
-        // Per (parent, source) checkpoint item.
-        enrichmentStore.upsertEnrichmentItem({
-          enrichmentId,
-          itemId: `${collection.source}:${keyword.normalizedKeyword}`,
-          module: 'query_suggestions',
-          status: collection.status === 'error' ? 'error' : 'completed',
-          source: sourceEnrichmentItemSource(collection.source),
-          requestCount: 1,
-          fetchedAt: storedAt,
-          cacheStatus: collection.cacheStatus,
-          error: collection.error,
-        });
-
-        // Accumulate occurrences (skip ones already present from a prior save).
-        for (const occ of collection.occurrences) {
+        for (const occ of collection.occurrences.slice(0, config.maxSuggestionsPerSource)) {
           const key = `${occ.source}:${occ.normalizedParent}:${occ.normalizedSuggestion}`;
           if (seenSuggestionKeys.has(key)) continue;
           seenSuggestionKeys.add(key);
@@ -599,9 +605,41 @@ export async function runQuerySuggestionsModule(
         }
       }
 
+      persistOccurrences();
+
+      for (const collection of fetched) {
+        enrichmentStore.upsertEnrichmentItem({
+          enrichmentId,
+          itemId: `${collection.source}:${keyword.normalizedKeyword}`,
+          module: 'query_suggestions',
+          status: collection.status === 'error' ? 'error' : 'completed',
+          source: sourceEnrichmentItemSource(collection.source),
+          requestCount: collection.cacheStatus === 'hit' ? 0 : 1,
+          fetchedAt: new Date().toISOString(),
+          cacheStatus: collection.cacheStatus,
+          error: collection.error,
+        });
+
+        enrichmentStore.saveQuerySuggestionSource(
+          enrichmentId,
+          keyword.normalizedKeyword,
+          collection.source,
+          collection.status,
+          collection.error,
+          new Date().toISOString(),
+        );
+      }
+
       logger(
         `  ${keyword.keyword}: ${fetched.map((f) => `${f.source}=${f.status}`).join(', ')}`,
       );
+
+      if (config.rateLimitMinDelayMs > 0 || config.rateLimitMaxDelayMs > 0) {
+        const minDelay = config.rateLimitMinDelayMs;
+        const maxDelay = Math.max(minDelay, config.rateLimitMaxDelayMs);
+        const delay = minDelay === maxDelay ? minDelay : minDelay + Math.floor(Math.random() * (maxDelay - minDelay));
+        await sleep(delay);
+      }
     }
   } finally {
     await collector.close();
@@ -609,31 +647,7 @@ export async function runQuerySuggestionsModule(
 
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
 
-  enrichmentStore.saveQuerySuggestions(
-    enrichmentId,
-    suggestions.map((s) => ({
-      normalizedSuggestion: s.normalizedSuggestion,
-      rawText: s.rawText,
-      volume: s.volume,
-      cpc: s.cpc,
-      ordinal: s.ordinal,
-      market: s.market,
-      hl: s.hl,
-      gl: s.gl,
-      parserVersion: s.parserVersion,
-      collectionStatus: s.collectionStatus,
-      occurrences: s.occurrences.map((o) => ({
-        parentKeyword: o.parentKeyword,
-        normalizedParent: o.normalizedParent,
-        source: o.source,
-        market: o.market,
-        hl: o.hl,
-        gl: o.gl,
-        parserVersion: o.parserVersion,
-        collectionStatus: o.collectionStatus,
-      })),
-    })),
-  );
+  persistOccurrences();
 
   const emptyCount = suggestions.filter((s) => s.occurrences.every((o) => o.collectionStatus !== 'ok')).length;
   const errorCount = [...perSourceStatus.values()].filter((s) => s.status === 'error').length;
@@ -655,13 +669,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Rebuilds a QuerySuggestionResult purely from persisted store state, so a
-// resume of an already-completed query_suggestions module does not reopen the
-// browser. Distinct from a fresh run: this trusts the persisted deduped set.
 export function buildQueryResultFromStore(
   enrichmentId: string,
   enrichmentStore: RunStore,
   config: QuerySuggestionsConfig,
+  researchConfig: ResearchConfig,
 ): QuerySuggestionResult {
   const occurrences: RawSuggestionOccurrence[] = [];
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
@@ -685,35 +697,41 @@ export function buildQueryResultFromStore(
   }
   const sourceStats = emptySourceStats();
 
-  // Per-source truth comes from the persisted collection statuses on each saved
-  // suggestion occurrence, not from the coarse item status (which collapses
-  // 'unavailable' into 'completed'). This keeps unavailable/empty/error truthful
-  // across a resume without reopening the browser.
+  const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
+  for (const record of sourceRecords) {
+    const source = record.source;
+    const status = bySource.get(source);
+    if (!status) continue;
+    if (record.status === 'ok') {
+      status.status = 'ok';
+    } else if (record.status === 'empty') {
+      if (status.status !== 'ok') status.status = 'empty';
+      sourceStats[source].empty += 1;
+    } else if (record.status === 'unavailable') {
+      if (status.status !== 'ok') status.status = 'unavailable';
+      sourceStats[source].unavailable += 1;
+    } else {
+      status.status = 'error';
+      status.error = record.error;
+      sourceStats[source].error += 1;
+    }
+  }
+
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       const source = occ.source as QuerySuggestionSource;
       const status = bySource.get(source);
       if (!status) continue;
       if (occ.collectionStatus === 'ok') {
-        status.status = 'ok';
         status.collected += 1;
-        sourceStats[source].ok += 1;
-      } else if (occ.collectionStatus === 'empty') {
-        status.status = 'empty';
-        sourceStats[source].empty += 1;
-      } else if (occ.collectionStatus === 'unavailable') {
-        status.status = 'unavailable';
-        sourceStats[source].unavailable += 1;
-      } else {
-        status.status = 'error';
-        status.error = occ.collectionStatus;
-        sourceStats[source].error += 1;
       }
     }
   }
 
-  const market = occurrences[0]?.source ? '' : '';
-  const suggestions = dedupSuggestions(occurrences, market, '', '');
+  const market = researchConfig.research.market;
+  const hl = researchConfig.research.googleHl;
+  const gl = researchConfig.research.googleGl;
+  const suggestions = dedupSuggestions(occurrences, market, hl, gl);
   const emptyCount = suggestions.filter((s) => s.occurrences.every((o) => o.collectionStatus !== 'ok')).length;
   const errorCount = [...bySource.values()].filter((s) => s.status === 'error').length;
   const inputCount = new Set(occurrences.map((o) => o.normalizedParent)).size;
@@ -735,6 +753,7 @@ export function defaultQuerySuggestionsConfig(): QuerySuggestionsConfig {
   return {
     sources: ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'],
     maxSuggestionsPerSource: 20,
+    maxParents: 30,
     rateLimitMinDelayMs: 1000,
     rateLimitMaxDelayMs: 10000,
     algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,

@@ -174,7 +174,16 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       );
       if (existingItem?.status === 'completed') {
         logger('Skipping completed query_suggestions module');
-        queryResult = buildQueryResultFromStore(enrichmentId, enrichmentStore, config.query_suggestions ?? defaultQuerySuggestionsConfig());
+        const runConfig = sourceConn.store.loadRun(sourceRunId);
+        if (!runConfig) {
+          throw new Error(`Source run not found for query suggestions resume: ${sourceRunId}`);
+        }
+        queryResult = buildQueryResultFromStore(
+          enrichmentId,
+          enrichmentStore,
+          config.query_suggestions ?? defaultQuerySuggestionsConfig(),
+          runConfig.configSnapshot,
+        );
       } else {
         const runConfig = sourceConn.store.loadRun(sourceRunId);
         if (!runConfig) {
