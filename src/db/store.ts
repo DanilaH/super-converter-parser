@@ -30,7 +30,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 11;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -218,6 +218,89 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (enrichment_id, keyword)
   );
   `,
+  // v10: ranking-page inspection and bounded site-structure snapshot records.
+  // Each enrichment run can inspect multiple URLs/pages and domains.
+  `
+  CREATE TABLE IF NOT EXISTS enrichment_pages (
+    enrichment_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    final_url TEXT NOT NULL,
+    redirect_count INTEGER NOT NULL,
+    redirect_chain TEXT NOT NULL,
+    http_status INTEGER,
+    content_type TEXT,
+    fetch_status TEXT NOT NULL,
+    fetch_error TEXT,
+    fetched_at TEXT NOT NULL,
+    cache_status TEXT NOT NULL,
+    title TEXT,
+    meta_description TEXT,
+    h1 TEXT,
+    canonical TEXT,
+    language TEXT,
+    word_count INTEGER,
+    forms TEXT NOT NULL,
+    structured_data_types TEXT NOT NULL,
+    source_keywords TEXT NOT NULL,
+    source_positions TEXT NOT NULL,
+    PRIMARY KEY (enrichment_id, url)
+  );
+
+  CREATE TABLE IF NOT EXISTS enrichment_site_structure (
+    enrichment_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    homepage_status TEXT NOT NULL,
+    homepage_http_status INTEGER,
+    robots_status TEXT NOT NULL,
+    robots_http_status INTEGER,
+    robots_url TEXT,
+    sitemap_urls_from_robots TEXT NOT NULL,
+    sitemap_fallback_url TEXT,
+    sitemap_type TEXT NOT NULL,
+    declared_sitemap_count INTEGER NOT NULL,
+    discovered_url_count INTEGER NOT NULL,
+    sampled_urls TEXT NOT NULL,
+    sampled_utility_urls TEXT NOT NULL DEFAULT '[]',
+    errors TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    cache_status TEXT NOT NULL,
+    source_keywords TEXT NOT NULL DEFAULT '[]',
+    source_best_position INTEGER,
+    PRIMARY KEY (enrichment_id, domain)
+  );
+  `,
+  // v11: per-target checkpoint/resume for pages and site_structure modules.
+  // Each URL/domain target tracks its own status and data, enabling resume
+  // without re-fetching completed targets and correct terminal module state.
+  `
+  CREATE TABLE IF NOT EXISTS enrichment_page_targets (
+    enrichment_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT,
+    error TEXT,
+    fetched_at TEXT,
+    cache_status TEXT NOT NULL DEFAULT 'none',
+    source_keywords TEXT NOT NULL DEFAULT '[]',
+    source_positions TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (enrichment_id, url)
+  );
+
+  CREATE TABLE IF NOT EXISTS enrichment_site_structure_targets (
+    enrichment_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT,
+    error TEXT,
+    fetched_at TEXT,
+    cache_status TEXT NOT NULL DEFAULT 'none',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (enrichment_id, domain)
+  );
+  `,
 ];
 
 export type StoredRun = {
@@ -392,7 +475,17 @@ export class RunStore {
       addColumnIfMissingLocal(this.db, 'enrichment_items', column, definition);
     }
     addColumnIfMissingLocal(this.db, 'enrichment_runs', 'shortlist_keywords', "TEXT NOT NULL DEFAULT '[]'");
-    // Ensure v9 tables exist for databases created before v9.
+    const siteStructureDynamic: Array<[string, string]> = [
+      ['homepage_http_status', 'INTEGER'],
+      ['robots_http_status', 'INTEGER'],
+      ['sampled_utility_urls', "TEXT NOT NULL DEFAULT '[]'"],
+      ['source_keywords', "TEXT NOT NULL DEFAULT '[]'"],
+      ['source_best_position', 'INTEGER'],
+    ];
+    for (const [column, definition] of siteStructureDynamic) {
+      addColumnIfMissingLocal(this.db, 'enrichment_site_structure', column, definition);
+    }
+    // Ensure v9/v10 tables exist for databases created before those versions.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS enrichment_pairs (
         enrichment_id TEXT NOT NULL,
@@ -412,6 +505,78 @@ export class RunStore {
         reason TEXT NOT NULL,
         serp_size INTEGER NOT NULL,
         PRIMARY KEY (enrichment_id, keyword)
+      );
+      CREATE TABLE IF NOT EXISTS enrichment_pages (
+        enrichment_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        final_url TEXT NOT NULL,
+        redirect_count INTEGER NOT NULL,
+        redirect_chain TEXT NOT NULL,
+        http_status INTEGER,
+        content_type TEXT,
+        fetch_status TEXT NOT NULL,
+        fetch_error TEXT,
+        fetched_at TEXT NOT NULL,
+        cache_status TEXT NOT NULL,
+        title TEXT,
+        meta_description TEXT,
+        h1 TEXT,
+        canonical TEXT,
+        language TEXT,
+        word_count INTEGER,
+        forms TEXT NOT NULL,
+        structured_data_types TEXT NOT NULL,
+        source_keywords TEXT NOT NULL,
+        source_positions TEXT NOT NULL,
+        PRIMARY KEY (enrichment_id, url)
+      );
+      CREATE TABLE IF NOT EXISTS enrichment_site_structure (
+        enrichment_id TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        homepage_status TEXT NOT NULL,
+        homepage_http_status INTEGER,
+        robots_status TEXT NOT NULL,
+        robots_http_status INTEGER,
+        robots_url TEXT,
+        sitemap_urls_from_robots TEXT NOT NULL,
+        sitemap_fallback_url TEXT,
+        sitemap_type TEXT NOT NULL,
+        declared_sitemap_count INTEGER NOT NULL,
+        discovered_url_count INTEGER NOT NULL,
+        sampled_urls TEXT NOT NULL,
+        sampled_utility_urls TEXT NOT NULL DEFAULT '[]',
+        errors TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        cache_status TEXT NOT NULL,
+        source_keywords TEXT NOT NULL DEFAULT '[]',
+        source_best_position INTEGER,
+        PRIMARY KEY (enrichment_id, domain)
+      );
+      CREATE TABLE IF NOT EXISTS enrichment_page_targets (
+        enrichment_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        status TEXT NOT NULL,
+        data TEXT,
+        error TEXT,
+        fetched_at TEXT,
+        cache_status TEXT NOT NULL DEFAULT 'none',
+        source_keywords TEXT NOT NULL DEFAULT '[]',
+        source_positions TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (enrichment_id, url)
+      );
+      CREATE TABLE IF NOT EXISTS enrichment_site_structure_targets (
+        enrichment_id TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        status TEXT NOT NULL,
+        data TEXT,
+        error TEXT,
+        fetched_at TEXT,
+        cache_status TEXT NOT NULL DEFAULT 'none',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (enrichment_id, domain)
       );
     `);
   }
@@ -1263,6 +1428,437 @@ export class RunStore {
       shortlistKeywords: JSON.parse(row.shortlist_keywords),
       error: row.error,
     };
+  }
+
+  saveEnrichmentPages(
+    enrichmentId: string,
+    pages: Array<{
+      url: string;
+      finalUrl: string;
+      redirectCount: number;
+      redirectChain: string;
+      httpStatus: number;
+      contentType: string | null;
+      fetchStatus: string;
+      fetchError: string | null;
+      fetchedAt: string;
+      cacheStatus: string;
+      title: string | null;
+      metaDescription: string | null;
+      h1: string | null;
+      canonical: string | null;
+      language: string | null;
+      wordCount: number | null;
+      forms: string;
+      structuredDataTypes: string;
+      sourceKeywords: string;
+      sourcePositions: string;
+    }>,
+  ): void {
+    const deleteExisting = this.db.prepare('DELETE FROM enrichment_pages WHERE enrichment_id = ?');
+    const stmt = this.db.prepare(
+      `INSERT INTO enrichment_pages (
+        enrichment_id, url, final_url, redirect_count, redirect_chain,
+        http_status, content_type, fetch_status, fetch_error, fetched_at, cache_status,
+        title, meta_description, h1, canonical, language, word_count,
+        forms, structured_data_types, source_keywords, source_positions
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
+      for (const p of pages) {
+        stmt.run(
+          enrichmentId, p.url, p.finalUrl, p.redirectCount, p.redirectChain,
+          p.httpStatus, p.contentType, p.fetchStatus, p.fetchError, p.fetchedAt, p.cacheStatus,
+          p.title, p.metaDescription, p.h1, p.canonical, p.language, p.wordCount,
+          p.forms, p.structuredDataTypes, p.sourceKeywords, p.sourcePositions,
+        );
+      }
+    });
+    tx();
+  }
+
+  loadEnrichmentPages(enrichmentId: string): Array<{
+    url: string;
+    finalUrl: string;
+    redirectCount: number;
+    redirectChain: string;
+    httpStatus: number;
+    contentType: string | null;
+    fetchStatus: string;
+    fetchError: string | null;
+    fetchedAt: string;
+    cacheStatus: string;
+    title: string | null;
+    metaDescription: string | null;
+    h1: string | null;
+    canonical: string | null;
+    language: string | null;
+    wordCount: number | null;
+    forms: string;
+    structuredDataTypes: string;
+    sourceKeywords: string;
+    sourcePositions: string;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_pages WHERE enrichment_id = ? ORDER BY url')
+      .all(enrichmentId) as Array<{
+      url: string;
+      final_url: string;
+      redirect_count: number;
+      redirect_chain: string;
+      http_status: number;
+      content_type: string | null;
+      fetch_status: string;
+      fetch_error: string | null;
+      fetched_at: string;
+      cache_status: string;
+      title: string | null;
+      meta_description: string | null;
+      h1: string | null;
+      canonical: string | null;
+      language: string | null;
+      word_count: number | null;
+      forms: string;
+      structured_data_types: string;
+      source_keywords: string;
+      source_positions: string;
+    }>;
+    return rows.map((row) => ({
+      url: row.url,
+      finalUrl: row.final_url,
+      redirectCount: row.redirect_count,
+      redirectChain: JSON.parse(row.redirect_chain),
+      httpStatus: row.http_status,
+      contentType: row.content_type,
+      fetchStatus: row.fetch_status,
+      fetchError: row.fetch_error,
+      fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+      title: row.title,
+      metaDescription: row.meta_description,
+      h1: row.h1,
+      canonical: row.canonical,
+      language: row.language,
+      wordCount: row.word_count,
+      forms: row.forms,
+      structuredDataTypes: row.structured_data_types,
+      sourceKeywords: row.source_keywords,
+      sourcePositions: row.source_positions,
+    }));
+  }
+
+  saveEnrichmentSiteStructure(
+    enrichmentId: string,
+    records: Array<{
+      domain: string;
+      homepageStatus: string;
+      homepageHttpStatus: number | null;
+      robotsStatus: string;
+      robotsHttpStatus: number | null;
+      robotsUrl: string | null;
+      sitemapUrlsFromRobots: string;
+      sitemapFallbackUrl: string | null;
+      sitemapType: string;
+      declaredSitemapCount: number;
+      discoveredUrlCount: number;
+      sampledUrls: string;
+      sampledUtilityUrls: string;
+      errors: string;
+      fetchedAt: string;
+      cacheStatus: string;
+      sourceKeywords: string;
+      sourceBestPosition: number | null;
+    }>,
+  ): void {
+    const deleteExisting = this.db.prepare('DELETE FROM enrichment_site_structure WHERE enrichment_id = ?');
+    const stmt = this.db.prepare(
+      `INSERT INTO enrichment_site_structure (
+        enrichment_id, domain, homepage_status, homepage_http_status, robots_status, robots_http_status, robots_url,
+        sitemap_urls_from_robots, sitemap_fallback_url, sitemap_type,
+        declared_sitemap_count, discovered_url_count, sampled_urls, sampled_utility_urls, errors,
+        fetched_at, cache_status, source_keywords, source_best_position
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
+      for (const r of records) {
+        stmt.run(
+          enrichmentId, r.domain, r.homepageStatus, r.homepageHttpStatus, r.robotsStatus, r.robotsHttpStatus, r.robotsUrl,
+          r.sitemapUrlsFromRobots, r.sitemapFallbackUrl, r.sitemapType,
+          r.declaredSitemapCount, r.discoveredUrlCount, r.sampledUrls, r.sampledUtilityUrls, r.errors,
+          r.fetchedAt, r.cacheStatus, r.sourceKeywords, r.sourceBestPosition,
+        );
+      }
+    });
+    tx();
+  }
+
+  loadEnrichmentSiteStructure(enrichmentId: string): Array<{
+    domain: string;
+    homepageStatus: string;
+    homepageHttpStatus: number | null;
+    robotsStatus: string;
+    robotsHttpStatus: number | null;
+    robotsUrl: string | null;
+    sitemapUrlsFromRobots: string[];
+    sitemapFallbackUrl: string | null;
+    sitemapType: string;
+    declaredSitemapCount: number;
+    discoveredUrlCount: number;
+    sampledUrls: string[];
+    sampledUtilityUrls: string[];
+    errors: Array<{ url: string; error: string }>;
+    fetchedAt: string;
+    cacheStatus: string;
+    sourceKeywords: string[];
+    sourceBestPosition: number | null;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_site_structure WHERE enrichment_id = ? ORDER BY domain')
+      .all(enrichmentId) as Array<{
+      domain: string;
+      homepage_status: string;
+      homepage_http_status: number | null;
+      robots_status: string;
+      robots_http_status: number | null;
+      robots_url: string | null;
+      sitemap_urls_from_robots: string;
+      sitemap_fallback_url: string | null;
+      sitemap_type: string;
+      declared_sitemap_count: number;
+      discovered_url_count: number;
+      sampled_urls: string;
+      sampled_utility_urls: string;
+      errors: string;
+      fetched_at: string;
+      cache_status: string;
+      source_keywords: string;
+      source_best_position: number | null;
+    }>;
+    return rows.map((row): {
+      domain: string;
+      homepageStatus: string;
+      homepageHttpStatus: number | null;
+      robotsStatus: string;
+      robotsHttpStatus: number | null;
+      robotsUrl: string | null;
+      sitemapUrlsFromRobots: string[];
+      sitemapFallbackUrl: string | null;
+      sitemapType: string;
+      declaredSitemapCount: number;
+      discoveredUrlCount: number;
+      sampledUrls: string[];
+      sampledUtilityUrls: string[];
+      errors: Array<{ url: string; error: string }>;
+      fetchedAt: string;
+      cacheStatus: string;
+      sourceKeywords: string[];
+      sourceBestPosition: number | null;
+    } => ({
+      domain: row.domain,
+      homepageStatus: row.homepage_status,
+      homepageHttpStatus: row.homepage_http_status,
+      robotsStatus: row.robots_status,
+      robotsHttpStatus: row.robots_http_status,
+      robotsUrl: row.robots_url,
+      sitemapUrlsFromRobots: JSON.parse(row.sitemap_urls_from_robots),
+      sitemapFallbackUrl: row.sitemap_fallback_url,
+      sitemapType: row.sitemap_type,
+      declaredSitemapCount: row.declared_sitemap_count,
+      discoveredUrlCount: row.discovered_url_count,
+      sampledUrls: JSON.parse(row.sampled_urls),
+      sampledUtilityUrls: JSON.parse(row.sampled_utility_urls),
+      errors: JSON.parse(row.errors),
+      fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+      sourceKeywords: JSON.parse(row.source_keywords),
+      sourceBestPosition: row.source_best_position,
+    }));
+  }
+
+  upsertPageTarget(
+    enrichmentId: string,
+    target: {
+      url: string;
+      status: 'pending' | 'running' | 'completed' | 'error';
+      data?: string | null;
+      error?: string | null;
+      fetchedAt?: string | null;
+      cacheStatus?: string;
+      sourceKeywords?: string;
+      sourcePositions?: string;
+    },
+  ): void {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare('SELECT created_at FROM enrichment_page_targets WHERE enrichment_id = ? AND url = ?')
+      .get(enrichmentId, target.url) as { created_at: string } | undefined;
+
+    this.db.prepare(`
+      INSERT INTO enrichment_page_targets
+        (enrichment_id, url, status, data, error, fetched_at, cache_status, source_keywords, source_positions, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(enrichment_id, url) DO UPDATE SET
+        status = excluded.status,
+        data = excluded.data,
+        error = excluded.error,
+        fetched_at = excluded.fetched_at,
+        cache_status = excluded.cache_status,
+        source_keywords = excluded.source_keywords,
+        source_positions = excluded.source_positions,
+        updated_at = excluded.updated_at
+    `).run(
+      enrichmentId,
+      target.url,
+      target.status,
+      target.data ?? null,
+      target.error ?? null,
+      target.fetchedAt ?? null,
+      target.cacheStatus ?? 'none',
+      target.sourceKeywords ?? '[]',
+      target.sourcePositions ?? '[]',
+      existing?.created_at ?? now,
+      now,
+    );
+  }
+
+  loadPageTargets(enrichmentId: string): Array<{
+    url: string;
+    status: string;
+    data: string | null;
+    error: string | null;
+    fetchedAt: string | null;
+    cacheStatus: string;
+    sourceKeywords: string;
+    sourcePositions: string;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_page_targets WHERE enrichment_id = ? ORDER BY url')
+      .all(enrichmentId) as Array<{
+      url: string;
+      status: string;
+      data: string | null;
+      error: string | null;
+      fetched_at: string | null;
+      cache_status: string;
+      source_keywords: string;
+      source_positions: string;
+    }>;
+    return rows.map((row) => ({
+      url: row.url,
+      status: row.status,
+      data: row.data,
+      error: row.error,
+      fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+      sourceKeywords: row.source_keywords,
+      sourcePositions: row.source_positions,
+    }));
+  }
+
+  getPageTargetStatus(enrichmentId: string): { total: number; completed: number; pending: number; error: number } {
+    const rows = this.db
+      .prepare('SELECT status, COUNT(*) as cnt FROM enrichment_page_targets WHERE enrichment_id = ? GROUP BY status')
+      .all(enrichmentId) as Array<{ status: string; cnt: number }>;
+    let total = 0;
+    let completed = 0;
+    let pending = 0;
+    let error = 0;
+    for (const row of rows) {
+      total += row.cnt;
+      if (row.status === 'completed') completed += row.cnt;
+      else if (row.status === 'error') error += row.cnt;
+      else pending += row.cnt;
+    }
+    return { total, completed, pending, error };
+  }
+
+  upsertSiteStructureTarget(
+    enrichmentId: string,
+    target: {
+      domain: string;
+      status: 'pending' | 'running' | 'completed' | 'error';
+      data?: string | null;
+      error?: string | null;
+      fetchedAt?: string | null;
+      cacheStatus?: string;
+    },
+  ): void {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare('SELECT created_at FROM enrichment_site_structure_targets WHERE enrichment_id = ? AND domain = ?')
+      .get(enrichmentId, target.domain) as { created_at: string } | undefined;
+
+    this.db.prepare(`
+      INSERT INTO enrichment_site_structure_targets
+        (enrichment_id, domain, status, data, error, fetched_at, cache_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(enrichment_id, domain) DO UPDATE SET
+        status = excluded.status,
+        data = excluded.data,
+        error = excluded.error,
+        fetched_at = excluded.fetched_at,
+        cache_status = excluded.cache_status,
+        updated_at = excluded.updated_at
+    `).run(
+      enrichmentId,
+      target.domain,
+      target.status,
+      target.data ?? null,
+      target.error ?? null,
+      target.fetchedAt ?? null,
+      target.cacheStatus ?? 'none',
+      existing?.created_at ?? now,
+      now,
+    );
+  }
+
+  loadSiteStructureTargets(enrichmentId: string): Array<{
+    domain: string;
+    status: string;
+    data: string | null;
+    error: string | null;
+    fetchedAt: string | null;
+    cacheStatus: string;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_site_structure_targets WHERE enrichment_id = ? ORDER BY domain')
+      .all(enrichmentId) as Array<{
+      domain: string;
+      status: string;
+      data: string | null;
+      error: string | null;
+      fetched_at: string | null;
+      cache_status: string;
+    }>;
+    return rows.map((row) => ({
+      domain: row.domain,
+      status: row.status,
+      data: row.data,
+      error: row.error,
+      fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+    }));
+  }
+
+  getSiteStructureTargetStatus(enrichmentId: string): { total: number; completed: number; pending: number; error: number } {
+    const rows = this.db
+      .prepare('SELECT status, COUNT(*) as cnt FROM enrichment_site_structure_targets WHERE enrichment_id = ? GROUP BY status')
+      .all(enrichmentId) as Array<{ status: string; cnt: number }>;
+    let total = 0;
+    let completed = 0;
+    let pending = 0;
+    let error = 0;
+    for (const row of rows) {
+      total += row.cnt;
+      if (row.status === 'completed') completed += row.cnt;
+      else if (row.status === 'error') error += row.cnt;
+      else pending += row.cnt;
+    }
+    return { total, completed, pending, error };
   }
 }
 

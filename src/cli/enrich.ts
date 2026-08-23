@@ -4,7 +4,8 @@ import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
+import { runEnrichment, type EnrichmentLogger, type CancellationSignal, type EnrichmentHttpConfig, type EnrichmentPagesConfig, type EnrichmentSiteStructureConfig } from '../enrichment/engine.js';
+import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from '../enrichment/cache.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
 import {
@@ -47,6 +48,37 @@ const EXIT_OK = 0;
 const EXIT_INTERNAL = 1;
 const EXIT_INVALID_INPUT = 2;
 const EXIT_PAUSED = 130;
+
+const DEFAULT_HTTP_CONFIG: EnrichmentHttpConfig = {
+  enabled: true,
+  maxRedirects: 5,
+  timeoutMs: 15_000,
+  maxBytes: 2_000_000,
+  maxTextBytes: 500_000,
+  userAgent: 'UtilityResearchRunner/1.0 (+https://local.dev)',
+  respectRetryAfter: true,
+  minDelayMs: 500,
+  maxDelayMs: 2000,
+  maxRetries: 2,
+  baseRetryDelayMs: 1000,
+};
+
+const DEFAULT_PAGES_CONFIG: EnrichmentPagesConfig = {
+  enabled: true,
+  topUrlsPerKeyword: 3,
+  includeMainText: false,
+  mainTextMaxChars: 5000,
+};
+
+const DEFAULT_SITE_STRUCTURE_CONFIG: EnrichmentSiteStructureConfig = {
+  enabled: true,
+  maxSitemapFiles: 10,
+  maxUrlsPerSitemap: 100,
+  maxSampleUrls: 50,
+  maxDomains: 30,
+};
+
+const DEFAULT_CACHE_DB_PATH = 'data/cache/enrichment_http_cache.sqlite';
 
 interface ParsedArgs {
   sourceRunId: string;
@@ -235,6 +267,10 @@ async function main(): Promise<void> {
     let shortlist: string[] = [];
     let modules: EnrichmentModuleId[];
     let isResume = false;
+    let activeHttpConfig: EnrichmentHttpConfig = DEFAULT_HTTP_CONFIG;
+    let activePagesConfig: EnrichmentPagesConfig = DEFAULT_PAGES_CONFIG;
+    let activeSiteStructureConfig: EnrichmentSiteStructureConfig = DEFAULT_SITE_STRUCTURE_CONFIG;
+    let activeCacheConfig = { dbPath: DEFAULT_CACHE_DB_PATH, ttl: DEFAULT_CACHE_TTL };
 
     if (args.resumeEnrichmentId) {
       isResume = true;
@@ -262,6 +298,21 @@ async function main(): Promise<void> {
       };
       shortlist = existingRun.shortlistKeywords;
       modules = existingRun.modules;
+      activeHttpConfig = existingRun.config.http
+        ? { ...DEFAULT_HTTP_CONFIG, ...existingRun.config.http } as EnrichmentHttpConfig
+        : DEFAULT_HTTP_CONFIG;
+      activePagesConfig = existingRun.config.pages
+        ? { ...DEFAULT_PAGES_CONFIG, ...existingRun.config.pages } as EnrichmentPagesConfig
+        : DEFAULT_PAGES_CONFIG;
+      activeSiteStructureConfig = existingRun.config.site_structure
+        ? { ...DEFAULT_SITE_STRUCTURE_CONFIG, ...existingRun.config.site_structure } as EnrichmentSiteStructureConfig
+        : DEFAULT_SITE_STRUCTURE_CONFIG;
+      activeCacheConfig = existingRun.config.cache
+        ? {
+            dbPath: ((existingRun.config.cache as Record<string, unknown>).dbPath as string) ?? DEFAULT_CACHE_DB_PATH,
+            ttl: ((existingRun.config.cache as Record<string, unknown>).ttl as CacheTtlConfig) ?? DEFAULT_CACHE_TTL,
+          }
+        : { dbPath: DEFAULT_CACHE_DB_PATH, ttl: DEFAULT_CACHE_TTL };
     } else {
       sourceRunId = args.sourceRunId;
       const sourceDir = findSourceRunDirectory(sourceRunId);
@@ -296,6 +347,10 @@ async function main(): Promise<void> {
       modules,
       shortlist,
       config: { clusters: clusteringConfig },
+      httpConfig: activeHttpConfig,
+      pagesConfig: activePagesConfig,
+      siteStructureConfig: activeSiteStructureConfig,
+      cacheConfig: activeCacheConfig,
       logger,
       signal,
       resume: isResume,
@@ -307,10 +362,28 @@ async function main(): Promise<void> {
       exitCode = EXIT_PAUSED;
     } else if (outcome.kind === 'completed' && outcome.result) {
       console.log('');
-      console.log(`Clusters: ${outcome.result.clusters.length}`);
+      if (outcome.result.clusters) {
+        console.log(`Clusters: ${outcome.result.clusters.clusters.length}`);
+      }
+      if (outcome.result.pages) {
+        console.log(`Pages: ${outcome.result.pages.length}`);
+      }
+      if (outcome.result.siteStructure) {
+        console.log(`Domains: ${outcome.result.siteStructure.length}`);
+      }
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  keyword-clusters.csv');
-      console.log('  keyword-clusters.json');
+      if (outcome.result.clusters) {
+        console.log('  keyword-clusters.csv');
+        console.log('  keyword-clusters.json');
+      }
+      if (outcome.result.pages) {
+        console.log('  pages.csv');
+        console.log('  pages.json');
+      }
+      if (outcome.result.siteStructure) {
+        console.log('  site-structure.csv');
+        console.log('  site-structure.json');
+      }
       console.log('  manifest.json');
       console.log('  status.json');
     } else if (outcome.kind === 'failed') {
