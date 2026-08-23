@@ -211,6 +211,17 @@ async function drainBody(response: Response, controller: AbortController): Promi
   await Promise.race([drainPromise, abortPromise]);
 }
 
+async function cleanupTerminalResponse(
+  response: Response | undefined,
+  controller: AbortController,
+  timer: ReturnType<typeof setTimeout> | undefined,
+): Promise<void> {
+  if (response) {
+    await drainBody(response, controller);
+  }
+  if (timer) clearTimeout(timer);
+}
+
 export async function boundedFetch(
   url: string,
   config: Partial<FetcherConfig> = {},
@@ -307,7 +318,7 @@ export async function boundedFetch(
             await new Promise((resolve) => setTimeout(resolve, delayMs));
             continue;
           }
-          clearTimeout(attemptTimer);
+          await cleanupTerminalResponse(response, attemptController!, attemptTimer);
           return {
             status,
             contentType,
@@ -348,7 +359,7 @@ export async function boundedFetch(
       if (status >= 300 && status < 400) {
         const location = response.headers.get('location');
         if (!location) {
-          if (attemptTimer) clearTimeout(attemptTimer);
+          await cleanupTerminalResponse(response, attemptController!, attemptTimer);
           return {
             status,
             contentType,
@@ -367,7 +378,7 @@ export async function boundedFetch(
         try {
           nextUrl = new URL(location, logicalUrl).href;
         } catch {
-          if (attemptTimer) clearTimeout(attemptTimer);
+          await cleanupTerminalResponse(response, attemptController!, attemptTimer);
           return {
             status,
             contentType,
@@ -384,7 +395,7 @@ export async function boundedFetch(
 
         const targetSsrf = await ssrfCheck(nextUrl);
         if (!targetSsrf.allowed) {
-          if (attemptTimer) clearTimeout(attemptTimer);
+          await cleanupTerminalResponse(response, attemptController!, attemptTimer);
           return {
             status,
             contentType,

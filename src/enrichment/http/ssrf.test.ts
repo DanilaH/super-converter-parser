@@ -107,3 +107,34 @@ test('isPrivateIp: blocks reserved/documentation ranges', () => {
   assert.equal(isPrivateIp('224.0.0.1'), true);
   assert.equal(isPrivateIp('240.0.0.1'), true);
 });
+
+test('isPrivateIp: blocks IPv6 expanded loopback', () => {
+  assert.equal(isPrivateIp('0:0:0:0:0:0:0:1'), true);
+  assert.equal(isPrivateIp('0000:0000:0000:0000:0000:0000:0000:0001'), true);
+});
+
+test('isPrivateIp: blocks IPv6 compressed and expanded private', () => {
+  assert.equal(isPrivateIp('::1'), true);
+  assert.equal(isPrivateIp('fe80::1'), true);
+  assert.equal(isPrivateIp('fc00::1'), true);
+  assert.equal(isPrivateIp('fd00::1'), true);
+  assert.equal(isPrivateIp('2001:db8::1'), true);
+  assert.equal(isPrivateIp('2001:db8:1::1'), true);
+  assert.equal(isPrivateIp('ff02::1'), true);
+});
+
+test('isPrivateIp: blocks IPv4-mapped private in all forms', () => {
+  assert.equal(isPrivateIp('::ffff:192.168.1.1'), true);
+  assert.equal(isPrivateIp('0:0:0:0:0:ffff:192.168.1.1'), true);
+  assert.equal(isPrivateIp('0:0:0:0:0:ffff:c0a8:101'), true);
+  assert.equal(isPrivateIp('::ffff:10.0.0.1'), true);
+  assert.equal(isPrivateIp('::ffff:127.0.0.1'), true);
+  assert.equal(isPrivateIp('0:0:0:0:0:ffff:127.0.0.1'), true);
+  assert.equal(isPrivateIp('::ffff:8.8.8.8'), false);
+  assert.equal(isPrivateIp('0:0:0:0:0:ffff:8.8.8.8'), false);
+});
+
+test('isPrivateIp: allows public IPv6', () => {
+  assert.equal(isPrivateIp('2001:4860:4860::8888'), false);
+  assert.equal(isPrivateIp('2606:4700:4700::1111'), false);
+});

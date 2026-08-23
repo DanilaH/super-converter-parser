@@ -46,7 +46,6 @@ interface Cidr6 {
 const PRIVATE_CIDRS_V6: Cidr6[] = [
   { net: ipv6ToBigInt('::1'), prefixLen: 128 },
   { net: ipv6ToBigInt('::'), prefixLen: 128 },
-  { net: ipv6ToBigInt('::ffff:0:0'), prefixLen: 96 },
   { net: ipv6ToBigInt('64:ff9b::'), prefixLen: 96 },
   { net: ipv6ToBigInt('64:ff9b:1::'), prefixLen: 48 },
   { net: ipv6ToBigInt('100::'), prefixLen: 64 },
@@ -77,8 +76,24 @@ function isIpv4InCidr(ip: string): boolean {
   return PRIVATE_CIDRS.some(({ net, mask }) => (ipInt & mask) === (net & mask));
 }
 
-function ipv6ToBigInt(ip: string): bigint {
-  const parts = ip.split('::');
+function parseIpv6(ip: string): { big: bigint; mappedIpv4: string | null } {
+  const lower = ip.toLowerCase();
+  let addr = lower;
+  let mappedIpv4: string | null = null;
+
+  const lastColon = addr.lastIndexOf(':');
+  if (lastColon !== -1) {
+    const tail = addr.slice(lastColon + 1);
+    if (tail.includes('.')) {
+      const ipv4Int = ipv4ToInt(tail);
+      const high = (ipv4Int >> 16) & 0xffff;
+      const low = ipv4Int & 0xffff;
+      mappedIpv4 = tail;
+      addr = addr.slice(0, lastColon + 1) + high.toString(16) + ':' + low.toString(16);
+    }
+  }
+
+  const parts = addr.split('::');
   const left = parts[0] ? parts[0].split(':') : [];
   const right = parts[1] ? parts[1].split(':') : [];
 
@@ -90,21 +105,36 @@ function ipv6ToBigInt(ip: string): bigint {
     const part = parseInt(allParts[i] || '0', 16);
     result = (result << BigInt(16)) | BigInt(part);
   }
-  return result;
+
+  if (!mappedIpv4) {
+    const mask96 = computeMask6(96);
+    const net96 = (BigInt(0xffff) << BigInt(32));
+    if ((result & mask96) === net96) {
+      const ipv4Int = Number(result & BigInt('0xffffffff'));
+      const a = (ipv4Int >> 24) & 0xff;
+      const b = (ipv4Int >> 16) & 0xff;
+      const c = (ipv4Int >> 8) & 0xff;
+      const d = ipv4Int & 0xff;
+      mappedIpv4 = `${a}.${b}.${c}.${d}`;
+    }
+  }
+
+  return { big: result, mappedIpv4 };
+}
+
+function ipv6ToBigInt(ip: string): bigint {
+  return parseIpv6(ip).big;
 }
 
 function isIpv6InCidr(ip: string): boolean {
   if (isIP(ip) !== 6) return false;
 
-  const lower = ip.toLowerCase();
-  if (lower.startsWith('::ffff:')) {
-    const ipv4Part = lower.split('::ffff:')[1];
-    if (ipv4Part && isIP(ipv4Part) === 4) {
-      return isIpv4InCidr(ipv4Part);
-    }
+  const { big: ipBig, mappedIpv4 } = parseIpv6(ip);
+
+  if (mappedIpv4 && isIpv4InCidr(mappedIpv4)) {
+    return true;
   }
 
-  const ipBig = ipv6ToBigInt(ip);
   return PRIVATE_CIDRS_V6.some(({ net, prefixLen }) => {
     const mask = computeMask6(prefixLen);
     return (ipBig & mask) === (net & mask);
