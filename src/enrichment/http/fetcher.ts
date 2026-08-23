@@ -1,6 +1,5 @@
 import { Agent, fetch as undiciFetch } from 'undici';
-import { connect as netConnect, isIP, Socket } from 'node:net';
-import { connect as tlsConnect } from 'node:tls';
+import { isIP } from 'node:net';
 import { isPrivateIp } from './ssrf.js';
 
 type Response = any;
@@ -94,66 +93,21 @@ export function parseRetryAfter(header: string | null): number | null {
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
-  ca?: string;
 }
 
 function createPinnedAgent(ctx: PinnedConnectContext): Agent {
-  const connector = (opts: any, callback: (err: Error | null, socket?: Socket) => void) => {
-    const port = opts.port || (opts.protocol === 'https:' ? 443 : 80);
-    let socket: Socket | undefined;
-    let callbackCalled = false;
-
-    const cleanup = () => {
-      if (socket) {
-        socket.removeAllListeners('connect');
-        socket.removeAllListeners('secureConnect');
-        socket.removeAllListeners('error');
-      }
-    };
-
-    const safeCallback = (err: Error | null, sock?: Socket) => {
-      if (callbackCalled) return;
-      callbackCalled = true;
-      cleanup();
-      callback(err, sock);
-    };
-
-    if (opts.protocol === 'https:') {
-      socket = tlsConnect({
-        host: ctx.validatedIp,
-        port,
-        servername: ctx.servername,
-        rejectUnauthorized: opts.rejectUnauthorized,
-        ...(ctx.ca ? { ca: ctx.ca } : {}),
-      });
-      socket.once('secureConnect', () => safeCallback(null, socket));
-      socket.once('error', (err: Error) => safeCallback(err));
-    } else {
-      socket = netConnect({
-        host: ctx.validatedIp,
-        port,
-      });
-      socket.once('connect', () => safeCallback(null, socket));
-      socket.once('error', (err: Error) => safeCallback(err));
-    }
-
-    if (opts.signal) {
-      const onAbort = () => {
-        if (socket) {
-          socket.destroy();
-          socket = undefined;
+  const family = isIP(ctx.validatedIp);
+  return new Agent({
+    connect: {
+      lookup: (_hostname: string, _opts: any, cb: any) => {
+        if (_opts.all) {
+          cb(null, [{ address: ctx.validatedIp, family: family || 4 }]);
+        } else {
+          cb(null, ctx.validatedIp, family || 4);
         }
-        safeCallback(new Error('abort'));
-      };
-      if (opts.signal.aborted) {
-        onAbort();
-      } else {
-        opts.signal.addEventListener('abort', onAbort, { once: true });
-      }
-    }
-  };
-
-  return new Agent({ connect: connector as any });
+      },
+    },
+  });
 }
 
 async function readBody(
@@ -222,31 +176,39 @@ async function readBody(
   }
 }
 
+const DRAIN_MAX_BYTES = 64 * 1024;
+
 async function drainBody(response: Response, controller: AbortController): Promise<void> {
-  try {
-    if (response.body) {
-      const reader = response.body.getReader();
-      const abortPromise = new Promise<void>((resolve) => {
-        controller.signal.addEventListener('abort', () => resolve(), { once: true });
-      });
-      const readerPromise = (async () => {
-        try {
-          while (true) {
-            const { done } = await reader.read();
-            if (done) break;
-          }
-        } catch {
-          // ignore
-        }
-      })();
-      await Promise.race([readerPromise, abortPromise]);
-      await response.body.cancel().catch(() => {});
-    } else {
-      await response.text().catch(() => {});
-    }
-  } catch {
-    // ignore
+  if (!response.body) {
+    await response.text().catch(() => {});
+    return;
   }
+
+  const reader = response.body.getReader();
+  const abortPromise = new Promise<void>((resolve) => {
+    controller.signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+
+  const drainPromise = (async () => {
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > DRAIN_MAX_BYTES) {
+          await reader.cancel();
+          break;
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  })();
+
+  await Promise.race([drainPromise, abortPromise]);
 }
 
 export async function boundedFetch(
@@ -338,13 +300,14 @@ export async function boundedFetch(
         retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
         if (status === 429 || (status === 503 && retryAfter)) {
-          clearTimeout(attemptTimer);
           if (retry < cfg.maxRetries) {
-            const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retry + 1));
             await drainBody(response, attemptController);
+            clearTimeout(attemptTimer);
+            const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retry + 1));
             await new Promise((resolve) => setTimeout(resolve, delayMs));
             continue;
           }
+          clearTimeout(attemptTimer);
           return {
             status,
             contentType,
@@ -383,9 +346,9 @@ export async function boundedFetch(
       retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
       if (status >= 300 && status < 400) {
-        if (attemptTimer) clearTimeout(attemptTimer);
         const location = response.headers.get('location');
         if (!location) {
+          if (attemptTimer) clearTimeout(attemptTimer);
           return {
             status,
             contentType,
@@ -404,6 +367,7 @@ export async function boundedFetch(
         try {
           nextUrl = new URL(location, logicalUrl).href;
         } catch {
+          if (attemptTimer) clearTimeout(attemptTimer);
           return {
             status,
             contentType,
@@ -420,6 +384,7 @@ export async function boundedFetch(
 
         const targetSsrf = await ssrfCheck(nextUrl);
         if (!targetSsrf.allowed) {
+          if (attemptTimer) clearTimeout(attemptTimer);
           return {
             status,
             contentType,
@@ -445,7 +410,8 @@ export async function boundedFetch(
           cleanupAgents.push(dispatcher);
         }
 
-        await drainBody(response, attemptController);
+        await drainBody(response, attemptController!);
+        if (attemptTimer) clearTimeout(attemptTimer);
         continue;
       }
 
@@ -504,10 +470,10 @@ export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; 
     return { allowed: false, reason: 'Blocked hostname: localhost', ip: '127.0.0.1' };
   }
 
-  const { isIP } = await import('node:net');
+  const { isIP: netIsIP } = await import('node:net');
   const ipRegex = /^\[?([0-9a-fA-F:.]+)\]?$/;
   const ipMatch = hostname.match(ipRegex);
-  if (ipMatch && isIP(ipMatch[1]!) !== 0) {
+  if (ipMatch && netIsIP(ipMatch[1]!) !== 0) {
     const ip = ipMatch[1]!;
     return isPrivateIp(ip)
       ? { allowed: false, reason: `Blocked IP: ${ip}`, ip }

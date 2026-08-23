@@ -290,7 +290,72 @@ test('boundedFetch: retry does not consume redirect budget', async () => {
     assert.equal(result.status, 200, 'Should succeed after retries + redirect');
     assert.match(result.body ?? '', /final/);
     assert.equal(result.finalUrl, `http://127.0.0.1:${serverPort}/final`);
-    assert.ok(requestCount >= 3, 'Should have retried before redirect');
+    assert.equal(requestCount, 4, 'Should be exactly 2 retries + 1 redirect + 1 final = 4 requests');
+    assert.deepEqual(result.redirectChain, [`http://127.0.0.1:${serverPort}/final`]);
+  } finally {
+    server.close();
+  }
+});
+
+test('boundedFetch: stalled redirect body does not hang', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    if (req.url === '/stall-redirect') {
+      res.writeHead(302, { Location: '/destination' });
+      res.write('x'.repeat(100));
+      setTimeout(() => res.end(), 10000);
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>destination</body></html>');
+    }
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const startTime = Date.now();
+    const result = await boundedFetch(`http://127.0.0.1:${serverPort}/stall-redirect`, {
+      ...testConfig,
+      timeoutMs: 2000,
+    });
+    const elapsed = Date.now() - startTime;
+
+    assert.equal(result.status, 200);
+    assert.match(result.body ?? '', /destination/);
+    assert.ok(elapsed < 5000, `Should not hang on stalled body, took ${elapsed}ms`);
+  } finally {
+    server.close();
+  }
+});
+
+test('boundedFetch: stalled 429 body does not hang', async () => {
+  const http = await import('node:http');
+  let requestCount = 0;
+  const server = http.createServer((req, res) => {
+    requestCount++;
+    res.writeHead(429, { 'Retry-After': '0' });
+    res.write('x'.repeat(100));
+    setTimeout(() => res.end(), 10000);
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const startTime = Date.now();
+    const result = await boundedFetch(`http://127.0.0.1:${serverPort}/stall-429`, {
+      ...testConfig,
+      timeoutMs: 2000,
+      maxRetries: 1,
+      baseRetryDelayMs: 10,
+    });
+    const elapsed = Date.now() - startTime;
+
+    assert.equal(result.status, 429);
+    assert.ok(elapsed < 5000, `Should not hang on stalled 429 body, took ${elapsed}ms`);
   } finally {
     server.close();
   }
