@@ -283,13 +283,26 @@ export async function runDomainAgeModule(
     // --- First-seen (provider or stable unavailable) ---
     let fsResult: FirstSeenResult | null;
     let fsFetched = false;
+    // Pre-compute freshness/version for the !fsConfigured path so we can also
+    // use them for cache-hit accounting below.
+    // 'unavailable' is a stable fact (no provider, can't change without config
+    // change): it is always "fresh" regardless of TTL.
+    const isStableUnavailable = !fsConfigured && cached?.firstSeenStatus === 'unavailable';
+    const versionMatch = !fsConfigured && cached && cached.firstSeenQueryVersion === FIRST_SEEN_QUERY_VERSION;
+    const fsFresh = !fsConfigured && cached && (isStableUnavailable || isFresh(cached.firstSeenExpiresAt, nowMs));
     if (!fsConfigured) {
       // No provider configured: deterministic unavailable. Reuse a cached value only
-      // if its query version matches the current contract; a stale-version fact
-      // (e.g. v1 exact match under v2 domain scope) must NOT be served as valid.
-      const versionMatch = cached && cached.firstSeenQueryVersion === FIRST_SEEN_QUERY_VERSION;
-      if (cached && versionMatch) {
+      // if its query version matches the current contract AND the TTL is fresh
+      // (or the fact is a stable 'unavailable' that never changes).
+      // A stale-version fact (e.g. v1 exact match under v2 domain scope) or an
+      // expired TTL must NOT be served as valid: provider disabled does not grant
+      // the right to ignore TTL.
+      if (cached && versionMatch && fsFresh) {
         fsResult = firstSeenFromCache(cached);
+      } else if (cached && versionMatch && !fsFresh) {
+        // Version matches but TTL expired: provider disabled, so refetch is impossible.
+        // Report as expired (not a valid hit).
+        fsResult = makeExpiredFirstSeen(domain, nowIso, cached.firstSeenStatus as FirstSeenStatus);
       } else if (cached && !versionMatch) {
         // Stale query contract: report as unavailable with a clear reason.
         fsResult = makeStaleQueryVersion(domain, nowIso, cached.firstSeenQueryVersion);
@@ -303,9 +316,10 @@ export async function runDomainAgeModule(
       fsFetched = true;
     }
 
-    // Track whether the cached first-seen was stale (version mismatch) so we
-    // don't report a full cache hit and don't serve the stale fact.
-    const firstSeenStale = !fsConfigured && cached !== null && cached.firstSeenQueryVersion !== FIRST_SEEN_QUERY_VERSION;
+    // Track whether the cached first-seen was stale (version mismatch or expired TTL)
+    // so we don't report a full cache hit and don't serve the stale fact.
+    // Stable 'unavailable' is never stale.
+    const firstSeenStale = !fsConfigured && cached !== null && !isStableUnavailable && (!versionMatch || !fsFresh);
 
     const cacheHit = !regFetched && !fsFetched && cached !== null && !firstSeenStale;
     if (cacheHit) cacheHits += 1;
@@ -487,6 +501,20 @@ function makeStaleQueryVersion(domain: string, fetchedAt: string, cachedVersion:
     error: null,
     source: 'stale_query_version',
     sourceReason: `cached first-seen fact used query version ${cachedVersion}, current contract is ${FIRST_SEEN_QUERY_VERSION}; not served as valid`,
+    fetchedAt,
+    requestCount: 0,
+    httpStatus: null,
+  };
+}
+
+function makeExpiredFirstSeen(domain: string, fetchedAt: string, cachedStatus: FirstSeenStatus): FirstSeenResult {
+  return {
+    domain,
+    firstSeenDate: null,
+    status: 'unavailable',
+    error: null,
+    source: 'expired',
+    sourceReason: `cached first-seen fact (status=${cachedStatus}) has expired TTL and provider is not configured; not served as valid`,
     fetchedAt,
     requestCount: 0,
     httpStatus: null,

@@ -559,6 +559,37 @@ test('stale v1 first-seen + provider configured: triggers refetch under v2', asy
   assert.equal(rec.firstSeenSource, 'wayback');
 });
 
+test('v2 first-seen expired TTL + provider disabled: old fact NOT served as valid hit', async () => {
+  // Current v2 first-seen with expired TTL, provider disabled, fresh RDAP.
+  // Expired fact must NOT be published as valid; cacheStatus must NOT be hit.
+  const cached = fullCached('example.com', {
+    firstSeenQueryVersion: 2, // current version
+    firstSeenDate: '2001-04-09T13:50:45Z',
+    firstSeenStatus: 'ok',
+    firstSeenSource: 'wayback',
+    firstSeenExpiresAt: PAST, // expired TTL
+  });
+  const { cache } = mockCache([cached]);
+  const res = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: null,
+    now: () => Date.parse(NOW_ISO),
+  });
+  const rec = res.results.get('example.com')!;
+  // Expired first-seen must NOT be served.
+  assert.equal(rec.firstSeenDate, null);
+  assert.equal(rec.firstSeenSource, 'expired');
+  assert.equal(rec.firstSeenStatus, 'unavailable');
+  assert.match(rec.firstSeenSourceReason ?? '', /expired TTL/);
+  // Registration is fresh from cache.
+  assert.equal(rec.registrationDate, '2010-05-03T04:00:00Z');
+  // Cache status is partial (first-seen expired), not hit.
+  assert.equal(rec.cacheStatus, 'partial');
+  assert.equal(rec.cacheHit, false);
+});
+
 test('renderDomainAgeCsv writes the documented headers and quoted cells', () => {
   const records: DomainAgeRecord[] = [
     {
