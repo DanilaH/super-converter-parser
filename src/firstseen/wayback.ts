@@ -129,7 +129,7 @@ export function createWaybackClient(
   let nextAvailableAt = 0;
 
   return async (domain: string): Promise<FirstSeenResult> => {
-    const fetchedAt = new Date().toISOString();
+    const fetchedAt = new Date(now()).toISOString();
     let lastAttempt = 0;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {

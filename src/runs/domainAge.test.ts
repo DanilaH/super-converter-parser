@@ -394,6 +394,8 @@ test('checkpoint resume reuses persisted payload and makes no fresh calls', asyn
     observedAt: '2026-06-01T00:00:00.000Z',
     cacheHit: false,
     cacheStatus: 'miss',
+    omitted: false,
+    omitReason: null,
     fetchedAt: '2026-06-01T00:00:00.000Z',
     registrationError: null,
     firstSeenError: null,
@@ -520,6 +522,8 @@ test('renderDomainAgeCsv writes the documented headers and quoted cells', () => 
       observedAt: '2026-01-01T00:00:00.000Z',
       cacheHit: false,
       cacheStatus: 'miss',
+      omitted: false,
+      omitReason: null,
       fetchedAt: '2026-01-01T00:00:00.000Z',
       registrationError: null,
       firstSeenError: null,
@@ -539,9 +543,8 @@ test('renderDomainAgeCsv writes the documented headers and quoted cells', () => 
   );
   assert.equal(lines.length, 2);
   assert.match(lines[1] ?? '', /"example\.com"/);
-  // cacheHit=false ("false") and registrationIsRedacted=false ("false"), plus
-  // provenance joined by commas.
-  assert.equal((lines[1] ?? '').match(/"false"/g)?.length, 2);
+  // cacheHit=false, registrationIsRedacted=false, omitted=false => 3 "false".
+  assert.equal((lines[1] ?? '').match(/"false"/g)?.length, 3);
   assert.match(lines[1] ?? '', /"json diff,json compare"/);
 });
 
@@ -566,6 +569,8 @@ test('renderDomainAgeJson serializes the records', () => {
       observedAt: '2026-01-01T00:00:00.000Z',
       cacheHit: true,
       cacheStatus: 'hit',
+      omitted: false,
+      omitReason: null,
       fetchedAt: '2026-01-01T00:00:00.000Z',
       registrationError: null,
       firstSeenError: null,

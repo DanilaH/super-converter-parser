@@ -69,6 +69,9 @@ export type DomainAgeRecord = {
   observedAt: string;
   cacheHit: boolean;
   cacheStatus: 'hit' | 'miss' | 'expired' | 'partial';
+  // True when this domain was omitted from enrichment due to the domain cap.
+  omitted: boolean;
+  omitReason: string | null;
   fetchedAt: string;
   // Per-source error details.
   registrationError: string | null;
@@ -94,6 +97,7 @@ export type DomainAgeModuleOptions = {
   domains: string[];
   provenance?: Map<string, string[]>;
   ranks?: Map<string, Array<{ keyword: string; position: number }>>;
+  omitted?: Array<{ domain: string; sourceKeywords: string[]; sourceRanks: Array<{ keyword: string; position: number }> }>;
   cache: CacheStore | null;
   rdap: RdapClient | null;
   firstSeen: FirstSeenClient | null;
@@ -210,7 +214,7 @@ function isFresh(expiresAt: string | null | undefined, nowMs: number): boolean {
 export async function runDomainAgeModule(
   opts: DomainAgeModuleOptions,
 ): Promise<Map<string, DomainAgeRecord>> {
-  const { cache, rdap, firstSeen, ttl, forceRefresh, store, runId, logger, signal, onProgress, now, provenance, ranks } =
+  const { cache, rdap, firstSeen, ttl, forceRefresh, store, runId, logger, signal, onProgress, now, provenance, ranks, omitted } =
     opts;
   const resume = opts.resume ?? false;
   const fsConfigured = !!firstSeen;
@@ -250,6 +254,7 @@ export async function runDomainAgeModule(
     if (resumed && resumed.payload) {
       const record = JSON.parse(resumed.payload) as DomainAgeRecord;
       record.sourceKeywords = prov;
+      record.sourceRanks = domainRanks;
       // Preserve the original cacheHit/cacheStatus from the checkpoint payload.
       // Do not overwrite to true — the original record may have been a fresh fetch.
       results.set(domain, record);
@@ -336,6 +341,46 @@ export async function runDomainAgeModule(
   logger(
     `Domain-age enrichment complete: ${cacheHits} cached, ${freshCount} fetched (${errors} with errors) of ${completed} total.`,
   );
+
+  // Append omitted-domain records (status=domain_cap) so outputs stay complete.
+  if (omitted) {
+    const nowIso = new Date(now()).toISOString();
+    for (const o of omitted) {
+      results.set(o.domain, {
+        domain: o.domain,
+        registrationDate: null,
+        registrationStatus: 'error',
+        registrationRule: 'unreachable',
+        registrationIsRedacted: false,
+        registrationFetchedAt: null,
+        registrationSource: 'rdap',
+        registrationEvents: [],
+        firstSeenDate: null,
+        firstSeenStatus: 'unavailable',
+        firstSeenSource: null,
+        firstSeenFetchedAt: null,
+        sourceKeywords: o.sourceKeywords,
+        sourceRanks: o.sourceRanks,
+        domainAgeDays: null,
+        observedAt: nowIso,
+        cacheHit: false,
+        cacheStatus: 'miss',
+        omitted: true,
+        omitReason: 'domain_cap',
+        fetchedAt: nowIso,
+        registrationError: 'domain omitted: exceeded domain cap',
+        firstSeenError: null,
+        firstSeenSourceReason: null,
+        registrationHttpStatus: null,
+        registrationRequestCount: 0,
+        firstSeenHttpStatus: null,
+        firstSeenRequestCount: 0,
+        error: 'domain omitted: exceeded domain cap',
+      });
+    }
+    logger(`Domain-age: ${omitted.length} domains omitted (domain cap).`);
+  }
+
   return results;
 }
 
@@ -503,6 +548,8 @@ function assembleRecord(
     observedAt: fetchedAt,
     cacheHit,
     cacheStatus,
+    omitted: false,
+    omitReason: null,
     fetchedAt,
     registrationError: reg.status === 'error' ? reg.error : null,
     firstSeenError: fs && fs.status === 'error' ? fs.error : null,
@@ -572,7 +619,7 @@ function buildCachedEntry(
     firstSeenError: fsError,
     firstSeenRequestCount: fsFetched ? (fs ? fs.requestCount : 0) : cached?.firstSeenRequestCount ?? 0,
     firstSeenHttpStatus: fsFetched ? (fs ? fs.httpStatus : null) : cached?.firstSeenHttpStatus ?? null,
-    firstSeenQueryVersion: FIRST_SEEN_QUERY_VERSION,
+    firstSeenQueryVersion: fsFetched ? FIRST_SEEN_QUERY_VERSION : cached?.firstSeenQueryVersion ?? FIRST_SEEN_QUERY_VERSION,
     firstSeenEvents: '',
     firstSeenSourceReason: fs ? fs.sourceReason : null,
     error: combinedError(reg, fs),
@@ -640,6 +687,8 @@ export const DOMAIN_AGE_CSV_HEADERS = [
   'cache_hit',
   'cache_status',
   'fetched_at',
+  'omitted',
+  'omit_reason',
   'error',
 ];
 
@@ -673,6 +722,8 @@ export function renderDomainAgeCsv(records: DomainAgeRecord[]): string {
       r.cacheHit ? 'true' : 'false',
       r.cacheStatus,
       r.fetchedAt,
+      r.omitted ? 'true' : 'false',
+      r.omitReason ?? '',
       r.error ?? '',
     ]);
   }

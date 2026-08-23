@@ -57,7 +57,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
 
   return async (domain: string): Promise<RdapRegistrationResult> => {
     const rdapDomain = registrableDomain(domain) ?? domain;
-    const fetchedAt = new Date().toISOString();
+    const fetchedAt = new Date(now()).toISOString();
 
     let baseUrls: string[] | null;
     try {
@@ -77,9 +77,11 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
     }
 
     let attempt = 0;
+    let totalRequestCount = 0;
     let lastError: { message: string; httpStatus: number | null; code: string } | null = null;
     for (const baseUrl of baseUrls) {
       for (attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+        totalRequestCount += 1;
         // Per-host rate limiter keyed by hostname (not full URL path).
         const host = new URL(baseUrl).host;
         const nextAvailable = hostNextAvailable.get(host);
@@ -112,7 +114,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
 
           if (response.status === 200) {
             const parsed = parseRdapDomainResponse(rdapDomain, body, { fetchedAt });
-            return { ...parsed, requestCount: attempt, httpStatus: 200 };
+            return { ...parsed, requestCount: totalRequestCount, httpStatus: 200 };
           }
 
           if (response.status === 404) {
@@ -126,7 +128,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
               events: [],
               isRedacted: false,
               fetchedAt,
-              requestCount: attempt,
+              requestCount: totalRequestCount,
               httpStatus: 404,
             };
           }
@@ -191,7 +193,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
       events: [],
       isRedacted: false,
       fetchedAt,
-      requestCount: attempt,
+      requestCount: totalRequestCount,
       httpStatus: lastError?.httpStatus ?? null,
     };
   };

@@ -545,16 +545,16 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
-        // domain_age_cache lifecycle policy (avoid infinite growth):
-        // - Legacy v5 rows (no per-source expiry): always purge; refreshed under the
-        //   per-source contract on next access.
+        // domain_age_cache lifecycle policy:
+        // - Legacy v5 rows (registration_expires_at IS NULL): always purge; they are
+        //   refreshed under the per-source contract on next access. Since v6+ always
+        //   computes a non-NULL per-source expiry on write, a NULL here unambiguously
+        //   identifies a legacy row that must be re-fetched.
         // - Both sources have expiry set: purge when BOTH are stale.
-        // - One source has NULL expiry (stable: unavailable/unconfigured first-seen
-        //   or error registration that doesn't self-renew): purge when the other
-        //   source's expiry is past. The stable fact can't change without a config
-        //   change, so there is no value in keeping the row beyond the sibling TTL.
-        // - Both NULL (rare: unavailable + never-fetched registration): stable
-        //   facts, bounded by domain count; NOT purged.
+        // - One source NULL + other stale: purge. A NULL expiry marks a stable fact
+        //   (unavailable/unconfigured first-seen, or error registration). It cannot
+        //   change without a config change, so once the sibling expires the row is
+        //   dead weight.
         const ageResult = this.db
           .prepare(
             `DELETE FROM domain_age_cache

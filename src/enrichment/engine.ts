@@ -297,6 +297,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         domains,
         provenance,
         ranks,
+        omitted,
         cache: cacheStore,
         rdap: options.rdapClient ?? null,
         firstSeen: options.firstSeenClient ?? null,
@@ -372,10 +373,12 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         : {}),
       ...(domainAgeRecords
         ? {
-            domainCount: domainAgeRecords.size,
-            domainsWithRegistration: [...domainAgeRecords.values()].filter((r) => r.registrationDate !== null).length,
-            domainsWithFirstSeen: [...domainAgeRecords.values()].filter((r) => r.firstSeenDate !== null).length,
-            domainErrors: [...domainAgeRecords.values()].filter((r) => r.error !== null).length,
+            domainCount: [...domainAgeRecords.values()].filter((r) => !r.omitted).length,
+            domainOmitted: [...domainAgeRecords.values()].filter((r) => r.omitted).length,
+            domainsDiscovered: domainAgeRecords.size,
+            domainsWithRegistration: [...domainAgeRecords.values()].filter((r) => r.registrationDate !== null && !r.omitted).length,
+            domainsWithFirstSeen: [...domainAgeRecords.values()].filter((r) => r.firstSeenDate !== null && !r.omitted).length,
+            domainErrors: [...domainAgeRecords.values()].filter((r) => r.error !== null && !r.omitted).length,
           }
         : {}),
     };
