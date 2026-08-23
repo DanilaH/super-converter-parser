@@ -4,7 +4,7 @@
 // different, explicitly configured source. The two can never alias one another:
 // a null firstSeenDate is never back-filled from registrationDate.
 
-export type FirstSeenStatus = 'ok' | 'not_found' | 'unavailable' | 'error';
+export type FirstSeenStatus = 'ok' | 'not_found' | 'unavailable' | 'not_attempted' | 'error';
 
 // A first-seen lookup result. `source` is the provider name (e.g. 'wayback') or
 // 'unconfigured'/'none' when no provider was configured, so provenance is always

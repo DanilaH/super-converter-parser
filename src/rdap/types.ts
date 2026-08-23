@@ -7,7 +7,7 @@
 
 export const RDAP_PARSER_VERSION = '1.0.0';
 
-export type RdapRegistrationStatus = 'ok' | 'not_found' | 'unsupported' | 'error';
+export type RdapRegistrationStatus = 'ok' | 'not_found' | 'unsupported' | 'error' | 'not_attempted';
 
 // A single candidate registration event extracted from an RDAP response. The
 // `source` field records where the candidate came from so provenance survives.

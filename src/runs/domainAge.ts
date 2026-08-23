@@ -68,7 +68,7 @@ export type DomainAgeRecord = {
   // When this record was observed/fetched.
   observedAt: string;
   cacheHit: boolean;
-  cacheStatus: 'hit' | 'miss' | 'expired' | 'partial';
+  cacheStatus: 'hit' | 'miss' | 'expired' | 'partial' | 'none';
   // True when this domain was omitted from enrichment due to the domain cap.
   omitted: boolean;
   omitReason: string | null;
@@ -284,9 +284,18 @@ export async function runDomainAgeModule(
     let fsResult: FirstSeenResult | null;
     let fsFetched = false;
     if (!fsConfigured) {
-      // No provider configured: deterministic unavailable. Reuse a cached value or
-      // synthesize; never network-fetch. Not a "fetch" for cacheHit accounting.
-      fsResult = cached ? firstSeenFromCache(cached) : makeUnavailable(domain, nowIso);
+      // No provider configured: deterministic unavailable. Reuse a cached value only
+      // if its query version matches the current contract; a stale-version fact
+      // (e.g. v1 exact match under v2 domain scope) must NOT be served as valid.
+      const versionMatch = cached && cached.firstSeenQueryVersion === FIRST_SEEN_QUERY_VERSION;
+      if (cached && versionMatch) {
+        fsResult = firstSeenFromCache(cached);
+      } else if (cached && !versionMatch) {
+        // Stale query contract: report as unavailable with a clear reason.
+        fsResult = makeStaleQueryVersion(domain, nowIso, cached.firstSeenQueryVersion);
+      } else {
+        fsResult = makeUnavailable(domain, nowIso);
+      }
     } else if (cached && isFresh(cached.firstSeenExpiresAt, nowMs) && !forceRefresh) {
       fsResult = firstSeenFromCache(cached);
     } else {
@@ -294,14 +303,18 @@ export async function runDomainAgeModule(
       fsFetched = true;
     }
 
-    const cacheHit = !regFetched && !fsFetched && cached !== null;
+    // Track whether the cached first-seen was stale (version mismatch) so we
+    // don't report a full cache hit and don't serve the stale fact.
+    const firstSeenStale = !fsConfigured && cached !== null && cached.firstSeenQueryVersion !== FIRST_SEEN_QUERY_VERSION;
+
+    const cacheHit = !regFetched && !fsFetched && cached !== null && !firstSeenStale;
     if (cacheHit) cacheHits += 1;
 
     let cacheStatus: 'hit' | 'miss' | 'expired' | 'partial' = 'miss';
     if (cached) {
       cacheStatus = regFetched && fsFetched
         ? 'expired'
-        : regFetched || fsFetched
+        : regFetched || fsFetched || firstSeenStale
           ? 'partial'
           : 'hit';
     }
@@ -349,14 +362,14 @@ export async function runDomainAgeModule(
       results.set(o.domain, {
         domain: o.domain,
         registrationDate: null,
-        registrationStatus: 'error',
-        registrationRule: 'unreachable',
+        registrationStatus: 'not_attempted',
+        registrationRule: 'not_attempted',
         registrationIsRedacted: false,
         registrationFetchedAt: null,
         registrationSource: 'rdap',
         registrationEvents: [],
         firstSeenDate: null,
-        firstSeenStatus: 'unavailable',
+        firstSeenStatus: 'not_attempted',
         firstSeenSource: null,
         firstSeenFetchedAt: null,
         sourceKeywords: o.sourceKeywords,
@@ -364,18 +377,18 @@ export async function runDomainAgeModule(
         domainAgeDays: null,
         observedAt: nowIso,
         cacheHit: false,
-        cacheStatus: 'miss',
+        cacheStatus: 'none',
         omitted: true,
         omitReason: 'domain_cap',
         fetchedAt: nowIso,
-        registrationError: 'domain omitted: exceeded domain cap',
+        registrationError: null,
         firstSeenError: null,
         firstSeenSourceReason: null,
         registrationHttpStatus: null,
         registrationRequestCount: 0,
         firstSeenHttpStatus: null,
         firstSeenRequestCount: 0,
-        error: 'domain omitted: exceeded domain cap',
+        error: null,
       });
     }
     logger(`Domain-age: ${omitted.length} domains omitted (domain cap).`);
@@ -460,6 +473,20 @@ function makeUnavailable(domain: string, fetchedAt: string): FirstSeenResult {
     error: null,
     source: 'unconfigured',
     sourceReason: 'first-seen provider not configured',
+    fetchedAt,
+    requestCount: 0,
+    httpStatus: null,
+  };
+}
+
+function makeStaleQueryVersion(domain: string, fetchedAt: string, cachedVersion: number): FirstSeenResult {
+  return {
+    domain,
+    firstSeenDate: null,
+    status: 'unavailable',
+    error: null,
+    source: 'stale_query_version',
+    sourceReason: `cached first-seen fact used query version ${cachedVersion}, current contract is ${FIRST_SEEN_QUERY_VERSION}; not served as valid`,
     fetchedAt,
     requestCount: 0,
     httpStatus: null,

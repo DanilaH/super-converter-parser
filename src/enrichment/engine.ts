@@ -311,9 +311,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         now: Date.now,
         onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
       });
-      if (omitted.length > 0) {
-        logger(`  domain_age: ${omitted.length} domains omitted (exceeded ${DOMAIN_AGE_MAX_DOMAINS} cap).`);
-      }
+      // Omitted domains are logged inside runDomainAgeModule; no duplicate here.
     }
 
     if (!result && !domainAgeRecords) {

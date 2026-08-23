@@ -295,6 +295,8 @@ export function ttlMsForRdapStatus(status: RdapRegistrationStatus, ttl: DomainAg
       return ttl.rdapUnsupportedMs;
     case 'error':
       return ttl.rdapErrorMs;
+    case 'not_attempted':
+      return ttl.rdapErrorMs;
   }
 }
 
@@ -306,6 +308,7 @@ export function ttlMsForFirstSeenStatus(status: FirstSeenStatus, ttl: DomainAgeT
     case 'error':
       return ttl.firstSeenErrorMs;
     case 'unavailable':
+    case 'not_attempted':
       return ttl.firstSeenUnavailableMs;
   }
 }

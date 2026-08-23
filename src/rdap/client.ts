@@ -134,7 +134,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
           }
 
           if (response.status === 410) {
-            return unsupportedOrNoRdap(rdapDomain, fetchedAt, attempt, 410, {
+            return unsupportedOrNoRdap(rdapDomain, fetchedAt, totalRequestCount, 410, {
               error: 'RDAP service gone (410) for this TLD',
             });
           }
@@ -142,7 +142,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
           // 401/403 are systemic for a registry that shouldn't require auth on
           // public RDAP; treat as non-retriable errors (returned, not thrown).
           if (response.status === 401 || response.status === 403) {
-            return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP auth error ${response.status}`);
+            return errorResult(rdapDomain, fetchedAt, totalRequestCount, response.status, `RDAP auth error ${response.status}`);
           }
 
           if (response.status === 429 || response.status >= 500) {
@@ -164,7 +164,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
           }
 
           // Other 4xx (400, 404 handled above, 401/403 handled above): not retried.
-          return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP error ${response.status}`);
+          return errorResult(rdapDomain, fetchedAt, totalRequestCount, response.status, `RDAP error ${response.status}`);
         } catch {
           if (!bodyRead) clearTimeout(timer);
           lastError = { message: 'network error contacting RDAP server', httpStatus: null, code: 'RDAP_ERROR' };

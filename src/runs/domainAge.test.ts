@@ -501,6 +501,64 @@ test('an empty run (no domains) completes without error', async () => {
   assert.equal(res.results.size, 0);
 });
 
+test('stale v1 first-seen + provider disabled + fresh RDAP: v1 fact NOT served as valid', async () => {
+  // Cached v1 exact-match first-seen fact, provider disabled, fresh RDAP.
+  // The stale first-seen must NOT appear as a valid hit.
+  const cached = fullCached('example.com', {
+    firstSeenQueryVersion: 1, // stale: v1 exact match
+    firstSeenDate: '2001-04-09T13:50:45Z',
+    firstSeenStatus: 'ok',
+    firstSeenSource: 'wayback',
+    firstSeenExpiresAt: FUTURE,
+  });
+  const { cache } = mockCache([cached]);
+  const res = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: null,
+    now: () => Date.parse(NOW_ISO),
+  });
+  const rec = res.results.get('example.com')!;
+  // Stale v1 first-seen must NOT be served: no date, source=stale_query_version.
+  assert.equal(rec.firstSeenDate, null);
+  assert.equal(rec.firstSeenSource, 'stale_query_version');
+  assert.equal(rec.firstSeenStatus, 'unavailable');
+  assert.match(rec.firstSeenSourceReason ?? '', /query version 1.*current contract is 2/);
+  // Registration is fresh from cache (not refetched).
+  assert.equal(rec.registrationDate, '2010-05-03T04:00:00Z');
+  // Cache status is partial (first-seen stale), not full hit.
+  assert.equal(rec.cacheStatus, 'partial');
+  assert.equal(rec.cacheHit, false);
+});
+
+test('stale v1 first-seen + provider configured: triggers refetch under v2', async () => {
+  let fsCalls = 0;
+  const fs: FirstSeenClient = () => {
+    fsCalls += 1;
+    return Promise.resolve(fsEntry('example.com', { firstSeenDate: '2005-01-01T00:00:00Z' }));
+  };
+  // Simulate what real getDomainAge returns for a stale-version row: firstSeenExpiresAt=null.
+  const cached = fullCached('example.com', {
+    firstSeenQueryVersion: 1, // stale
+    firstSeenDate: '2001-04-09T13:50:45Z',
+    firstSeenExpiresAt: null, // force refetch (as real getDomainAge does for stale version)
+  });
+  const { cache } = mockCache([cached]);
+  const res = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: fs,
+    now: () => Date.parse(NOW_ISO),
+  });
+  // Provider is configured + version mismatch -> refetch happens.
+  assert.equal(fsCalls, 1);
+  const rec = res.results.get('example.com')!;
+  assert.equal(rec.firstSeenDate, '2005-01-01T00:00:00Z');
+  assert.equal(rec.firstSeenSource, 'wayback');
+});
+
 test('renderDomainAgeCsv writes the documented headers and quoted cells', () => {
   const records: DomainAgeRecord[] = [
     {
