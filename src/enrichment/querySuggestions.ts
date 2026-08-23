@@ -394,6 +394,11 @@ export async function runQuerySuggestionsModule(
       throw new ResearchError('ENRICHMENT_ERROR', `Shortlist keywords not found in source run: ${rejected.join(', ')}`);
     }
     selectedKeywords = allKeywords.filter((k) => shortlistSet.has(k.normalizedKeyword));
+  } else {
+    throw new ResearchError(
+      'ENRICHMENT_ERROR',
+      'query_suggestions requires an explicit --shortlist of 5-30 parent keywords. Full-source-run mode is not supported for deep enrichment.',
+    );
   }
 
   if (selectedKeywords.length > config.maxParents) {
@@ -444,12 +449,12 @@ export async function runQuerySuggestionsModule(
     parentKeyword: string,
     normalizedParent: string,
     sources: QuerySuggestionSource[],
-  ): Promise<RawSourceCollection[]> => {
+): Promise<{ collections: RawSourceCollection[]; attempts: number }> => {
     const maxAttempts = 3;
     let lastError: string | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        return await collector.collect(parentKeyword, normalizedParent, sources);
+        return { collections: await collector.collect(parentKeyword, normalizedParent, sources), attempts: attempt };
       } catch (error) {
         const code = error instanceof ResearchError ? error.code : 'GOOGLE_UNAVAILABLE';
         if (code === 'RUN_PAUSED') throw error;
@@ -457,13 +462,16 @@ export async function runQuerySuggestionsModule(
         if (attempt < maxAttempts) await sleep(1000 * attempt);
       }
     }
-    return sources.map((source) => ({
-      source,
-      status: 'error' as QuerySuggestionCollectionStatus,
-      occurrences: [],
-      error: lastError,
-      cacheStatus: 'none' as const,
-    }));
+    return {
+      collections: sources.map((source) => ({
+        source,
+        status: 'error' as QuerySuggestionCollectionStatus,
+        occurrences: [],
+        error: lastError,
+        cacheStatus: 'none' as const,
+      })),
+      attempts: maxAttempts,
+    };
   };
 
   const persistOccurrences = (): void => {
@@ -495,7 +503,7 @@ export async function runQuerySuggestionsModule(
     );
   };
 
-  await collector.open();
+  let collectorOpened = false;
   try {
     for (const keyword of selectedKeywords) {
       checkCancellation(signal, EnrichmentCancelledError);
@@ -550,8 +558,14 @@ export async function runQuerySuggestionsModule(
 
       if (cacheMissSources.length > 0) {
         usedBrowser = true;
-        const collected = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
-        for (const col of collected) {
+        if (!collectorOpened) {
+          await collector.open();
+          collectorOpened = true;
+        }
+        const hasAutocomplete = cacheMissSources.includes('google_autocomplete');
+        const { collections, attempts } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
+        const transportRequests = attempts + (hasAutocomplete ? 1 : 0);
+        for (const col of collections) {
           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
           const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
@@ -603,10 +617,11 @@ export async function runQuerySuggestionsModule(
 
       persistOccurrences();
 
+      let transportRequests = 0;
       let countedRequestForParent = false;
       for (const collection of fetched) {
         const isBrowserSource = collection.cacheStatus !== 'hit';
-        const requestCount = isBrowserSource && !countedRequestForParent ? 1 : 0;
+        const requestCount = isBrowserSource && !countedRequestForParent ? transportRequests : 0;
         if (isBrowserSource) {
           countedRequestForParent = true;
         }
@@ -619,6 +634,10 @@ export async function runQuerySuggestionsModule(
           new Date().toISOString(),
           requestCount,
           collection.cacheStatus,
+          market,
+          hl,
+          gl,
+          parserVersionForSource(collection.source),
         );
       }
 
@@ -634,15 +653,18 @@ export async function runQuerySuggestionsModule(
       }
     }
   } finally {
-    await collector.close();
+    if (collectorOpened) {
+      await collector.close();
+    }
   }
 
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
 
   persistOccurrences();
 
-  const emptyCount = suggestions.filter((s) => s.occurrences.every((o) => o.collectionStatus !== 'ok')).length;
-  const errorCount = [...perSourceStatus.values()].filter((s) => s.status === 'error').length;
+  const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
+  const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
+  const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
 
   return {
     enrichmentId,
@@ -725,8 +747,8 @@ export function buildQueryResultFromStore(
   const hl = researchConfig.research.googleHl;
   const gl = researchConfig.research.googleGl;
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
-  const emptyCount = suggestions.filter((s) => s.occurrences.every((o) => o.collectionStatus !== 'ok')).length;
-  const errorCount = [...bySource.values()].filter((s) => s.status === 'error').length;
+  const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
+  const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
   const inputCount = new Set(sourceRecords.map((r) => r.normalizedParent)).size;
 
   return {

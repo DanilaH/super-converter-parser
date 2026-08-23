@@ -77,6 +77,28 @@ function setupSourceRun(store: RunStore, config: ReturnType<typeof loadConfig>):
   return runId;
 }
 
+function testShortlist(): string[] {
+  return ['json diff', 'compare lists', 'csv parser', 'data merge', 'file converter'];
+}
+
+function createTestEnrichmentRun(
+  store: RunStore,
+  enrichmentId: string,
+  sourceRunId: string,
+  config: ReturnType<typeof loadConfig>,
+  moduleConfig: Record<string, unknown> = { query_suggestions: defaultQuerySuggestionsConfig() },
+): void {
+  store.createEnrichmentRun({
+    enrichmentId,
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify(moduleConfig),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: `/tmp/${enrichmentId}`,
+    shortlistKeywords: testShortlist(),
+  });
+}
+
 function plan(): Record<string, RawSourceCollection[]> {
   return {
     [normalizeKeyword('json diff')]: [
@@ -124,6 +146,7 @@ test('collects factual suggestions across all sources and dedups by normalized i
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-1',
+    shortlistKeywords: testShortlist(),
   });
   const collector = new FakeCollector(plan());
   const cache = CacheStore.openInMemory();
@@ -134,7 +157,7 @@ test('collects factual suggestions across all sources and dedups by normalized i
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -175,6 +198,7 @@ test('one normalized suggestion retains every (parent, source) occurrence', asyn
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-2',
+    shortlistKeywords: testShortlist(),
   });
   // Both parents collect the SAME normalized suggestion text via different sources.
   const sharedPlan: Record<string, RawSourceCollection[]> = {
@@ -193,7 +217,7 @@ test('one normalized suggestion retains every (parent, source) occurrence', asyn
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -219,6 +243,7 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-3',
+    shortlistKeywords: testShortlist(),
   });
   const collector = new FakeCollector(plan());
   const first = await runQuerySuggestionsModule({
@@ -227,7 +252,7 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -246,7 +271,7 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector: collector2,
@@ -271,6 +296,7 @@ test('absent source is recorded as unavailable, not invented success', async () 
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-4',
+    shortlistKeywords: testShortlist(),
   });
   const unavailablePlan: Record<string, RawSourceCollection[]> = {
     [normalizeKeyword('json diff')]: [
@@ -284,7 +310,7 @@ test('absent source is recorded as unavailable, not invented success', async () 
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector: new FakeCollector(unavailablePlan),
@@ -310,6 +336,7 @@ test('buildQueryResultFromStore reconstructs without a browser', async () => {
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-5',
+    shortlistKeywords: testShortlist(),
   });
   const result = await runQuerySuggestionsModule({
     enrichmentId: 'enr-5',
@@ -317,14 +344,16 @@ test('buildQueryResultFromStore reconstructs without a browser', async () => {
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector: new FakeCollector(plan()),
     cache: CacheStore.openInMemory(),
     researchConfig: config,
-    debugRoot: '/tmp/enr-5/debug',
+    debugRoot: '/tmp/enr-1/debug',
   });
+
+  // 5 keywords: 4 + 3 + 4 + 4 + 4 = 19 distinct suggestions
   assert.equal(result.suggestions.length, 19);
   const rebuilt = buildQueryResultFromStore('enr-5', enrichmentStore, defaultQuerySuggestionsConfig(), config);
   assert.equal(rebuilt.suggestions.length, 19);
@@ -354,6 +383,7 @@ test('interruption after first keyword persists data for completed sources', asy
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-int',
+    shortlistKeywords: testShortlist(),
   });
 
   const fullPlan = plan();
@@ -369,7 +399,7 @@ test('interruption after first keyword persists data for completed sources', asy
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -404,6 +434,7 @@ test('resume with non-default sources and cap preserves config', async () => {
     config: JSON.stringify({ query_suggestions: limitedConfig }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-cfg',
+    shortlistKeywords: testShortlist(),
   });
 
   const limitedPlan: Record<string, RawSourceCollection[]> = {
@@ -425,7 +456,7 @@ test('resume with non-default sources and cap preserves config', async () => {
     enrichmentStore,
     sourceRunId,
     config: limitedConfig,
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -455,6 +486,7 @@ test('cold run provenance uses real parentKeyword (not empty string)', async () 
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-prov',
+    shortlistKeywords: testShortlist(),
   });
 
   const simplePlan: Record<string, RawSourceCollection[]> = {
@@ -483,7 +515,7 @@ test('cold run provenance uses real parentKeyword (not empty string)', async () 
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -521,6 +553,7 @@ test('navigation failure throws and does not parse previous DOM', async () => {
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-nav',
+    shortlistKeywords: testShortlist(),
   });
 
   let callCount = 0;
@@ -560,7 +593,7 @@ test('navigation failure throws and does not parse previous DOM', async () => {
     enrichmentStore,
     sourceRunId,
     config: { ...defaultQuerySuggestionsConfig(), sources: ['google_autocomplete'] },
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -586,6 +619,7 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
     config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-states',
+    shortlistKeywords: testShortlist(),
   });
 
   const mixedPlan: Record<string, RawSourceCollection[]> = {
@@ -629,7 +663,7 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -674,6 +708,7 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
     config: JSON.stringify({ query_suggestions: { ...defaultQuerySuggestionsConfig(), maxSuggestionsPerSource: 2 } }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-cap',
+    shortlistKeywords: testShortlist(),
   });
 
   const makeOccurrences = (parent: string) =>
@@ -706,7 +741,7 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
     enrichmentStore,
     sourceRunId,
     config: { ...defaultQuerySuggestionsConfig(), maxSuggestionsPerSource: 2 },
-    shortlist: undefined,
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -716,6 +751,43 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
   });
 
   assert.equal(result.suggestions.length, 10);
+});
+
+test('no-shortlist is rejected', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-nosl',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-nosl',
+    shortlistKeywords: testShortlist(),
+  });
+
+  const collector = new FakeCollector(plan());
+  const cache = CacheStore.openInMemory();
+
+  await assert.rejects(
+    () => runQuerySuggestionsModule({
+      enrichmentId: 'enr-nosl',
+      sourceStore,
+      enrichmentStore,
+      sourceRunId,
+      config: defaultQuerySuggestionsConfig(),
+      shortlist: undefined,
+      logger: () => {},
+      signal: { cancelled: false },
+      collector,
+      cache,
+      researchConfig: config,
+      debugRoot: '/tmp/enr-nosl/debug',
+    }),
+    (error: Error) => error.message.includes('requires an explicit --shortlist'),
+  );
 });
 
 test('maxParents limit prevents accidental large batches', async () => {
@@ -744,6 +816,7 @@ test('maxParents limit prevents accidental large batches', async () => {
     config: JSON.stringify({ query_suggestions: { ...defaultQuerySuggestionsConfig(), maxParents: 30 } }),
     sourceRunDirectory: `runs/${runId}`,
     enrichmentDirectory: '/tmp/enr-maxp',
+    shortlistKeywords: Array.from({ length: 50 }, (_, i) => `keyword ${i}`),
   });
 
   const emptyPlan: Record<string, RawSourceCollection[]> = {};
@@ -756,7 +829,7 @@ test('maxParents limit prevents accidental large batches', async () => {
       enrichmentStore,
       sourceRunId: runId,
       config: { ...defaultQuerySuggestionsConfig(), maxParents: 30 },
-      shortlist: undefined,
+      shortlist: Array.from({ length: 50 }, (_, i) => `keyword ${i}`),
       logger: () => {},
       signal: { cancelled: false },
       collector,

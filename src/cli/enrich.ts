@@ -231,13 +231,24 @@ function findEnrichmentDirectory(enrichmentId: string): string {
 }
 
 function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShortlist: string[]): string[] {
-  if (rawShortlist.length === 0) return [];
+  if (rawShortlist.length === 0) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      'query_suggestions requires --shortlist with 5-30 parent keywords. Full-source-run mode is not supported.',
+    );
+  }
   const sourceStore = RunStore.openReadOnly(sourceStorePath);
   try {
     const available = new Set(
       sourceStore.loadKeywords(sourceRunId).map((keyword) => keyword.normalizedKeyword),
     );
     const normalized = [...new Set(rawShortlist.map(normalizeKeyword))];
+    if (normalized.length < 5 || normalized.length > 30) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `--shortlist must contain 5-30 unique keywords, got ${normalized.length}`,
+      );
+    }
     const rejected = normalized.filter((keyword) => !available.has(keyword));
     if (rejected.length > 0) {
       throw new ResearchError(
@@ -326,6 +337,12 @@ async function main(): Promise<void> {
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
       shortlist = existingRun.shortlistKeywords;
+      if (shortlist.length < 5 || shortlist.length > 30) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `Persisted shortlist has ${shortlist.length} keywords; required 5-30. Cannot resume.`,
+        );
+      }
       modules = existingRun.modules;
     } else {
       sourceRunId = args.sourceRunId;

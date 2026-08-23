@@ -30,7 +30,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -253,6 +253,15 @@ const MIGRATIONS: string[] = [
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (enrichment_id, normalized_parent, source)
   );
+  `,
+  // v12: add accounting/provenance columns to per-(parent, source) records.
+  `
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN cache_status TEXT NOT NULL DEFAULT 'none';
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN market TEXT NOT NULL DEFAULT '';
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN hl TEXT NOT NULL DEFAULT '';
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN gl TEXT NOT NULL DEFAULT '';
+  ALTER TABLE enrichment_query_suggestion_sources ADD COLUMN parser_version TEXT NOT NULL DEFAULT '';
   `,
 ];
 
@@ -1385,14 +1394,20 @@ export class RunStore {
     status: string,
     error: string | null,
     fetchedAt: string,
+    cacheStatus: string = 'none',
+    requestCount: number = 0,
+    market: string = '',
+    hl: string = '',
+    gl: string = '',
+    parserVersion: string = '',
   ): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
-          (enrichment_id, normalized_parent, source, status, error, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+          (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(enrichmentId, normalizedParent, source, status, error, fetchedAt);
+      .run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
   }
 
   loadQuerySuggestionSources(enrichmentId: string): Array<{
@@ -1401,10 +1416,16 @@ export class RunStore {
     status: string;
     error: string | null;
     fetchedAt: string;
+    cacheStatus: string;
+    requestCount: number;
+    market: string;
+    hl: string;
+    gl: string;
+    parserVersion: string;
   }> {
     const rows = this.db
       .prepare(
-        'SELECT normalized_parent, source, status, error, fetched_at FROM enrichment_query_suggestion_sources WHERE enrichment_id = ?',
+        'SELECT normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version FROM enrichment_query_suggestion_sources WHERE enrichment_id = ?',
       )
       .all(enrichmentId) as Array<{
       normalized_parent: string;
@@ -1412,6 +1433,12 @@ export class RunStore {
       status: string;
       error: string | null;
       fetched_at: string;
+      cache_status: string;
+      request_count: number;
+      market: string;
+      hl: string;
+      gl: string;
+      parser_version: string;
     }>;
     return rows.map((row) => ({
       normalizedParent: row.normalized_parent,
@@ -1419,6 +1446,12 @@ export class RunStore {
       status: row.status,
       error: row.error,
       fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+      requestCount: row.request_count,
+      market: row.market,
+      hl: row.hl,
+      gl: row.gl,
+      parserVersion: row.parser_version,
     }));
   }
 
@@ -1431,11 +1464,15 @@ export class RunStore {
     fetchedAt: string,
     requestCount: number,
     cacheStatus: EnrichmentCacheStatus,
+    market: string = '',
+    hl: string = '',
+    gl: string = '',
+    parserVersion: string = '',
   ): void {
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
-        (enrichment_id, normalized_parent, source, status, error, fetched_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const itemStatus = status === 'error' ? 'error' : 'completed';
     const itemStmt = this.db.prepare(
@@ -1452,7 +1489,7 @@ export class RunStore {
     );
     const now = fetchedAt;
     const tx = this.db.transaction(() => {
-      stmt.run(enrichmentId, normalizedParent, source, status, error, fetchedAt);
+      stmt.run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
       itemStmt.run(
         enrichmentId,
         `${source}:${normalizedParent}`,

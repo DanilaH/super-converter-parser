@@ -13,6 +13,12 @@ export type QuerySuggestionSourceRecord = {
   status: string;
   error: string | null;
   fetchedAt: string;
+  cacheStatus: string;
+  requestCount: number;
+  market: string;
+  hl: string;
+  gl: string;
+  parserVersion: string;
 };
 
 export type QuerySuggestionsOutputOptions = {
