@@ -37,15 +37,28 @@ export function parseWaybackTimestamp(ts: string): string | null {
   const h = padded.slice(8, 10);
   const mi = padded.slice(10, 12);
   const s = padded.slice(12, 14);
-  // Validate calendar date ranges.
   const year = Number(y);
   const month = Number(mo);
   const day = Number(d);
   const hour = Number(h);
   const min = Number(mi);
   const sec = Number(s);
+  // Validate calendar date ranges.
   if (year < 1990 || month < 1 || month > 12 || day < 1 || day > 31) return null;
   if (hour > 23 || min > 59 || sec > 59) return null;
+  // Round-trip validation: the parsed date must format back to the same
+  // components (catches e.g. Feb 31, Apr 31, etc.).
+  const date = new Date(Date.UTC(year, month - 1, day, hour, min, sec));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== min ||
+    date.getUTCSeconds() !== sec
+  ) {
+    return null;
+  }
   // ISO 8601 UTC; CDX timestamps are UTC.
   return `${y}-${mo}-${d}T${h}:${mi}:${s}Z`;
 }
@@ -111,6 +124,9 @@ export function createWaybackClient(
   const attempts = config.maxAttempts ?? MAX_ATTEMPTS;
   const random = config.random ?? Math.random;
   const sleep = config.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  // Per-host rate limiter: tracks the next time a request can be made. Unlike
+  // the retry-only minDelayMs, this limits ALL requests to the Wayback CDX host.
+  let nextAvailableAt = 0;
 
   return async (domain: string): Promise<FirstSeenResult> => {
     const fetchedAt = new Date().toISOString();
@@ -118,23 +134,97 @@ export function createWaybackClient(
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       lastAttempt = attempt;
-      // Per-host rate limiting: enforce minimum delay between requests.
-      const waitMs = config.minDelayMs > 0 ? config.minDelayMs : 0;
-      if (waitMs > 0 && attempt > 1) {
+      // Enforce per-host rate limit before EVERY request (not just retries).
+      const waitMs = nextAvailableAt - now();
+      if (waitMs > 0) {
         await sleep(waitMs);
       }
+      nextAvailableAt = now() + config.minDelayMs;
 
       const url = buildWaybackQuery(config.endpoint, domain);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let response: Response;
+      let bodyRead = false;
       try {
         response = await fetchImpl(url, {
           signal: controller.signal,
           headers: { Accept: 'application/json' },
         });
-      } catch {
+        // Read body while timeout is still active to catch stalled responses.
+        const raw = await response.text();
+        bodyRead = true;
         clearTimeout(timer);
+        let data: unknown;
+        try {
+          data = JSON.parse(raw) as unknown;
+        } catch {
+          data = null;
+        }
+        if (!response.ok) {
+          if (response.status === 429 && attempt < attempts) {
+            const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
+            await sleep(retryAfter > 0 ? retryAfter : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
+            continue;
+          }
+          return errorResult(
+            domain,
+            fetchedAt,
+            attempt,
+            response.status,
+            `Wayback CDX returned HTTP ${response.status}`,
+          );
+        }
+
+        if (!Array.isArray(data)) {
+          return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response (not an array)');
+        }
+
+        // Row 0 is the column header; the first data row follows. Resolve the
+        // timestamp column index from the header so we never assume a position.
+        if (data.length < 2) {
+          return {
+            domain,
+            firstSeenDate: null,
+            status: 'not_found',
+            error: null,
+            source: WAYBACK_SOURCE,
+            sourceReason: 'no archived snapshots returned by Wayback CDX',
+            fetchedAt,
+            requestCount: attempt,
+            httpStatus: response.status,
+          };
+        }
+        const header = Array.isArray(data[0]) ? (data[0] as unknown[]) : [];
+        const tsIndex = header.findIndex((col) => col === 'timestamp');
+        if (tsIndex < 0) {
+          return errorResult(
+            domain,
+            fetchedAt,
+            attempt,
+            response.status,
+            `Wayback CDX header missing 'timestamp' column: ${JSON.stringify(header)}`,
+          );
+        }
+        const row = data[1] as unknown[];
+        const ts = tsIndex < row.length ? row[tsIndex] : null;
+        const iso = typeof ts === 'string' ? parseWaybackTimestamp(ts) : null;
+        if (iso === null) {
+          return errorResult(domain, fetchedAt, attempt, response.status, `unparseable Wayback timestamp: ${ts}`);
+        }
+        return {
+          domain,
+          firstSeenDate: iso,
+          status: 'ok',
+          error: null,
+          source: WAYBACK_SOURCE,
+          sourceReason: null,
+          fetchedAt,
+          requestCount: attempt,
+          httpStatus: response.status,
+        };
+      } catch {
+        if (!bodyRead) clearTimeout(timer);
         if (attempt < attempts) {
           await sleep(backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
           continue;
@@ -143,77 +233,6 @@ export function createWaybackClient(
       } finally {
         clearTimeout(timer);
       }
-
-      if (!response.ok) {
-        if (response.status === 429 && attempt < attempts) {
-          const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
-          await sleep(retryAfter > 0 ? retryAfter : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
-          continue;
-        }
-        return errorResult(
-          domain,
-          fetchedAt,
-          attempt,
-          response.status,
-          `Wayback CDX returned HTTP ${response.status}`,
-        );
-      }
-
-      // Read JSON body with timeout still active (not cleared before reading).
-      let data: unknown;
-      try {
-        data = await response.json().catch(() => null) as unknown;
-      } catch {
-        return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response');
-      }
-
-      if (!Array.isArray(data)) {
-        return errorResult(domain, fetchedAt, attempt, response.status, 'malformed Wayback CDX response (not an array)');
-      }
-
-      // Row 0 is the column header; the first data row follows. Resolve the
-      // timestamp column index from the header so we never assume a position.
-      if (data.length < 2) {
-        return {
-          domain,
-          firstSeenDate: null,
-          status: 'not_found',
-          error: null,
-          source: WAYBACK_SOURCE,
-          sourceReason: 'no archived snapshots returned by Wayback CDX',
-          fetchedAt,
-          requestCount: attempt,
-          httpStatus: response.status,
-        };
-      }
-      const header = Array.isArray(data[0]) ? (data[0] as unknown[]) : [];
-      const tsIndex = header.findIndex((col) => col === 'timestamp');
-      if (tsIndex < 0) {
-        return errorResult(
-          domain,
-          fetchedAt,
-          attempt,
-          response.status,
-          `Wayback CDX header missing 'timestamp' column: ${JSON.stringify(header)}`,
-        );
-      }
-      const row = data[1] as unknown[];
-      const ts = tsIndex < row.length ? row[tsIndex] : null;
-      const iso = typeof ts === 'string' ? parseWaybackTimestamp(ts) : null;
-      if (iso === null) {
-        return errorResult(domain, fetchedAt, attempt, response.status, `unparseable Wayback timestamp: ${ts}`);
-      }
-      return {
-        domain,
-        firstSeenDate: iso,
-        status: 'ok',
-        error: null,
-        source: WAYBACK_SOURCE,
-        sourceReason: null,
-        fetchedAt,
-        requestCount: attempt,
-        httpStatus: response.status,
-      };
     }
 
     return errorResult(domain, fetchedAt, lastAttempt, null, 'Wayback CDX lookup exhausted retries');

@@ -77,9 +77,11 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
     }
 
     let attempt = 0;
+    let lastError: { message: string; httpStatus: number | null; code: string } | null = null;
     for (const baseUrl of baseUrls) {
       for (attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
-        const host = baseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        // Per-host rate limiter keyed by hostname (not full URL path).
+        const host = new URL(baseUrl).host;
         const nextAvailable = hostNextAvailable.get(host);
         const waitMs = nextAvailable !== undefined ? nextAvailable - now() : 0;
         if (waitMs > 0) {
@@ -91,83 +93,107 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), config.queryTimeoutMs);
         let response: Response;
+        let bodyRead = false;
         try {
           response = await fetchImpl(url, {
             signal: controller.signal,
             headers: { Accept: 'application/rdap+json' },
           });
-        } catch {
+          // Read body while timeout is still active to catch stalled responses.
+          const raw = await response.text();
+          bodyRead = true;
           clearTimeout(timer);
+          let body: unknown;
+          try {
+            body = JSON.parse(raw) as unknown;
+          } catch {
+            body = null;
+          }
+
+          if (response.status === 200) {
+            const parsed = parseRdapDomainResponse(rdapDomain, body, { fetchedAt });
+            return { ...parsed, requestCount: attempt, httpStatus: 200 };
+          }
+
+          if (response.status === 404) {
+            return {
+              domain: rdapDomain,
+              registrationDate: null,
+              status: 'not_found',
+              error: 'domain not found in RDAP',
+              source: 'rdap',
+              rule: REGISTRATION_RULE_NO_EVENT,
+              events: [],
+              isRedacted: false,
+              fetchedAt,
+              requestCount: attempt,
+              httpStatus: 404,
+            };
+          }
+
+          if (response.status === 410) {
+            return unsupportedOrNoRdap(rdapDomain, fetchedAt, attempt, 410, {
+              error: 'RDAP service gone (410) for this TLD',
+            });
+          }
+
+          // 401/403 are systemic for a registry that shouldn't require auth on
+          // public RDAP; treat as non-retriable errors (returned, not thrown).
+          if (response.status === 401 || response.status === 403) {
+            return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP auth error ${response.status}`);
+          }
+
+          if (response.status === 429 || response.status >= 500) {
+            lastError = {
+              message: `RDAP server error (${response.status})`,
+              httpStatus: response.status,
+              code: response.status === 429 ? 'RDAP_RATE_LIMIT' : 'RDAP_ERROR',
+            };
+            if (attempt < config.maxAttempts) {
+              const retryAfter = parseRetryAfter(
+                response.headers.get('Retry-After'),
+                backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, config.random) / 1000,
+              );
+              await sleep(retryAfter);
+              continue;
+            }
+            // Exhausted retries for this base URL: try the next bootstrap URL.
+            break;
+          }
+
+          // Other 4xx (400, 404 handled above, 401/403 handled above): not retried.
+          return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP error ${response.status}`);
+        } catch {
+          if (!bodyRead) clearTimeout(timer);
+          lastError = { message: 'network error contacting RDAP server', httpStatus: null, code: 'RDAP_ERROR' };
           if (attempt < config.maxAttempts) {
             await sleep(backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, config.random));
             continue;
           }
-          return errorResult(rdapDomain, fetchedAt, attempt, null, 'network error contacting RDAP server');
+          // Exhausted retries for this base URL: try the next bootstrap URL.
+          break;
         } finally {
           clearTimeout(timer);
         }
-
-        if (response.status === 200) {
-          const body = (await response.json().catch(() => null)) as unknown;
-          const parsed = parseRdapDomainResponse(rdapDomain, body, { fetchedAt });
-          return { ...parsed, requestCount: attempt, httpStatus: 200 };
-        }
-
-        if (response.status === 404) {
-          return {
-            domain: rdapDomain,
-            registrationDate: null,
-            status: 'not_found',
-            error: 'domain not found in RDAP',
-            source: 'rdap',
-            rule: REGISTRATION_RULE_NO_EVENT,
-            events: [],
-            isRedacted: false,
-            fetchedAt,
-            requestCount: attempt,
-            httpStatus: 404,
-          };
-        }
-
-        if (response.status === 410) {
-          return unsupportedOrNoRdap(rdapDomain, fetchedAt, attempt, 410, {
-            error: 'RDAP service gone (410) for this TLD',
-          });
-        }
-
-        // 401/403 are systemic for a registry that shouldn't require auth on
-        // public RDAP; treat as non-retriable errors (returned, not thrown).
-        if (response.status === 401 || response.status === 403) {
-          return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP auth error ${response.status}`);
-        }
-
-        if (response.status === 429 || response.status >= 500) {
-          const retryAfter = parseRetryAfter(
-            response.headers.get('Retry-After'),
-            backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, config.random) / 1000,
-          );
-          if (attempt < config.maxAttempts) {
-            await sleep(retryAfter);
-            continue;
-          }
-          // Systemic/transient exhaustion: throw so the engine records a
-          // structured per-domain error (RDAP_RATE_LIMIT / RDAP_ERROR), matching
-          // the Ahrefs client contract rather than silently returning junk.
-          throw new ResearchError(
-            response.status === 429 ? 'RDAP_RATE_LIMIT' : 'RDAP_ERROR',
-            response.status === 429
-              ? `RDAP rate limited (429) after ${attempt} attempts`
-              : `RDAP server error (${response.status}) after retries`,
-          );
-        }
-
-        // Other 4xx (400, 404 handled above, 401/403 handled above): not retried.
-        return errorResult(rdapDomain, fetchedAt, attempt, response.status, `RDAP error ${response.status}`);
       }
     }
 
     // Exhausted all base URLs without a definitive outcome.
-    throw new ResearchError('RDAP_ERROR', 'RDAP lookup exhausted all base URLs');
+    // Return a structured error (not throw) so the engine records a per-domain
+    // error rather than crashing the run. The domain still completes.
+    return {
+      domain: rdapDomain,
+      registrationDate: null,
+      status: 'error',
+      error: `${lastError?.code ?? 'RDAP_ERROR'}: ${lastError?.message ?? 'unknown error'}`,
+      source: 'rdap',
+      rule: 'unreachable',
+      events: [],
+      isRedacted: false,
+      fetchedAt,
+      requestCount: attempt,
+      httpStatus: lastError?.httpStatus ?? null,
+    };
   };
 }
 

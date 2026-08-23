@@ -118,12 +118,19 @@ function buildClusteringInputs(
 const DOMAIN_AGE_MIN_SHORTLIST = 5;
 const DOMAIN_AGE_MAX_DOMAINS = 30;
 
+type CollectedDomains = {
+  domains: string[];
+  provenance: Map<string, string[]>;
+  ranks: Map<string, Array<{ keyword: string; position: number }>>;
+  omitted: Array<{ domain: string; sourceKeywords: string[]; sourceRanks: Array<{ keyword: string; position: number }> }>;
+};
+
 function collectSourceDomains(
   sourceStore: RunStore,
   sourceRunId: string,
   shortlist: string[] | undefined,
   logger: EnrichmentLogger,
-): { domains: string[]; provenance: Map<string, string[]>; omitted: number } {
+): CollectedDomains {
   const shortlistSet =
     shortlist && shortlist.length > 0 ? new Set(shortlist.map(normalizeKeyword)) : null;
   if (!shortlistSet) {
@@ -136,6 +143,11 @@ function collectSourceDomains(
       `The 'domain_age' module requires at least ${DOMAIN_AGE_MIN_SHORTLIST} shortlisted keywords (got ${shortlistSet.size}). Add more keywords to the shortlist.`,
     );
   }
+  if (shortlistSet.size > DOMAIN_AGE_MAX_DOMAINS) {
+    throw new Error(
+      `The 'domain_age' module accepts at most ${DOMAIN_AGE_MAX_DOMAINS} shortlisted keywords (got ${shortlistSet.size}). Reduce the shortlist.`,
+    );
+  }
 
   const keywords = sourceStore.loadKeywords(sourceRunId);
   const idxToKeyword = new Map<number, string>();
@@ -146,27 +158,41 @@ function collectSourceDomains(
   const serpRows = sourceStore.loadSerpRows(sourceRunId);
   const domains: string[] = [];
   const provenance = new Map<string, string[]>();
-  let omitted = 0;
+  const ranks = new Map<string, Array<{ keyword: string; position: number }>>();
+  const omittedMap = new Map<string, string[]>();
+  const omittedRanks = new Map<string, Array<{ keyword: string; position: number }>>();
   for (const row of serpRows) {
     if (row.resultType !== 'organic') continue;
     const keyword = idxToKeyword.get(row.keywordIdx ?? -1);
     if (keyword === undefined || !shortlistSet.has(keyword)) continue;
     const domain = row.registrableDomain ?? '';
     if (!domain) continue;
-    if (!provenance.has(domain)) {
+    if (!provenance.has(domain) && !omittedMap.has(domain)) {
       if (domains.length >= DOMAIN_AGE_MAX_DOMAINS) {
-        omitted += 1;
+        omittedMap.set(domain, [keyword]);
+        omittedRanks.set(domain, [{ keyword, position: row.position }]);
         continue;
       }
       provenance.set(domain, []);
+      ranks.set(domain, []);
       domains.push(domain);
     }
-    const kws = provenance.get(domain) as string[];
+    const kws = (provenance.get(domain) ?? omittedMap.get(domain)) as string[];
     if (!kws.includes(keyword)) kws.push(keyword);
+    const domainRanks = ranks.get(domain) ?? omittedRanks.get(domain);
+    if (domainRanks && !domainRanks.some((r) => r.keyword === keyword && r.position === row.position)) {
+      domainRanks.push({ keyword, position: row.position });
+    }
   }
 
-  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords${omitted > 0 ? ` (${omitted} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
-  return { domains, provenance, omitted };
+  const omitted = [...omittedMap.entries()].map(([domain, kws]) => ({
+    domain,
+    sourceKeywords: kws,
+    sourceRanks: omittedRanks.get(domain) ?? [],
+  }));
+
+  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords${omitted.length > 0 ? ` (${omitted.length} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
+  return { domains, provenance, ranks, omitted };
 }
 
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
@@ -266,10 +292,11 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       // provenance (which shortlisted keywords observed each domain). On resume the
       // completion is derived from per-domain checkpoints in enrichment_items, not
       // from the mutable TTL cache.
-      const { domains, provenance, omitted } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
+      const { domains, provenance, ranks, omitted } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
       domainAgeRecords = await runDomainAgeModule({
         domains,
         provenance,
+        ranks,
         cache: cacheStore,
         rdap: options.rdapClient ?? null,
         firstSeen: options.firstSeenClient ?? null,
@@ -283,8 +310,8 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         now: Date.now,
         onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
       });
-      if (omitted > 0) {
-        logger(`  domain_age: ${omitted} domains omitted (exceeded ${30} cap).`);
+      if (omitted.length > 0) {
+        logger(`  domain_age: ${omitted.length} domains omitted (exceeded ${DOMAIN_AGE_MAX_DOMAINS} cap).`);
       }
     }
 

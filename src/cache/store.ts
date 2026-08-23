@@ -8,7 +8,12 @@ import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 import type { RdapRegistrationStatus } from '../rdap/types.js';
 import type { FirstSeenStatus } from '../firstseen/types.js';
 
-export const CACHE_SCHEMA_VERSION = 6;
+export const CACHE_SCHEMA_VERSION = 7;
+
+// Query version for first-seen facts. Bump when query semantics change so that
+// stale results from an older query contract are invalidated on next access.
+// v1: exact match (default CDX scope). v2: matchType=domain.
+export const FIRST_SEEN_QUERY_VERSION = 2;
 
 // Rows that expired less than this long ago survive an open-time cleanup so
 // the next run can still classify them as expired (real expired accounting
@@ -135,8 +140,24 @@ const MIGRATIONS: string[] = [
           first_seen_expires_at = expires_at,
           first_seen_error = error,
           updated_at = stored_at
-    WHERE registration_expires_at IS NULL;
-   `,
+     WHERE registration_expires_at IS NULL;
+    `,
+    // v7: add first_seen_query_version + first_seen_events + first_seen_source_reason
+    // + registration_events so query-semantics changes invalidate stale first-seen
+    // facts and full provenance survives cache round-trips. Stale-version first-seen
+    // rows are back-filled as expired so they are refreshed under the current contract.
+    `
+    ALTER TABLE domain_age_cache ADD COLUMN first_seen_query_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE domain_age_cache ADD COLUMN first_seen_events TEXT NOT NULL DEFAULT '';
+    ALTER TABLE domain_age_cache ADD COLUMN first_seen_source_reason TEXT;
+    ALTER TABLE domain_age_cache ADD COLUMN registration_events TEXT NOT NULL DEFAULT '';
+    UPDATE domain_age_cache
+       SET first_seen_query_version = CASE WHEN first_seen_expires_at IS NULL THEN 0 ELSE 1 END,
+           first_seen_events = '',
+           first_seen_source_reason = NULL,
+           registration_events = ''
+     WHERE first_seen_query_version = 0;
+    `,
 ];
 
 export type CachedKeywordEntry = {
@@ -198,6 +219,13 @@ export type CachedDomainAgeEntry = {
   firstSeenError: string | null;
   firstSeenRequestCount: number;
   firstSeenHttpStatus: number | null;
+  // Query version of the first-seen fact (for invalidation on semantics change).
+  firstSeenQueryVersion: number;
+  // Raw first-seen/sourceReason for full provenance round-trip.
+  firstSeenEvents: string;
+  firstSeenSourceReason: string | null;
+  // Raw RDAP registration events for full provenance round-trip.
+  registrationEvents: string;
   // Aggregate error (union of both sources) for convenience; null when both are clean.
   error: string | null;
   storedAt: string;
@@ -517,21 +545,28 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
-        // domain_age_cache: only delete the row when BOTH per-source facts are
-        // stale (or the row has no per-source expiry yet — legacy v5 rows that
-        // must be refreshed under the per-source contract on next access).
-        // Using min() for cleanup would incorrectly purge a row when only one
-        // source is expired, losing the still-valid sibling fact.
+        // domain_age_cache lifecycle policy (avoid infinite growth):
+        // - Legacy v5 rows (no per-source expiry): always purge; refreshed under the
+        //   per-source contract on next access.
+        // - Both sources have expiry set: purge when BOTH are stale.
+        // - One source has NULL expiry (stable: unavailable/unconfigured first-seen
+        //   or error registration that doesn't self-renew): purge when the other
+        //   source's expiry is past. The stable fact can't change without a config
+        //   change, so there is no value in keeping the row beyond the sibling TTL.
+        // - Both NULL (rare: unavailable + never-fetched registration): stable
+        //   facts, bounded by domain count; NOT purged.
         const ageResult = this.db
           .prepare(
             `DELETE FROM domain_age_cache
-              WHERE registration_expires_at IS NOT NULL
-                AND first_seen_expires_at IS NOT NULL
-                AND registration_expires_at <= ?
-                AND first_seen_expires_at <= ?
-                 OR registration_expires_at IS NULL`,
+              WHERE registration_expires_at IS NULL AND first_seen_expires_at IS NULL
+                 OR registration_expires_at IS NOT NULL AND first_seen_expires_at IS NOT NULL
+                    AND registration_expires_at <= ? AND first_seen_expires_at <= ?
+                 OR registration_expires_at IS NULL AND first_seen_expires_at IS NOT NULL
+                    AND first_seen_expires_at <= ?
+                 OR registration_expires_at IS NOT NULL AND first_seen_expires_at IS NULL
+                    AND registration_expires_at <= ?`,
           )
-          .run(cutoff, cutoff);
+          .run(cutoff, cutoff, cutoff, cutoff);
         deleted += ageResult.changes;
       });
       purge();
@@ -787,6 +822,10 @@ export class CacheStore implements KeywordCache {
             first_seen_error: string | null;
             first_seen_request_count: number;
             first_seen_http_status: number | null;
+            first_seen_query_version: number;
+            first_seen_events: string;
+            first_seen_source_reason: string | null;
+            registration_events: string;
             error: string | null;
             stored_at: string;
             expires_at: string | null;
@@ -794,6 +833,10 @@ export class CacheStore implements KeywordCache {
           }
         | undefined;
       if (!row) return null;
+      // If the first-seen query version doesn't match the current contract, the
+      // stored first-seen fact is stale (e.g. exact vs domain match). Report it
+      // as expired so the caller re-fetches under the current semantics.
+      const firstSeenStale = row.first_seen_query_version !== FIRST_SEEN_QUERY_VERSION;
       return {
         domain: row.domain,
         registrationDate: row.registration_date,
@@ -809,10 +852,14 @@ export class CacheStore implements KeywordCache {
         firstSeenStatus: (row.first_seen_status as FirstSeenStatus | 'not_attempted'),
         firstSeenSource: row.first_seen_source,
         firstSeenFetchedAt: row.first_seen_fetched_at,
-        firstSeenExpiresAt: row.first_seen_expires_at,
+        firstSeenExpiresAt: firstSeenStale ? null : row.first_seen_expires_at,
         firstSeenError: row.first_seen_error,
         firstSeenRequestCount: row.first_seen_request_count,
         firstSeenHttpStatus: row.first_seen_http_status,
+        firstSeenQueryVersion: row.first_seen_query_version,
+        firstSeenEvents: row.first_seen_events,
+        firstSeenSourceReason: row.first_seen_source_reason,
+        registrationEvents: row.registration_events,
         error: row.error,
         storedAt: row.stored_at,
         expiresAt: row.expires_at ?? '',
@@ -837,14 +884,15 @@ export class CacheStore implements KeywordCache {
       const now = new Date().toISOString();
       this.db
         .prepare(
-          `INSERT OR REPLACE INTO domain_age_cache
+           `INSERT OR REPLACE INTO domain_age_cache
              (domain, registration_date, registration_status, registration_rule,
               registration_is_redacted, registration_fetched_at, registration_expires_at,
               registration_error, registration_request_count, registration_http_status,
               first_seen_date, first_seen_status, first_seen_source, first_seen_fetched_at,
               first_seen_expires_at, first_seen_error, first_seen_request_count,
-              first_seen_http_status, error, stored_at, expires_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              first_seen_http_status, first_seen_query_version, first_seen_events,
+              first_seen_source_reason, registration_events, error, stored_at, expires_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           domain,
@@ -865,6 +913,10 @@ export class CacheStore implements KeywordCache {
           entry.firstSeenError,
           entry.firstSeenRequestCount,
           entry.firstSeenHttpStatus,
+          entry.firstSeenQueryVersion,
+          entry.firstSeenEvents,
+          entry.firstSeenSourceReason,
+          entry.registrationEvents,
           entry.error,
           storedAt,
           expiresAt,

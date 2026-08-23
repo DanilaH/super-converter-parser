@@ -21,7 +21,7 @@
 // self-contained function driven by injected clients/cache/store so it is fully
 // mock-testable and surviveable across Ctrl+C/restart via checkpoints.
 import type { CacheStore, CachedDomainAgeEntry, DomainAgeTtlSettings } from '../cache/store.js';
-import { ttlMsForFirstSeenStatus, ttlMsForRdapStatus } from '../cache/store.js';
+import { ttlMsForFirstSeenStatus, ttlMsForRdapStatus, FIRST_SEEN_QUERY_VERSION } from '../cache/store.js';
 import type { RunStore } from '../db/store.js';
 import { ResearchError } from '../shared/errors.js';
 import type { ResearchConfig } from '../config/config.js';
@@ -32,6 +32,7 @@ import type {
   RdapClientConfig,
   RdapRegistrationResult,
   RdapRegistrationStatus,
+  RdapEventCandidate,
 } from '../rdap/types.js';
 import type {
   FirstSeenClient,
@@ -51,6 +52,7 @@ export type DomainAgeRecord = {
   registrationRule: string;
   registrationIsRedacted: boolean;
   registrationFetchedAt: string | null;
+  registrationSource: string;
   // Raw RDAP event candidates for auditability (source: parsed RDAP events).
   registrationEvents: Array<{ eventAction: string; eventDate: string | null }>;
   firstSeenDate: string | null;
@@ -59,6 +61,8 @@ export type DomainAgeRecord = {
   firstSeenFetchedAt: string | null;
   // Keyword provenance: which shortlisted keywords observed this domain.
   sourceKeywords: string[];
+  // Rank-level provenance: positions at which the domain was observed per keyword.
+  sourceRanks: Array<{ keyword: string; position: number }>;
   // Domain age in days from registration date to observedAt (null if no registration date).
   domainAgeDays: number | null;
   // When this record was observed/fetched.
@@ -89,6 +93,7 @@ export type DomainAgeProgress = {
 export type DomainAgeModuleOptions = {
   domains: string[];
   provenance?: Map<string, string[]>;
+  ranks?: Map<string, Array<{ keyword: string; position: number }>>;
   cache: CacheStore | null;
   rdap: RdapClient | null;
   firstSeen: FirstSeenClient | null;
@@ -205,7 +210,7 @@ function isFresh(expiresAt: string | null | undefined, nowMs: number): boolean {
 export async function runDomainAgeModule(
   opts: DomainAgeModuleOptions,
 ): Promise<Map<string, DomainAgeRecord>> {
-  const { cache, rdap, firstSeen, ttl, forceRefresh, store, runId, logger, signal, onProgress, now, provenance } =
+  const { cache, rdap, firstSeen, ttl, forceRefresh, store, runId, logger, signal, onProgress, now, provenance, ranks } =
     opts;
   const resume = opts.resume ?? false;
   const fsConfigured = !!firstSeen;
@@ -239,6 +244,7 @@ export async function runDomainAgeModule(
     }
 
     const prov = provenance?.get(domain) ?? [];
+    const domainRanks = ranks?.get(domain) ?? [];
 
     const resumed = completedItems.get(domain);
     if (resumed && resumed.payload) {
@@ -295,7 +301,7 @@ export async function runDomainAgeModule(
           : 'hit';
     }
 
-    const record = assembleRecord(domain, regResult, fsResult, prov, nowIso, cacheHit, cacheStatus, nowMs);
+    const record = assembleRecord(domain, regResult, fsResult, prov, domainRanks, nowIso, cacheHit, cacheStatus, nowMs);
 
     // Cache: write the full per-source record with independent expiries so a
     // fresh fact is preserved when its sibling is refreshed.
@@ -326,9 +332,9 @@ export async function runDomainAgeModule(
     onProgress?.({ stage: 'domain_age', completed, total: unique.length, errors, cacheHits });
   }
 
-  const freshCount = completed - cacheHits - errors;
+  const freshCount = completed - cacheHits;
   logger(
-    `Domain-age enrichment complete: ${cacheHits} cached, ${freshCount} fetched, ${errors} error(s) of ${completed} total.`,
+    `Domain-age enrichment complete: ${cacheHits} cached, ${freshCount} fetched (${errors} with errors) of ${completed} total.`,
   );
   return results;
 }
@@ -416,6 +422,12 @@ function makeUnavailable(domain: string, fetchedAt: string): FirstSeenResult {
 }
 
 function registrationFromCache(cached: CachedDomainAgeEntry): RdapRegistrationResult {
+  let events: RdapRegistrationResult['events'] = [];
+  try {
+    events = cached.registrationEvents ? JSON.parse(cached.registrationEvents) : [];
+  } catch {
+    events = [];
+  }
   return {
     domain: cached.domain,
     registrationDate: cached.registrationDate,
@@ -423,7 +435,7 @@ function registrationFromCache(cached: CachedDomainAgeEntry): RdapRegistrationRe
     error: cached.registrationError ?? null,
     source: 'rdap',
     rule: cached.registrationRule,
-    events: [],
+    events,
     isRedacted: cached.registrationIsRedacted,
     fetchedAt: cached.registrationFetchedAt ?? cached.storedAt,
     requestCount: cached.registrationRequestCount,
@@ -438,7 +450,7 @@ function firstSeenFromCache(cached: CachedDomainAgeEntry): FirstSeenResult {
     status: cached.firstSeenStatus as FirstSeenStatus,
     error: cached.firstSeenError ?? null,
     source: cached.firstSeenSource,
-    sourceReason: null,
+    sourceReason: cached.firstSeenSourceReason,
     fetchedAt: cached.firstSeenFetchedAt ?? cached.storedAt,
     requestCount: cached.firstSeenRequestCount,
     httpStatus: cached.firstSeenHttpStatus,
@@ -450,6 +462,7 @@ function assembleRecord(
   reg: RdapRegistrationResult,
   fs: FirstSeenResult | null,
   prov: string[],
+  domainRanks: Array<{ keyword: string; position: number }>,
   fetchedAt: string,
   cacheHit: boolean,
   cacheStatus: 'hit' | 'miss' | 'expired' | 'partial',
@@ -478,12 +491,14 @@ function assembleRecord(
     registrationRule: reg.rule,
     registrationIsRedacted: reg.isRedacted,
     registrationFetchedAt: reg.fetchedAt,
+    registrationSource: reg.source,
     registrationEvents: reg.events.map((e) => ({ eventAction: e.eventAction, eventDate: e.eventDate })),
     firstSeenDate: fs ? fs.firstSeenDate : null,
     firstSeenStatus: fs ? fs.status : 'unavailable',
     firstSeenSource: fs ? fs.source : 'unconfigured',
     firstSeenFetchedAt: fs ? fs.fetchedAt : null,
     sourceKeywords: prov,
+    sourceRanks: domainRanks,
     domainAgeDays,
     observedAt: fetchedAt,
     cacheHit,
@@ -548,6 +563,7 @@ function buildCachedEntry(
     registrationError: regError,
     registrationRequestCount: regFetched ? reg.requestCount : cached?.registrationRequestCount ?? reg.requestCount,
     registrationHttpStatus: regFetched ? reg.httpStatus : cached?.registrationHttpStatus ?? reg.httpStatus,
+    registrationEvents: JSON.stringify(reg.events),
     firstSeenDate: fs ? fs.firstSeenDate : null,
     firstSeenStatus: fsStatus,
     firstSeenSource: fs ? fs.source : cached?.firstSeenSource ?? 'unconfigured',
@@ -556,6 +572,9 @@ function buildCachedEntry(
     firstSeenError: fsError,
     firstSeenRequestCount: fsFetched ? (fs ? fs.requestCount : 0) : cached?.firstSeenRequestCount ?? 0,
     firstSeenHttpStatus: fsFetched ? (fs ? fs.httpStatus : null) : cached?.firstSeenHttpStatus ?? null,
+    firstSeenQueryVersion: FIRST_SEEN_QUERY_VERSION,
+    firstSeenEvents: '',
+    firstSeenSourceReason: fs ? fs.sourceReason : null,
     error: combinedError(reg, fs),
   };
 }
@@ -589,6 +608,7 @@ function checkpoint(
     cacheStatus,
     error,
     fetchedAt: record?.fetchedAt ?? new Date().toISOString(),
+    requestCount: (record?.registrationRequestCount ?? 0) + (record?.firstSeenRequestCount ?? 0),
     payload: record ? JSON.stringify(record) : null,
   });
 }
@@ -597,6 +617,7 @@ export const DOMAIN_AGE_CSV_HEADERS = [
   'domain',
   'registration_date',
   'registration_status',
+  'registration_source',
   'registration_is_redacted',
   'registration_rule',
   'registration_fetched_at',
@@ -615,6 +636,7 @@ export const DOMAIN_AGE_CSV_HEADERS = [
   'domain_age_days',
   'observed_at',
   'source_keywords',
+  'source_ranks',
   'cache_hit',
   'cache_status',
   'fetched_at',
@@ -628,6 +650,7 @@ export function renderDomainAgeCsv(records: DomainAgeRecord[]): string {
       r.domain,
       r.registrationDate ?? '',
       r.registrationStatus,
+      r.registrationSource,
       r.registrationIsRedacted ? 'true' : 'false',
       r.registrationRule,
       r.registrationFetchedAt ?? '',
@@ -646,6 +669,7 @@ export function renderDomainAgeCsv(records: DomainAgeRecord[]): string {
       r.domainAgeDays !== null && r.domainAgeDays !== undefined ? String(r.domainAgeDays) : '',
       r.observedAt,
       (r.sourceKeywords ?? []).join(','),
+      (r.sourceRanks ?? []).map((rank) => `${rank.keyword}:${rank.position}`).join('|'),
       r.cacheHit ? 'true' : 'false',
       r.cacheStatus,
       r.fetchedAt,

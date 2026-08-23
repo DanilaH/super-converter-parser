@@ -115,7 +115,7 @@ test('429 then 200 succeeds after retry', async () => {
   assert.equal(result.requestCount, 2);
 });
 
-test('500 exhausts retries and throws RDAP_ERROR', async () => {
+test('500 exhausts retries and returns RDAP_ERROR', async () => {
   let calls = 0;
   const config = baseConfig(
     fakeFetch(COM_BOOTSTRAP, () => {
@@ -126,24 +126,22 @@ test('500 exhausts retries and throws RDAP_ERROR', async () => {
   config.maxAttempts = 2;
   config.baseDelayMs = 0;
   config.maxDelayMs = 1;
-  await assert.rejects(
-    createRdapClient(config)('example.com'),
-    (e: unknown) => e instanceof ResearchError && e.code === 'RDAP_ERROR',
-  );
+  const result = await createRdapClient(config)('example.com');
+  assert.equal(result.status, 'error');
+  assert.match(result.error ?? '', /RDAP_ERROR/);
   assert.equal(calls, 2);
 });
 
-test('429 exhausts retries and throws RDAP_RATE_LIMIT', async () => {
+test('429 exhausts retries and returns RDAP_RATE_LIMIT error', async () => {
   const config = baseConfig(
     fakeFetch(COM_BOOTSTRAP, () => resp(429, {}, { 'Retry-After': '0' })),
   );
   config.maxAttempts = 2;
   config.baseDelayMs = 0;
   config.maxDelayMs = 1;
-  await assert.rejects(
-    createRdapClient(config)('example.com'),
-    (e: unknown) => e instanceof ResearchError && e.code === 'RDAP_RATE_LIMIT',
-  );
+  const result = await createRdapClient(config)('example.com');
+  assert.equal(result.status, 'error');
+  assert.match(result.error ?? '', /RDAP_RATE_LIMIT/);
 });
 
 test('network failure is an error, not unsupported', async () => {

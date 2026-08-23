@@ -842,6 +842,10 @@ test('domain_age_cache roundtrip preserves per-source registration/first-seen da
       firstSeenError: null,
       firstSeenRequestCount: 1,
       firstSeenHttpStatus: 200,
+      firstSeenQueryVersion: 2,
+      firstSeenEvents: '',
+      firstSeenSourceReason: null,
+      registrationEvents: '[]',
       error: null,
     },
     storedAt,
@@ -857,6 +861,10 @@ test('domain_age_cache roundtrip preserves per-source registration/first-seen da
   assert.equal(loaded?.firstSeenSource, 'wayback');
   assert.equal(loaded?.firstSeenExpiresAt, fsExpires);
   assert.equal(loaded?.registrationIsRedacted, false);
+  assert.equal(loaded?.firstSeenQueryVersion, 2);
+  assert.equal(loaded?.firstSeenEvents, '');
+  assert.equal(loaded?.firstSeenSourceReason, null);
+  assert.equal(loaded?.registrationEvents, '[]');
   // Row-level expiry is the min of the independent per-source expiries.
   assert.equal(loaded?.expiresAt, fsExpires);
 
@@ -881,6 +889,10 @@ test('domain_age_cache roundtrip preserves per-source registration/first-seen da
       firstSeenError: null,
       firstSeenRequestCount: 0,
       firstSeenHttpStatus: null,
+      firstSeenQueryVersion: 2,
+      firstSeenEvents: '',
+      firstSeenSourceReason: null,
+      registrationEvents: '[]',
       error: 'registration event redacted or absent',
     },
     storedAt,
@@ -951,6 +963,10 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
       firstSeenError: 'timeout',
       firstSeenRequestCount: 1,
       firstSeenHttpStatus: 503,
+      firstSeenQueryVersion: 2,
+      firstSeenEvents: '',
+      firstSeenSourceReason: null,
+      registrationEvents: '[]',
       error: 'timeout',
     },
     '2020-01-01T00:00:00.000Z',
