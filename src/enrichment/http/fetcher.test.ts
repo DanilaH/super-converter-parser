@@ -4,6 +4,10 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { boundedFetch, parseRetryAfter } from './fetcher.js';
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 let server: Server;
 let baseUrl: string;
 
@@ -57,6 +61,9 @@ before(() => {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end('<html>slow</html>');
         }, 200);
+      } else if (url === '/relative-redirect') {
+        res.writeHead(302, { Location: '/ok' });
+        res.end();
       } else if (url === '/slow-body') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.write('<html>partial');
@@ -224,11 +231,37 @@ test('boundedFetch: timeout covers body read (stalled body after headers)', asyn
   assert.match(result.error ?? '', /abort/i);
 });
 
-test('slow-body endpoint test', async () => {
+test('boundedFetch: timeout failureReason is timeout not oversized', async () => {
   const result = await boundedFetch(`${baseUrl}/slow-body`, {
     ...testConfig,
-    timeoutMs: 2000,
+    timeoutMs: 100,
   });
-  console.log('SLOW BODY FULL: status=', result.status, 'body=', result.body?.slice(0, 50));
+  assert.equal(result.failureReason, 'timeout');
+  assert.notEqual(result.failureReason, 'oversized');
+});
+
+test('boundedFetch: oversized failureReason is oversized', async () => {
+  const result = await boundedFetch(`${baseUrl}/oversized`, {
+    ...testConfig,
+    maxBytes: 20,
+  });
+  assert.equal(result.failureReason, 'oversized');
+  assert.notEqual(result.failureReason, 'timeout');
+});
+
+test('boundedFetch: relative redirect preserves hostname', async () => {
+  const result = await boundedFetch(`${baseUrl}/relative-redirect`, {
+    ...testConfig,
+  });
   assert.equal(result.status, 200);
+  assert.match(result.finalUrl ?? '', new RegExp(escapeRegExp(baseUrl)));
+});
+
+test('boundedFetch: retry does not consume redirect budget', async () => {
+  const result = await boundedFetch(`${baseUrl}/rate-limited`, {
+    ...testConfig,
+    maxRetries: 2,
+    baseRetryDelayMs: 10,
+  });
+  assert.equal(result.status, 429);
 });

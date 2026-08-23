@@ -1,4 +1,5 @@
-import { checkUrlAllowed, buildPinnedUrl, getValidatedHostHeader } from './ssrf.js';
+import { Agent } from 'undici';
+import { isPrivateIp } from './ssrf.js';
 
 export type SsrfChecker = (url: string) => Promise<{ allowed: boolean; reason?: string; ip?: string }>;
 
@@ -29,6 +30,8 @@ export const DEFAULT_FETCHER_CONFIG: FetcherConfig = {
   baseRetryDelayMs: 1000,
 };
 
+export type FetchFailureReason = 'timeout' | 'oversized' | 'read_error' | 'network' | 'blocked' | 'rate_limited' | 'too_many_redirects';
+
 export type FetchResult = {
   status: number;
   contentType: string | null;
@@ -39,6 +42,7 @@ export type FetchResult = {
   aborted: boolean;
   retryAfter: string | null;
   bodyError: boolean;
+  failureReason: FetchFailureReason | null;
 };
 
 type DomainState = {
@@ -83,6 +87,82 @@ export function parseRetryAfter(header: string | null): number | null {
   return null;
 }
 
+class PinnedAgent extends Agent {
+  constructor(validatedIp: string, servername: string, opts: Agent.Options = {}) {
+    super({
+      ...opts,
+      connect: {
+        host: validatedIp,
+        servername,
+      },
+    });
+  }
+}
+
+async function readBody(
+  response: Response,
+  maxBytes: number,
+  controller: AbortController,
+): Promise<{ content: string | null; error: string | null; aborted: boolean; bodyError: boolean; failureReason: FetchFailureReason | null }> {
+  if (!response.body) {
+    try {
+      const text = await response.text();
+      if (text.length > maxBytes) {
+        return { content: null, error: `Body exceeded ${maxBytes} bytes`, aborted: true, bodyError: true, failureReason: 'oversized' };
+      }
+      return { content: text, error: null, aborted: false, bodyError: false, failureReason: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isTimeout = message.includes('abort');
+      return {
+        content: null,
+        error: `Failed to read response body: ${message}`,
+        aborted: isTimeout,
+        bodyError: true,
+        failureReason: isTimeout ? 'timeout' : 'read_error',
+      };
+    }
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let totalBytes = 0;
+  let result = '';
+
+  const abortPromise = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new Error('abort')), { once: true });
+  });
+
+  try {
+    while (true) {
+      const readPromise = reader.read();
+      const { done, value } = await Promise.race([readPromise, abortPromise]);
+      if (done) break;
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        return { content: null, error: `Body exceeded ${maxBytes} bytes`, aborted: true, bodyError: true, failureReason: 'oversized' };
+      }
+
+      result += decoder.decode(value, { stream: true });
+    }
+
+    result += decoder.decode();
+    return { content: result, error: null, aborted: false, bodyError: false, failureReason: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isTimeout = message.includes('abort');
+    return {
+      content: null,
+      error: message,
+      aborted: isTimeout,
+      bodyError: true,
+      failureReason: isTimeout ? 'timeout' : 'read_error',
+    };
+  }
+}
+
 export async function boundedFetch(
   url: string,
   config: Partial<FetcherConfig> = {},
@@ -90,8 +170,9 @@ export async function boundedFetch(
   const cfg = { ...DEFAULT_FETCHER_CONFIG, ...config };
   const ssrfCheck = cfg.ssrfChecker ?? checkUrlAllowed;
   const redirectChain: string[] = [];
-  let currentUrl = url;
+  let logicalUrl = url;
   let retryCount = 0;
+  let retryRedirectBudget = 0;
 
   const ssrfResult = await ssrfCheck(url);
   if (!ssrfResult.allowed) {
@@ -105,18 +186,18 @@ export async function boundedFetch(
       aborted: false,
       retryAfter: null,
       bodyError: false,
+      failureReason: 'blocked',
     };
   }
 
-  let pinnedUrl = url;
-  let hostHeader = getValidatedHostHeader(url);
-  if (ssrfResult.ip) {
-    pinnedUrl = buildPinnedUrl(url, ssrfResult.ip);
-    hostHeader = getValidatedHostHeader(url);
+  let validatedIp: string | undefined = ssrfResult.ip;
+  let dispatcher: PinnedAgent | undefined;
+  if (validatedIp) {
+    dispatcher = new PinnedAgent(validatedIp, new URL(url).hostname);
   }
 
   for (let redirect = 0; redirect <= cfg.maxRedirects; redirect++) {
-    const domain = getDomain(pinnedUrl);
+    const domain = getDomain(logicalUrl);
     if (domain) {
       await applyDomainDelay(domain, cfg);
     }
@@ -126,16 +207,16 @@ export async function boundedFetch(
 
     let response: Response;
     try {
-      response = await fetch(pinnedUrl, {
+      response = await fetch(logicalUrl, {
         method: 'GET',
         headers: {
           'User-Agent': cfg.userAgent,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.5',
-          ...(hostHeader ? { 'Host': hostHeader } : {}),
         },
         redirect: 'manual',
         signal: controller.signal,
+        ...(dispatcher ? { dispatcher } : {}),
       });
     } catch (error) {
       clearTimeout(timeout);
@@ -143,13 +224,14 @@ export async function boundedFetch(
       return {
         status: 0,
         contentType: null,
-        finalUrl: pinnedUrl,
+        finalUrl: logicalUrl,
         redirectChain,
         body: null,
         error: message,
         aborted: message.includes('abort'),
         retryAfter: null,
         bodyError: false,
+        failureReason: message.includes('abort') ? 'timeout' : 'network',
       };
     }
 
@@ -164,31 +246,33 @@ export async function boundedFetch(
         return {
           status,
           contentType,
-          finalUrl: pinnedUrl,
+          finalUrl: logicalUrl,
           redirectChain,
           body: null,
           error: 'Redirect without Location header',
           aborted: false,
           retryAfter,
           bodyError: false,
+          failureReason: 'network',
         };
       }
 
       let nextUrl: string;
       try {
-        nextUrl = new URL(location, pinnedUrl).href;
+        nextUrl = new URL(location, logicalUrl).href;
       } catch {
         clearTimeout(timeout);
         return {
           status,
           contentType,
-          finalUrl: pinnedUrl,
+          finalUrl: logicalUrl,
           redirectChain,
           body: null,
           error: `Invalid redirect URL: ${location}`,
           aborted: false,
           retryAfter,
           bodyError: false,
+          failureReason: 'network',
         };
       }
 
@@ -198,46 +282,47 @@ export async function boundedFetch(
         return {
           status,
           contentType,
-          finalUrl: pinnedUrl,
+          finalUrl: logicalUrl,
           redirectChain,
           body: null,
           error: `SSRF blocked redirect: ${targetSsrf.reason}`,
           aborted: false,
           retryAfter,
           bodyError: false,
+          failureReason: 'blocked',
         };
       }
 
       clearTimeout(timeout);
-      pinnedUrl = nextUrl;
-      hostHeader = getValidatedHostHeader(nextUrl);
-      if (targetSsrf.ip) {
-        pinnedUrl = buildPinnedUrl(nextUrl, targetSsrf.ip);
-        hostHeader = getValidatedHostHeader(nextUrl);
+      logicalUrl = nextUrl;
+      redirectChain.push(logicalUrl);
+      if (targetSsrf.ip && targetSsrf.ip !== validatedIp) {
+        validatedIp = targetSsrf.ip;
+        dispatcher = new PinnedAgent(validatedIp, new URL(nextUrl).hostname);
       }
-      redirectChain.push(currentUrl);
-      currentUrl = pinnedUrl;
       continue;
     }
 
     if (status === 429 || (status === 503 && retryAfter)) {
       clearTimeout(timeout);
-      if (retryCount < cfg.maxRetries) {
+      if (retryCount < cfg.maxRetries && retryRedirectBudget < cfg.maxRedirects) {
         const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retryCount + 1));
         retryCount++;
+        retryRedirectBudget++;
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
       return {
         status,
         contentType,
-        finalUrl: currentUrl,
+        finalUrl: logicalUrl,
         redirectChain,
         body: null,
         error: `Rate limited: ${status}`,
         aborted: false,
         retryAfter,
         bodyError: false,
+        failureReason: 'rate_limited',
       };
     }
 
@@ -248,84 +333,77 @@ export async function boundedFetch(
     return {
       status,
       contentType,
-      finalUrl: currentUrl,
+      finalUrl: logicalUrl,
       redirectChain,
       body: bodyResult.content,
       error: bodyResult.error,
       aborted: bodyResult.aborted,
       retryAfter,
       bodyError: bodyResult.bodyError,
+      failureReason: bodyResult.failureReason,
     };
   }
 
   return {
     status: 0,
     contentType: null,
-    finalUrl: currentUrl,
+    finalUrl: logicalUrl,
     redirectChain,
     body: null,
     error: `Too many redirects (max ${cfg.maxRedirects})`,
     aborted: false,
     retryAfter: null,
     bodyError: false,
+    failureReason: 'too_many_redirects',
   };
 }
 
-type BodyResult = {
-  content: string | null;
-  error: string | null;
-  aborted: boolean;
-  bodyError: boolean;
-};
-
-async function readBody(response: Response, maxBytes: number, controller: AbortController): Promise<BodyResult> {
-  if (!response.body) {
-    try {
-      const text = await response.text();
-      if (text.length > maxBytes) {
-        return { content: null, error: `Body exceeded ${maxBytes} bytes`, aborted: true, bodyError: true };
-      }
-      return { content: text, error: null, aborted: false, bodyError: false };
-    } catch (error) {
-      return { content: null, error: `Failed to read response body: ${error instanceof Error ? error.message : String(error)}`, aborted: false, bodyError: true };
-    }
+export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; reason?: string; ip?: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { allowed: false, reason: 'Invalid URL' };
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: false });
-  let totalBytes = 0;
-  let result = '';
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { allowed: false, reason: `Disallowed scheme: ${parsed.protocol}` };
+  }
+
+  const hostname = parsed.hostname;
+  if (!hostname) {
+    return { allowed: false, reason: 'Missing hostname' };
+  }
+
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    return { allowed: false, reason: 'Blocked hostname: localhost', ip: '127.0.0.1' };
+  }
+
+  const ipRegex = /^\[?([0-9a-fA-F:.]+)\]?$/;
+  const ipMatch = hostname.match(ipRegex);
+  if (ipMatch) {
+    const ip = ipMatch[1]!;
+    return isPrivateIp(ip)
+      ? { allowed: false, reason: `Blocked IP: ${ip}`, ip }
+      : { allowed: true, ip };
+  }
 
   try {
-    while (true) {
-      const readPromise = reader.read();
-      const abortPromise = new Promise<never>((_, reject) => {
-        const onAbort = (): void => {
-          reject(new Error('abort'));
-        };
-        if (controller.signal.aborted) {
-          onAbort();
-          return;
-        }
-        controller.signal.addEventListener('abort', onAbort, { once: true });
-      });
-
-      const { done, value } = await Promise.race([readPromise, abortPromise]);
-      if (done) break;
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel();
-        return { content: null, error: `Body exceeded ${maxBytes} bytes`, aborted: true, bodyError: true };
-      }
-
-      result += decoder.decode(value, { stream: true });
+    const { lookup } = await import('node:dns/promises');
+    const addresses = await lookup(hostname, { all: true });
+    const blocked = addresses.find((a) => isPrivateIp(a.address));
+    if (blocked) {
+      return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address };
     }
-
-    result += decoder.decode();
-    return { content: result, error: null, aborted: false, bodyError: false };
+    if (addresses.length === 0) {
+      return { allowed: false, reason: 'No addresses resolved' };
+    }
+    const first = addresses[0]!;
+    return {
+      allowed: true,
+      ip: first.address,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { content: null, error: message, aborted: message.includes('abort'), bodyError: true };
+    return { allowed: false, reason: `DNS resolution failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

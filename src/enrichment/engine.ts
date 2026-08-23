@@ -901,8 +901,7 @@ async function runPagesModule(
     if (existing && existing.status === 'completed' && existing.data) {
       try {
         const parsed = JSON.parse(existing.data) as PageRecord;
-        pages.push({ ...parsed, cacheStatus: 'hit' });
-        cacheHits++;
+        pages.push({ ...parsed, cacheStatus: 'none' });
         continue;
       } catch {
         // fall through to re-fetch
@@ -1021,6 +1020,7 @@ function buildPageRecord(
   const now = new Date().toISOString();
 
   if (fetchResult.error && fetchResult.status === 0) {
+    const isTimeout = fetchResult.failureReason === 'timeout';
     return {
       url,
       finalUrl: url,
@@ -1028,7 +1028,7 @@ function buildPageRecord(
       redirectChain: [],
       httpStatus: 0,
       contentType: null,
-      fetchStatus: fetchResult.aborted ? 'timeout' : 'blocked',
+      fetchStatus: isTimeout ? 'timeout' : (fetchResult.failureReason === 'blocked' ? 'blocked' : 'error'),
       fetchError: fetchResult.error,
       fetchedAt: now,
       cacheStatus: 'none',
@@ -1046,6 +1046,7 @@ function buildPageRecord(
   }
 
   if (fetchResult.bodyError || !fetchResult.body) {
+    const isTimeout = fetchResult.failureReason === 'timeout';
     return {
       url,
       finalUrl: fetchResult.finalUrl,
@@ -1053,7 +1054,7 @@ function buildPageRecord(
       redirectChain: fetchResult.redirectChain,
       httpStatus: fetchResult.status,
       contentType: fetchResult.contentType,
-      fetchStatus: fetchResult.aborted ? 'oversized' : 'error',
+      fetchStatus: isTimeout ? 'timeout' : (fetchResult.failureReason === 'oversized' ? 'oversized' : 'error'),
       fetchError: fetchResult.error,
       fetchedAt: now,
       cacheStatus: 'none',
@@ -1256,7 +1257,7 @@ async function runSiteStructureModule(
     if (existing && existing.status === 'completed' && existing.data) {
       try {
         const parsed = JSON.parse(existing.data) as SiteStructureRecord;
-        records.push({ ...parsed, cacheStatus: 'hit' });
+        records.push({ ...parsed, cacheStatus: 'none' });
         continue;
       } catch {
         // fall through to re-fetch
@@ -1371,7 +1372,7 @@ async function inspectDomain(
 
   const homepageResult = await boundedFetch(`https://${domain}/`, fetcherCfg);
   const homepageStatus: SiteStructureRecord['homepageStatus'] = homepageResult.error
-    ? (homepageResult.aborted ? 'timeout' : 'error')
+    ? (homepageResult.failureReason === 'timeout' ? 'timeout' : 'error')
     : 'ok';
   const homepageHttpStatus = homepageResult.status || null;
 
@@ -1387,7 +1388,7 @@ async function inspectDomain(
   let sitemapUrlsFromRobots: string[] = [];
 
   if (robotsResult.error) {
-    robotsStatus = robotsResult.aborted ? 'timeout' : 'error';
+    robotsStatus = robotsResult.failureReason === 'timeout' ? 'timeout' : 'error';
     errors.push({ url: robotsUrl, error: robotsResult.error });
   } else if (robotsResult.status === 404) {
     robotsStatus = 'not_found';
@@ -1502,9 +1503,9 @@ function rebuildPagesFromTargets(enrichmentStore: RunStore, enrichmentId: string
     if (t.status === 'completed' && t.data) {
       try {
         const parsed = JSON.parse(t.data) as PageRecord;
-        rebuiltPages.push({ ...parsed, cacheStatus: 'hit' });
+        rebuiltPages.push({ ...parsed, cacheStatus: 'none' });
       } catch {
-        // skip corrupted target
+        enrichmentStore.upsertPageTarget(enrichmentId, { url: t.url, status: 'error', error: 'corrupted checkpoint data' });
       }
     } else if (t.status === 'error' && t.error) {
       rebuiltPages.push({
@@ -1541,9 +1542,9 @@ function rebuildSiteStructureFromTargets(enrichmentStore: RunStore, enrichmentId
     if (t.status === 'completed' && t.data) {
       try {
         const parsed = JSON.parse(t.data) as SiteStructureRecord;
-        rebuiltRecords.push({ ...parsed, cacheStatus: 'hit' });
+        rebuiltRecords.push({ ...parsed, cacheStatus: 'none' });
       } catch {
-        // skip corrupted target
+        enrichmentStore.upsertSiteStructureTarget(enrichmentId, { domain: t.domain, status: 'error', error: 'corrupted checkpoint data' });
       }
     }
   }

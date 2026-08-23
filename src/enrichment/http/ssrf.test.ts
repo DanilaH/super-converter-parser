@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPrivateIp, checkUrlAllowed, buildPinnedUrl, getValidatedHostHeader } from './ssrf.js';
+import { isPrivateIp } from './ssrf.js';
+import { checkUrlAllowed } from './fetcher.js';
 
 test('isPrivateIp: detects RFC1918 IPv4 ranges', () => {
   assert.equal(isPrivateIp('10.0.0.1'), true);
@@ -53,7 +54,7 @@ test('isPrivateIp: detects metadata IPs', () => {
 test('isPrivateIp: allows public IPs', () => {
   assert.equal(isPrivateIp('8.8.8.8'), false);
   assert.equal(isPrivateIp('1.1.1.1'), false);
-  assert.equal(isPrivateIp('203.0.113.1'), false);
+  assert.equal(isPrivateIp('203.0.114.1'), false);
   assert.equal(isPrivateIp('2001:4860:4860::8888'), false);
 });
 
@@ -98,26 +99,11 @@ test('checkUrlAllowed: allows public IP literals', async () => {
   assert.equal(result.allowed, true);
 });
 
-test('checkUrlAllowed: returns all validated IPs', async () => {
-  const result = await checkUrlAllowed('http://127.0.0.1/path');
-  assert.equal(result.allowed, false);
-  assert.ok(result.reason);
-});
-
-test('buildPinnedUrl: replaces hostname with validated IPv4', () => {
-  const pinned = buildPinnedUrl('http://example.com/page', '93.184.216.34');
-  assert.equal(pinned, 'http://93.184.216.34/page');
-});
-
-test('buildPinnedUrl: replaces hostname with validated IPv6', () => {
-  const pinned = buildPinnedUrl('http://example.com/page', '2001:db8::1');
-  assert.equal(pinned, 'http://[2001:db8::1]/page');
-});
-
-test('getValidatedHostHeader: extracts host with port', () => {
-  assert.equal(getValidatedHostHeader('http://example.com:8080/path'), 'example.com:8080');
-});
-
-test('getValidatedHostHeader: extracts host without port', () => {
-  assert.equal(getValidatedHostHeader('https://example.com/path'), 'example.com');
+test('isPrivateIp: blocks reserved/documentation ranges', () => {
+  assert.equal(isPrivateIp('192.0.2.1'), true);
+  assert.equal(isPrivateIp('198.51.100.1'), true);
+  assert.equal(isPrivateIp('203.0.113.1'), true);
+  assert.equal(isPrivateIp('198.18.0.1'), true);
+  assert.equal(isPrivateIp('224.0.0.1'), true);
+  assert.equal(isPrivateIp('240.0.0.1'), true);
 });
