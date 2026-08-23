@@ -94,28 +94,62 @@ export function parseRetryAfter(header: string | null): number | null {
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
+  ca?: string;
 }
 
 function createPinnedAgent(ctx: PinnedConnectContext): Agent {
   const connector = (opts: any, callback: (err: Error | null, socket?: Socket) => void) => {
     const port = opts.port || (opts.protocol === 'https:' ? 443 : 80);
+    let socket: Socket | undefined;
+    let callbackCalled = false;
+
+    const cleanup = () => {
+      if (socket) {
+        socket.removeAllListeners('connect');
+        socket.removeAllListeners('secureConnect');
+        socket.removeAllListeners('error');
+      }
+    };
+
+    const safeCallback = (err: Error | null, sock?: Socket) => {
+      if (callbackCalled) return;
+      callbackCalled = true;
+      cleanup();
+      callback(err, sock);
+    };
 
     if (opts.protocol === 'https:') {
-      const socket = tlsConnect({
+      socket = tlsConnect({
         host: ctx.validatedIp,
         port,
         servername: ctx.servername,
         rejectUnauthorized: opts.rejectUnauthorized,
+        ...(ctx.ca ? { ca: ctx.ca } : {}),
       });
-      socket.once('secureConnect', () => callback(null, socket));
-      socket.once('error', (err: Error) => callback(err));
+      socket.once('secureConnect', () => safeCallback(null, socket));
+      socket.once('error', (err: Error) => safeCallback(err));
     } else {
-      const socket = netConnect({
+      socket = netConnect({
         host: ctx.validatedIp,
         port,
       });
-      socket.once('connect', () => callback(null, socket));
-      socket.once('error', (err: Error) => callback(err));
+      socket.once('connect', () => safeCallback(null, socket));
+      socket.once('error', (err: Error) => safeCallback(err));
+    }
+
+    if (opts.signal) {
+      const onAbort = () => {
+        if (socket) {
+          socket.destroy();
+          socket = undefined;
+        }
+        safeCallback(new Error('abort'));
+      };
+      if (opts.signal.aborted) {
+        onAbort();
+      } else {
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
     }
   };
 
@@ -136,7 +170,7 @@ async function readBody(
       return { content: text, error: null, aborted: false, bodyError: false, failureReason: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const isTimeout = message.includes('abort');
+      const isTimeout = controller.signal.aborted || message.includes('abort');
       return {
         content: null,
         error: `Failed to read response body: ${message}`,
@@ -175,7 +209,7 @@ async function readBody(
     return { content: result, error: null, aborted: false, bodyError: false, failureReason: null };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const isTimeout = message.includes('abort');
+    const isTimeout = controller.signal.aborted || message.includes('abort');
     return {
       content: null,
       error: message,
@@ -188,6 +222,33 @@ async function readBody(
   }
 }
 
+async function drainBody(response: Response, controller: AbortController): Promise<void> {
+  try {
+    if (response.body) {
+      const reader = response.body.getReader();
+      const abortPromise = new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      const readerPromise = (async () => {
+        try {
+          while (true) {
+            const { done } = await reader.read();
+            if (done) break;
+          }
+        } catch {
+          // ignore
+        }
+      })();
+      await Promise.race([readerPromise, abortPromise]);
+      await response.body.cancel().catch(() => {});
+    } else {
+      await response.text().catch(() => {});
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export async function boundedFetch(
   url: string,
   config: Partial<FetcherConfig> = {},
@@ -196,7 +257,6 @@ export async function boundedFetch(
   const ssrfCheck = cfg.ssrfChecker ?? checkUrlAllowed;
   const redirectChain: string[] = [];
   let logicalUrl = url;
-  let retryCount = 0;
 
   const ssrfResult = await ssrfCheck(url);
   if (!ssrfResult.allowed) {
@@ -231,12 +291,14 @@ export async function boundedFetch(
         await applyDomainDelay(domain, cfg);
       }
 
-      let retryAfter: string | null = null;
       let response: Response | undefined;
+      let retryAfter: string | null = null;
+      let attemptController: AbortController | undefined;
+      let attemptTimer: ReturnType<typeof setTimeout> | undefined;
 
       for (let retry = 0; retry <= cfg.maxRetries; retry++) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs);
+        attemptController = new AbortController();
+        attemptTimer = setTimeout(() => attemptController!.abort(), cfg.timeoutMs);
 
         try {
           response = await undiciFetch(logicalUrl, {
@@ -247,11 +309,11 @@ export async function boundedFetch(
               'Accept-Language': 'en-US,en;q=0.5',
             },
             redirect: 'manual',
-            signal: controller.signal,
+            signal: attemptController.signal,
             ...(dispatcher ? { dispatcher } : {}),
           });
         } catch (error) {
-          clearTimeout(timeout);
+          clearTimeout(attemptTimer);
           const message = error instanceof Error ? error.message : String(error);
           if (retry < cfg.maxRetries && message.includes('abort')) {
             await new Promise((resolve) => setTimeout(resolve, cfg.baseRetryDelayMs * (retry + 1)));
@@ -276,11 +338,10 @@ export async function boundedFetch(
         retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
         if (status === 429 || (status === 503 && retryAfter)) {
-          clearTimeout(timeout);
+          clearTimeout(attemptTimer);
           if (retry < cfg.maxRetries) {
             const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retry + 1));
-            retryCount++;
-            await drainBody(response);
+            await drainBody(response, attemptController);
             await new Promise((resolve) => setTimeout(resolve, delayMs));
             continue;
           }
@@ -302,6 +363,7 @@ export async function boundedFetch(
       }
 
       if (!response) {
+        if (attemptTimer) clearTimeout(attemptTimer);
         return {
           status: 0,
           contentType: null,
@@ -321,6 +383,7 @@ export async function boundedFetch(
       retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
       if (status >= 300 && status < 400) {
+        if (attemptTimer) clearTimeout(attemptTimer);
         const location = response.headers.get('location');
         if (!location) {
           return {
@@ -382,11 +445,12 @@ export async function boundedFetch(
           cleanupAgents.push(dispatcher);
         }
 
-        await drainBody(response);
+        await drainBody(response, attemptController);
         continue;
       }
 
-      const bodyResult = await readBody(response, cfg.maxBytes, new AbortController());
+      const bodyResult = await readBody(response, cfg.maxBytes, attemptController!);
+      if (attemptTimer) clearTimeout(attemptTimer);
 
       return {
         status,
@@ -415,21 +479,7 @@ export async function boundedFetch(
       failureReason: 'too_many_redirects',
     };
   } finally {
-    for (const agent of cleanupAgents) {
-      agent.close().catch(() => {});
-    }
-  }
-}
-
-async function drainBody(response: Response): Promise<void> {
-  try {
-    if (response.body) {
-      await response.body.cancel();
-    } else {
-      await response.text().catch(() => {});
-    }
-  } catch {
-    // ignore
+    await Promise.allSettled(cleanupAgents.map((a) => a.close()));
   }
 }
 

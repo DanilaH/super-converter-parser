@@ -258,12 +258,42 @@ test('boundedFetch: relative redirect preserves hostname', async () => {
 });
 
 test('boundedFetch: retry does not consume redirect budget', async () => {
-  const result = await boundedFetch(`${baseUrl}/rate-limited`, {
-    ...testConfig,
-    maxRetries: 2,
-    baseRetryDelayMs: 10,
+  const http = await import('node:http');
+  let requestCount = 0;
+  const server = http.createServer((req, res) => {
+    requestCount++;
+    if (req.url === '/retry-redirect') {
+      if (requestCount <= 2) {
+        res.writeHead(429, { 'Retry-After': '0' });
+        res.end();
+      } else {
+        res.writeHead(302, { Location: '/final' });
+        res.end();
+      }
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>final</body></html>');
+    }
   });
-  assert.equal(result.status, 429);
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const result = await boundedFetch(`http://127.0.0.1:${serverPort}/retry-redirect`, {
+      ...testConfig,
+      maxRetries: 3,
+      baseRetryDelayMs: 10,
+    });
+
+    assert.equal(result.status, 200, 'Should succeed after retries + redirect');
+    assert.match(result.body ?? '', /final/);
+    assert.equal(result.finalUrl, `http://127.0.0.1:${serverPort}/final`);
+    assert.ok(requestCount >= 3, 'Should have retried before redirect');
+  } finally {
+    server.close();
+  }
 });
 
 test('boundedFetch: pinned transport preserves hostname and SNI', async () => {
@@ -364,6 +394,40 @@ test('boundedFetch: pinned transport with cross-host redirect', async () => {
     assert.equal(result.status, 200);
     assert.match(result.body ?? '', /cross-host/);
     assert.equal(result.finalUrl, `http://other.example.com:${serverPort}/destination`);
+  } finally {
+    server.close();
+  }
+});
+
+test('boundedFetch: connector sets correct SNI context', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>context-ok</body></html>');
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const customSsrf = async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.hostname === 'myhost.test') {
+        return { allowed: true, ip: '127.0.0.1' };
+      }
+      return { allowed: true, ip: '127.0.0.1' };
+    };
+
+    const result = await boundedFetch(`http://myhost.test:${serverPort}/`, {
+      ...testConfig,
+      ssrfChecker: customSsrf,
+      timeoutMs: 5000,
+    });
+
+    assert.equal(result.status, 200);
+    assert.match(result.body ?? '', /context-ok/);
+    assert.equal(result.finalUrl, `http://myhost.test:${serverPort}/`);
   } finally {
     server.close();
   }

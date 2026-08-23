@@ -29,26 +29,33 @@ const PRIVATE_CIDRS: Cidr4[] = [
   { net: ipv4ToInt('240.0.0.0'), mask: 0xf0000000 },
   { net: ipv4ToInt('255.255.255.255'), mask: 0xffffffff },
   { net: ipv4ToInt('224.0.0.0'), mask: 0xf0000000 },
-  { net: ipv4ToInt('127.0.0.0'), mask: 0xff000000 },
-  { net: ipv4ToInt('127.255.255.255'), mask: 0xffffffff },
+  { net: ipv4ToInt('250.0.0.0'), mask: 0xf8000000 },
 ];
 
-const RESERVED_IPV6_PREFIXES = [
-  'fc', 'fd',
-  'fe80:', 'fec:', 'fee:', 'fef:',
-  'ff',
-  '::', '::1',
-  '2001:db8:',
-  '64:ff9b:',
-  '2001:10:', '2001:20:',
-  '2001::', '2002::',
-  'fec0:', '3ffe::',
-  '5f00::',
-  '2001:0010::',
-  '::ffff:0:0',
-  '64:ff9b:1::',
-  '2001:0010::',
-  '2001:0000::',
+interface Cidr6 {
+  net: bigint;
+  mask: bigint;
+  prefixLen: number;
+}
+
+const PRIVATE_CIDRS_V6: Cidr6[] = [
+  { net: ipv6ToBigInt('::1'), mask: BigInt('0xffffffffffffffffffffffffffffffff'), prefixLen: 128 },
+  { net: ipv6ToBigInt('::'), mask: BigInt('0xffffffffffffffffffffffffffffffff'), prefixLen: 128 },
+  { net: ipv6ToBigInt('::ffff:0:0'), mask: BigInt('0xffffffffffffffffffffffff00000000'), prefixLen: 96 },
+  { net: ipv6ToBigInt('64:ff9b::'), mask: BigInt('0xffffffffffffffff0000000000000000'), prefixLen: 96 },
+  { net: ipv6ToBigInt('64:ff9b:1::'), mask: BigInt('0xfffffffffffffffe0000000000000000'), prefixLen: 48 },
+  { net: ipv6ToBigInt('100::'), mask: BigInt('0xffffffffffffffffffffffff00000000'), prefixLen: 64 },
+  { net: ipv6ToBigInt('2001::'), mask: BigInt('0xffffffffffff00000000000000000000'), prefixLen: 32 },
+  { net: ipv6ToBigInt('2001:10::'), mask: BigInt('0xffffffffffff00000000000000000000'), prefixLen: 28 },
+  { net: ipv6ToBigInt('2001:db8::'), mask: BigInt('0xffffffffffff00000000000000000000'), prefixLen: 32 },
+  { net: ipv6ToBigInt('2002::'), mask: BigInt('0xffffffff000000000000000000000000'), prefixLen: 16 },
+  { net: ipv6ToBigInt('fc00::'), mask: BigInt('0xfe000000000000000000000000000000'), prefixLen: 7 },
+  { net: ipv6ToBigInt('fe80::'), mask: BigInt('0xffc00000000000000000000000000000'), prefixLen: 10 },
+  { net: ipv6ToBigInt('fec0::'), mask: BigInt('0xffc00000000000000000000000000000'), prefixLen: 10 },
+  { net: ipv6ToBigInt('ff00::'), mask: BigInt('0xff000000000000000000000000000000'), prefixLen: 8 },
+  { net: ipv6ToBigInt('3ffe::'), mask: BigInt('0xffffffff000000000000000000000000'), prefixLen: 16 },
+  { net: ipv6ToBigInt('5f00::'), mask: BigInt('0xff000000000000000000000000000000'), prefixLen: 8 },
+  { net: ipv6ToBigInt('2001:0000::'), mask: BigInt('0xffffffffffff00000000000000000000'), prefixLen: 32 },
 ];
 
 function ipv4ToInt(ip: string): number {
@@ -65,40 +72,34 @@ function isIpv4InCidr(ip: string): boolean {
   return PRIVATE_CIDRS.some(({ net, mask }) => (ipInt & mask) === (net & mask));
 }
 
-function canonicalizeIpv6(ip: string): string {
-  try {
-    const { toBigInt } = require('node:ip');
-    return toBigInt ? toBigInt(ip).toString(16) : ip.toLowerCase();
-  } catch {
-    return ip.toLowerCase();
+function ipv6ToBigInt(ip: string): bigint {
+  const parts = ip.split('::');
+  const left = parts[0] ? parts[0].split(':') : [];
+  const right = parts[1] ? parts[1].split(':') : [];
+
+  const missing = 8 - left.length - right.length;
+  const allParts = [...left, ...Array(missing).fill('0'), ...right];
+
+  let result = BigInt(0);
+  for (let i = 0; i < 8; i++) {
+    const part = parseInt(allParts[i] || '0', 16);
+    result = (result << BigInt(16)) | BigInt(part);
   }
+  return result;
 }
 
-function isReservedIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase();
+function isIpv6InCidr(ip: string): boolean {
+  if (isIP(ip) !== 6) return false;
 
-  if (lower.startsWith('::ffff:')) {
-    const ipv4Part = lower.slice(7);
-    if (ipv4Part.includes('.')) {
+  if (ip.toLowerCase().startsWith('::ffff:')) {
+    const ipv4Part = ip.split('::ffff:')[1];
+    if (ipv4Part && isIP(ipv4Part) === 4) {
       return isIpv4InCidr(ipv4Part);
     }
-    if (ipv4Part.includes(':')) {
-      const hexGroups = ipv4Part.split(':');
-      if (hexGroups.length === 2) {
-        const high = parseInt(hexGroups[0]!, 16);
-        const low = parseInt(hexGroups[1]!, 16);
-        if (!Number.isNaN(high) && !Number.isNaN(low)) {
-          const ip = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
-          return isIpv4InCidr(ip);
-        }
-      }
-    }
-    return false;
   }
 
-  if (RESERVED_IPV6_PREFIXES.some((prefix) => lower.startsWith(prefix))) return true;
-
-  return false;
+  const ipBig = ipv6ToBigInt(ip);
+  return PRIVATE_CIDRS_V6.some(({ net, mask }) => (ipBig & mask) === (net & mask));
 }
 
 export function isPrivateIp(ip: string): boolean {
@@ -109,7 +110,7 @@ export function isPrivateIp(ip: string): boolean {
   }
 
   if (isIP(ip) === 6) {
-    return isReservedIpv6(ip);
+    return isIpv6InCidr(ip);
   }
 
   return false;
