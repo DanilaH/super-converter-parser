@@ -160,8 +160,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-parents requires a numeric value');
       }
       const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed < 1) {
-        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be a positive integer, got ${value}`);
+      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 30) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be an integer in [5, 30], got ${value}`);
       }
       maxParents = parsed;
     } else if (arg && arg.startsWith('-')) {
@@ -352,15 +352,19 @@ async function main(): Promise<void> {
     console.log('');
     const logger: EnrichmentLogger = (line: string) => console.log(line);
 
-    const resumeSources = isResume
-      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.sources ?? args.sources)
-      : args.sources;
-    const resumeMaxSuggestions = isResume
-      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.maxSuggestionsPerSource ?? args.maxSuggestions)
-      : args.maxSuggestions;
-    const resumeMaxParents = isResume
-      ? (store.loadEnrichmentRun(enrichmentId)?.config?.query_suggestions?.maxParents ?? args.maxParents)
-      : args.maxParents;
+    let enrichmentConfig: EnrichmentModuleConfig;
+    if (isResume) {
+      const persistedRun = store.loadEnrichmentRun(enrichmentId);
+      if (!persistedRun) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
+      }
+      enrichmentConfig = persistedRun.config;
+      if (!enrichmentConfig.clusters) {
+        enrichmentConfig.clusters = clusteringConfig;
+      }
+    } else {
+      enrichmentConfig = buildEnrichmentConfig(modules, clusteringConfig, args.sources, args.maxSuggestions, args.maxParents);
+    }
 
     const outcome = await runEnrichment({
       enrichmentId,
@@ -370,7 +374,7 @@ async function main(): Promise<void> {
       enrichmentDirectory,
       modules,
       shortlist,
-      config: buildEnrichmentConfig(modules, clusteringConfig, resumeSources, resumeMaxSuggestions, resumeMaxParents),
+      config: enrichmentConfig,
       logger,
       signal,
       resume: isResume,

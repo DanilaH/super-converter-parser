@@ -85,10 +85,6 @@ function parserVersionForSource(source: QuerySuggestionSource): string {
   }
 }
 
-function sourceEnrichmentItemSource(source: QuerySuggestionSource): 'google' | 'surfer' {
-  return source === 'surfer_related' ? 'surfer' : 'google';
-}
-
 function makeOccurrences(
   parentKeyword: string,
   normalizedParent: string,
@@ -529,9 +525,9 @@ export async function runQuerySuggestionsModule(
       for (const source of missingSources) {
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
-        if (cached && cached.status !== 'error') {
+        if (cached) {
           const isExpired = Date.parse(cached.expiresAt) <= Date.now();
-          if (!isExpired) {
+          if (!isExpired && cached.status !== 'error') {
             const rows = cached.suggestions;
             const occurrencesForSource = makeOccurrences(
               keyword.keyword,
@@ -549,10 +545,8 @@ export async function runQuerySuggestionsModule(
             });
             continue;
           }
-          cacheMissSources.push(source);
-        } else {
-          cacheMissSources.push(source);
         }
+        cacheMissSources.push(source);
       }
 
       if (cacheMissSources.length > 0) {
@@ -580,7 +574,8 @@ export async function runQuerySuggestionsModule(
       }
 
       for (const collection of fetched) {
-        for (const occ of collection.occurrences.slice(0, config.maxSuggestionsPerSource)) {
+        const cappedOccurrences = collection.occurrences.slice(0, config.maxSuggestionsPerSource);
+        for (const occ of cappedOccurrences) {
           const key = `${occ.source}:${occ.normalizedParent}:${occ.normalizedSuggestion}`;
           if (seenSuggestionKeys.has(key)) continue;
           seenSuggestionKeys.add(key);
@@ -590,7 +585,7 @@ export async function runQuerySuggestionsModule(
         const status = perSourceStatus.get(collection.source)!;
         if (collection.status === 'ok') {
           status.status = 'ok';
-          status.collected += collection.occurrences.length;
+          status.collected += cappedOccurrences.length;
           sourceStats[collection.source].ok += 1;
         } else if (collection.status === 'empty') {
           if (status.status === 'empty') status.status = 'empty';
@@ -608,25 +603,15 @@ export async function runQuerySuggestionsModule(
       persistOccurrences();
 
       for (const collection of fetched) {
-        enrichmentStore.upsertEnrichmentItem({
-          enrichmentId,
-          itemId: `${collection.source}:${keyword.normalizedKeyword}`,
-          module: 'query_suggestions',
-          status: collection.status === 'error' ? 'error' : 'completed',
-          source: sourceEnrichmentItemSource(collection.source),
-          requestCount: collection.cacheStatus === 'hit' ? 0 : 1,
-          fetchedAt: new Date().toISOString(),
-          cacheStatus: collection.cacheStatus,
-          error: collection.error,
-        });
-
-        enrichmentStore.saveQuerySuggestionSource(
+        enrichmentStore.persistSourceCollectionAtomic(
           enrichmentId,
           keyword.normalizedKeyword,
           collection.source,
           collection.status,
           collection.error,
           new Date().toISOString(),
+          collection.cacheStatus === 'hit' ? 0 : 1,
+          collection.cacheStatus,
         );
       }
 
@@ -704,6 +689,7 @@ export function buildQueryResultFromStore(
     if (!status) continue;
     if (record.status === 'ok') {
       status.status = 'ok';
+      sourceStats[source].ok += 1;
     } else if (record.status === 'empty') {
       if (status.status !== 'ok') status.status = 'empty';
       sourceStats[source].empty += 1;
@@ -734,7 +720,7 @@ export function buildQueryResultFromStore(
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
   const emptyCount = suggestions.filter((s) => s.occurrences.every((o) => o.collectionStatus !== 'ok')).length;
   const errorCount = [...bySource.values()].filter((s) => s.status === 'error').length;
-  const inputCount = new Set(occurrences.map((o) => o.normalizedParent)).size;
+  const inputCount = new Set(sourceRecords.map((r) => r.normalizedParent)).size;
 
   return {
     enrichmentId,

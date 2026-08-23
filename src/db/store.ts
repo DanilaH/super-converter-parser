@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
-import type { ClusteringConfig, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionSource } from '../enrichment/types.js';
+import type { ClusteringConfig, EnrichmentCacheStatus, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionSource } from '../enrichment/types.js';
 
 // Helper: add a column to a table only if it does not already exist.
 // SQLite's ALTER TABLE ADD COLUMN does not support IF NOT EXISTS in the
@@ -1420,6 +1420,53 @@ export class RunStore {
       error: row.error,
       fetchedAt: row.fetched_at,
     }));
+  }
+
+  persistSourceCollectionAtomic(
+    enrichmentId: string,
+    normalizedParent: string,
+    source: QuerySuggestionSource,
+    status: string,
+    error: string | null,
+    fetchedAt: string,
+    requestCount: number,
+    cacheStatus: EnrichmentCacheStatus,
+  ): void {
+    const stmt = this.db.prepare(
+      `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
+        (enrichment_id, normalized_parent, source, status, error, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const itemStatus = status === 'error' ? 'error' : 'completed';
+    const itemStmt = this.db.prepare(
+      `INSERT INTO enrichment_items
+        (enrichment_id, item_id, module, status, source, created_at, updated_at, request_count, fetched_at, cache_status, error, payload)
+       VALUES (?, ?, 'query_suggestions', ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(enrichment_id, item_id, module) DO UPDATE SET
+         status = excluded.status,
+         updated_at = excluded.updated_at,
+         request_count = request_count + excluded.request_count,
+         fetched_at = excluded.fetched_at,
+         cache_status = excluded.cache_status,
+         error = excluded.error`,
+    );
+    const now = fetchedAt;
+    const tx = this.db.transaction(() => {
+      stmt.run(enrichmentId, normalizedParent, source, status, error, fetchedAt);
+      itemStmt.run(
+        enrichmentId,
+        `${source}:${normalizedParent}`,
+        itemStatus,
+        source === 'surfer_related' ? 'surfer' : 'google',
+        now,
+        now,
+        requestCount,
+        fetchedAt,
+        cacheStatus,
+        error,
+      );
+    });
+    tx();
   }
 
   loadEnrichmentRun(enrichmentId: string): EnrichmentRunRecord | null {
