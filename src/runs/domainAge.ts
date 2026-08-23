@@ -290,7 +290,8 @@ export async function runDomainAgeModule(
     // by us after TTL expiry) — that must remain stale for correct accounting.
     const isStableUnconfigured = !fsConfigured
       && cached?.firstSeenStatus === 'unavailable'
-      && cached?.firstSeenSource === 'unconfigured';
+      && cached?.firstSeenSource === 'unconfigured'
+      && cached?.firstSeenExpiresAt == null;
     const versionMatch = !fsConfigured && cached && cached.firstSeenQueryVersion === FIRST_SEEN_QUERY_VERSION;
     const fsFresh = !fsConfigured && cached && (isStableUnconfigured || isFresh(cached.firstSeenExpiresAt, nowMs));
     if (!fsConfigured) {

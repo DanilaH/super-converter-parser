@@ -305,19 +305,42 @@ test('partial refresh: fresh registration, expired first-seen -> only first-seen
   assert.equal(puts.length, 1);
 });
 
-test('cache hit with cached checkpoint is used as-is (registration 180d not refetched by 24h first-seen TTL)', async () => {
-  // The classic bug: a stale combined expiry must NOT force a registration refetch.
+test('unconfigured + version match + NULL expiry → stable hit', async () => {
+  // Stable unconfigured: no expiry set (NULL), version matches → full cache hit.
   const cached = fullCached('example.com', {
-    registrationExpiresAt: FUTURE, // 180d, still fresh
+    registrationExpiresAt: FUTURE,
     firstSeenStatus: 'unavailable',
     firstSeenSource: 'unconfigured',
-    firstSeenExpiresAt: PAST, // was 24h, now past — but unavailable is stable, reused
+    firstSeenExpiresAt: null, // no expiry → stable
+    firstSeenQueryVersion: 2, // current version
   });
   const { cache } = mockCache([cached]);
   const res = await runOne({ domains: ['example.com'], cache, firstSeen: null, now: () => Date.parse(NOW_ISO) });
-  assert.equal(res.rdapCalls.v, 0); // registration NOT refetched
-  assert.equal(res.fsCalls.v, 0); // no provider
+  assert.equal(res.rdapCalls.v, 0);
+  assert.equal(res.fsCalls.v, 0);
   assert.equal(res.results.get('example.com')!.cacheHit, true);
+  assert.equal(res.results.get('example.com')!.cacheStatus, 'hit');
+  assert.equal(res.results.get('example.com')!.firstSeenSource, 'unconfigured');
+});
+
+test('unconfigured + version match + expired non-null expiry → NOT hit', async () => {
+  // Unconfigured with expired TTL (non-null) is NOT stable → partial/expired.
+  const cached = fullCached('example.com', {
+    registrationExpiresAt: FUTURE,
+    firstSeenStatus: 'unavailable',
+    firstSeenSource: 'unconfigured',
+    firstSeenExpiresAt: PAST, // expired non-null TTL → not stable
+    firstSeenQueryVersion: 2,
+  });
+  const { cache } = mockCache([cached]);
+  const res = await runOne({ domains: ['example.com'], cache, firstSeen: null, now: () => Date.parse(NOW_ISO) });
+  assert.equal(res.rdapCalls.v, 0);
+  assert.equal(res.fsCalls.v, 0);
+  const rec = res.results.get('example.com')!;
+  assert.equal(rec.cacheHit, false);
+  assert.equal(rec.cacheStatus, 'partial');
+  assert.equal(rec.firstSeenSource, 'expired');
+  assert.equal(rec.firstSeenDate, null);
 });
 
 test('forceRefresh bypasses the cache even when fresh', async () => {
