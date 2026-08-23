@@ -11,6 +11,7 @@ import {
   defaultQuerySuggestionsConfig,
   dedupSuggestions,
   type SuggestionCollector,
+  type CollectResult,
   type RawSourceCollection,
   type RawSuggestionOccurrence,
 } from './querySuggestions.js';
@@ -49,10 +50,12 @@ class FakeCollector implements SuggestionCollector {
   async close(): Promise<void> {
     this.closeCalls += 1;
   }
-  async collect(parentKeyword: string, normalizedParent: string, sources: QuerySuggestionSource[]): Promise<RawSourceCollection[]> {
+  async collect(parentKeyword: string, normalizedParent: string, sources: QuerySuggestionSource[]): Promise<CollectResult> {
     this.collectCalls += 1;
     const planned = this.plan[normalizedParent] ?? [];
-    return sources.map((source) => planned.find((c) => c.source === source) ?? collection(source, [], 'empty'));
+    const collections = sources.map((source) => planned.find((c) => c.source === source) ?? collection(source, [], 'empty'));
+    const xhrRequests = sources.includes('google_autocomplete') ? 1 : 0;
+    return { collections, navigationRequests: 1, xhrRequests };
   }
 }
 
@@ -567,21 +570,25 @@ test('navigation failure throws and does not parse previous DOM', async () => {
     async close(): Promise<void> {
       this.closeCalls += 1;
     }
-    async collect(): Promise<RawSourceCollection[]> {
+    async collect(): Promise<CollectResult> {
       this.collectCalls += 1;
       callCount += 1;
       if (callCount === 1) {
         throw new ResearchError('GOOGLE_UNAVAILABLE', 'Navigation failed');
       }
-      return [
-        {
-          source: 'google_autocomplete',
-          status: 'ok',
-          occurrences: [occ('compare lists', 'google_autocomplete', 'compare lists online')],
-          error: null,
-          cacheStatus: 'none',
-        },
-      ];
+      return {
+        collections: [
+          {
+            source: 'google_autocomplete',
+            status: 'ok',
+            occurrences: [occ('compare lists', 'google_autocomplete', 'compare lists online')],
+            error: null,
+            cacheStatus: 'none',
+          },
+        ],
+        navigationRequests: 1,
+        xhrRequests: 1,
+      };
     }
   }
   const collector = new NavFailCollector();

@@ -25,6 +25,7 @@ import {
   saveParserFailureArtifacts,
   buildParserFailureContext,
 } from '../diagnostics/artifacts.js';
+import { waitForManualCaptcha, pauseForManualCaptcha } from '../browser/captcha.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { SuggestionCache } from '../cache/store.js';
 import { ttlMsForSuggestionStatus } from '../cache/store.js';
@@ -62,6 +63,12 @@ export type RawSourceCollection = {
   cacheStatus: 'hit' | 'miss' | 'expired' | 'refreshed' | 'none';
 };
 
+export interface CollectResult {
+  collections: RawSourceCollection[];
+  navigationRequests: number;
+  xhrRequests: number;
+}
+
 export interface SuggestionCollector {
   open(): Promise<void>;
   close(): Promise<void>;
@@ -69,7 +76,7 @@ export interface SuggestionCollector {
     parentKeyword: string,
     normalizedParent: string,
     sources: QuerySuggestionSource[],
-  ): Promise<RawSourceCollection[]>;
+  ): Promise<CollectResult>;
 }
 
 function parserVersionForSource(source: QuerySuggestionSource): string {
@@ -219,8 +226,9 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     parentKeyword: string,
     normalizedParent: string,
     sources: QuerySuggestionSource[],
-  ): Promise<RawSourceCollection[]> {
+  ): Promise<CollectResult> {
     if (!this.page) throw new ResearchError('ENRICHMENT_ERROR', 'Collector used before open()');
+    if (this.signal.cancelled) throw new EnrichmentCancelledError();
     const page = this.page;
 
     const gotoResult = await page
@@ -236,6 +244,21 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       throw new ResearchError('GOOGLE_UNAVAILABLE', `Navigation failed for "${parentKeyword}": ${message}`);
     }
 
+    if (this.signal.cancelled) throw new EnrichmentCancelledError();
+
+    try {
+      await waitForManualCaptcha(page);
+    } catch (error) {
+      if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
+        const captchaSignal = { isCancelled: () => this.signal.cancelled };
+        const solved = await pauseForManualCaptcha(page, captchaSignal);
+        if (!solved) throw new EnrichmentCancelledError();
+      } else {
+        throw error;
+      }
+    }
+
+    let xhrRequests = 0;
     const results: RawSourceCollection[] = [];
     if (sources.includes('surfer_related')) {
       results.push(await this.collectSurferRelated(page, parentKeyword, normalizedParent));
@@ -247,10 +270,11 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
     }
     if (sources.includes('google_autocomplete')) {
+      xhrRequests += 1;
       results.push(await this.collectAutocomplete(page, parentKeyword, normalizedParent));
     }
 
-    return results;
+    return { collections: results, navigationRequests: 1, xhrRequests };
   }
 
   private async collectSurferRelated(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
@@ -263,6 +287,22 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       this.config.browser.surferRelatedMissingWidgetTimeoutMs,
     );
     if (rows === null) {
+      if (this.debugRoot) {
+        const context = buildParserFailureContext(
+          parentKeyword,
+          page.url(),
+          this.config,
+          'SURFER_RELATED_WIDGET_MISSING',
+          'Surfer related widget not found on page',
+        );
+        await saveParserFailureArtifacts(
+          page,
+          this.config,
+          this.debugRoot,
+          keywordSlug(parentKeyword),
+          context,
+        ).catch(() => undefined);
+      }
       return {
         source: 'surfer_related',
         status: 'unavailable',
@@ -325,14 +365,60 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   }
 }
 
-export async function createBrowserSuggestionCollector(
+export function createBrowserSuggestionCollector(
   config: ResearchConfig,
   debugRoot: string,
   signal: CancellationSignal,
-): Promise<SuggestionCollector> {
-  const browser = await connectResearchChrome(config.browser.cdpUrl);
-  const context = getPrimaryContext(browser);
-  return new BrowserSuggestionCollector(context, browser, config, debugRoot, signal);
+): SuggestionCollector {
+  return new LazyBrowserSuggestionCollector(config, debugRoot, signal);
+}
+
+class LazyBrowserSuggestionCollector implements SuggestionCollector {
+  private readonly config: ResearchConfig;
+  private readonly debugRoot: string;
+  private readonly signal: CancellationSignal;
+  private inner: BrowserSuggestionCollector | null = null;
+  private browser: Browser | null = null;
+
+  constructor(config: ResearchConfig, debugRoot: string, signal: CancellationSignal) {
+    this.config = config;
+    this.debugRoot = debugRoot;
+    this.signal = signal;
+  }
+
+  private async ensureConnected(): Promise<BrowserSuggestionCollector> {
+    if (!this.inner) {
+      this.browser = await connectResearchChrome(this.config.browser.cdpUrl);
+      const context = getPrimaryContext(this.browser);
+      this.inner = new BrowserSuggestionCollector(context, this.browser, this.config, this.debugRoot, this.signal);
+    }
+    return this.inner;
+  }
+
+  async open(): Promise<void> {
+    const inner = await this.ensureConnected();
+    await inner.open();
+  }
+
+  async close(): Promise<void> {
+    if (this.inner) {
+      await this.inner.close();
+    }
+    if (this.browser) {
+      await this.browser.close().catch(() => undefined);
+      this.browser = null;
+    }
+    this.inner = null;
+  }
+
+  async collect(
+    parentKeyword: string,
+    normalizedParent: string,
+    sources: QuerySuggestionSource[],
+  ): Promise<CollectResult> {
+    const inner = await this.ensureConnected();
+    return inner.collect(parentKeyword, normalizedParent, sources);
+  }
 }
 
 export type RunQuerySuggestionsOptions = {
@@ -449,13 +535,19 @@ export async function runQuerySuggestionsModule(
     parentKeyword: string,
     normalizedParent: string,
     sources: QuerySuggestionSource[],
-): Promise<{ collections: RawSourceCollection[]; attempts: number }> => {
+): Promise<{ result: CollectResult; attempts: number; totalNavigations: number; totalXhrs: number }> => {
     const maxAttempts = 3;
     let lastError: string | null = null;
+    let totalNavigations = 0;
+    let totalXhrs = 0;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        return { collections: await collector.collect(parentKeyword, normalizedParent, sources), attempts: attempt };
+        const result = await collector.collect(parentKeyword, normalizedParent, sources);
+        totalNavigations += result.navigationRequests;
+        totalXhrs += result.xhrRequests;
+        return { result, attempts: attempt, totalNavigations, totalXhrs };
       } catch (error) {
+        totalNavigations += 1;
         const code = error instanceof ResearchError ? error.code : 'GOOGLE_UNAVAILABLE';
         if (code === 'RUN_PAUSED') throw error;
         lastError = code;
@@ -463,44 +555,21 @@ export async function runQuerySuggestionsModule(
       }
     }
     return {
-      collections: sources.map((source) => ({
-        source,
-        status: 'error' as QuerySuggestionCollectionStatus,
-        occurrences: [],
-        error: lastError,
-        cacheStatus: 'none' as const,
-      })),
-      attempts: maxAttempts,
-    };
-  };
-
-  const persistOccurrences = (): void => {
-    const suggestions = dedupSuggestions(occurrences, market, hl, gl);
-    enrichmentStore.saveQuerySuggestions(
-      enrichmentId,
-      suggestions.map((s) => ({
-        normalizedSuggestion: s.normalizedSuggestion,
-        rawText: s.rawText,
-        volume: s.volume,
-        cpc: s.cpc,
-        ordinal: s.ordinal,
-        market: s.market,
-        hl: s.hl,
-        gl: s.gl,
-        parserVersion: s.parserVersion,
-        collectionStatus: s.collectionStatus,
-        occurrences: s.occurrences.map((o) => ({
-          parentKeyword: o.parentKeyword,
-          normalizedParent: o.normalizedParent,
-          source: o.source,
-          market: o.market,
-          hl: o.hl,
-          gl: o.gl,
-          parserVersion: o.parserVersion,
-          collectionStatus: o.collectionStatus,
+      result: {
+        collections: sources.map((source) => ({
+          source,
+          status: 'error' as QuerySuggestionCollectionStatus,
+          occurrences: [],
+          error: lastError,
+          cacheStatus: 'none' as const,
         })),
-      })),
-    );
+        navigationRequests: 0,
+        xhrRequests: 0,
+      },
+      attempts: maxAttempts,
+      totalNavigations,
+      totalXhrs,
+    };
   };
 
   let collectorOpened = false;
@@ -516,6 +585,7 @@ export async function runQuerySuggestionsModule(
       const fetched: RawSourceCollection[] = [];
 
       let usedBrowser = false;
+      let transportRequests = 0;
       const expiredSources: QuerySuggestionSource[] = [];
       const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
@@ -562,10 +632,9 @@ export async function runQuerySuggestionsModule(
           await collector.open();
           collectorOpened = true;
         }
-        const hasAutocomplete = cacheMissSources.includes('google_autocomplete');
-        const { collections, attempts } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
-        const transportRequests = attempts + (hasAutocomplete ? 1 : 0);
-        for (const col of collections) {
+        const { result, totalNavigations, totalXhrs } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
+        transportRequests = totalNavigations + totalXhrs;
+        for (const col of result.collections) {
           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
           const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
@@ -588,13 +657,63 @@ export async function runQuerySuggestionsModule(
         }
       }
 
+      const keywordSuggestions = new Map<string, {
+        rawText: string;
+        volume: number | null;
+        cpc: number | null;
+        ordinal: number | null;
+        collectionStatus: string;
+        occurrences: Array<{
+          parentKeyword: string;
+          normalizedParent: string;
+          source: string;
+          market: string;
+          hl: string;
+          gl: string;
+          parserVersion: string;
+          collectionStatus: string;
+        }>;
+      }>();
+
       for (const collection of fetched) {
         const cappedOccurrences = collection.occurrences.slice(0, config.maxSuggestionsPerSource);
         for (const occ of cappedOccurrences) {
           const key = `${occ.source}:${occ.normalizedParent}:${occ.normalizedSuggestion}`;
-          if (seenSuggestionKeys.has(key)) continue;
+          if (seenSuggestionKeys.has(key)) {
+            const existing = keywordSuggestions.get(occ.normalizedSuggestion);
+            if (existing) {
+              existing.occurrences.push({
+                parentKeyword: occ.parentKeyword,
+                normalizedParent: occ.normalizedParent,
+                source: occ.source,
+                market,
+                hl,
+                gl,
+                parserVersion: parserVersionForSource(occ.source),
+                collectionStatus: 'ok',
+              });
+            }
+            continue;
+          }
           seenSuggestionKeys.add(key);
           occurrences.push(occ);
+          keywordSuggestions.set(occ.normalizedSuggestion, {
+            rawText: occ.rawText,
+            volume: occ.volume,
+            cpc: occ.cpc,
+            ordinal: occ.ordinal,
+            collectionStatus: 'ok',
+            occurrences: [{
+              parentKeyword: occ.parentKeyword,
+              normalizedParent: occ.normalizedParent,
+              source: occ.source,
+              market,
+              hl,
+              gl,
+              parserVersion: parserVersionForSource(occ.source),
+              collectionStatus: 'ok',
+            }],
+          });
         }
 
         const status = perSourceStatus.get(collection.source)!;
@@ -615,9 +734,6 @@ export async function runQuerySuggestionsModule(
         }
       }
 
-      persistOccurrences();
-
-      let transportRequests = 0;
       let countedRequestForParent = false;
       for (const collection of fetched) {
         const isBrowserSource = collection.cacheStatus !== 'hit';
@@ -625,6 +741,15 @@ export async function runQuerySuggestionsModule(
         if (isBrowserSource) {
           countedRequestForParent = true;
         }
+        const suggestionsForSource = [...keywordSuggestions.entries()].map(([normalizedSuggestion, s]) => ({
+          normalizedSuggestion,
+          rawText: s.rawText,
+          volume: s.volume,
+          cpc: s.cpc,
+          ordinal: s.ordinal,
+          collectionStatus: s.collectionStatus,
+          occurrences: s.occurrences,
+        }));
         enrichmentStore.persistSourceCollectionAtomic(
           enrichmentId,
           keyword.normalizedKeyword,
@@ -638,6 +763,7 @@ export async function runQuerySuggestionsModule(
           hl,
           gl,
           parserVersionForSource(collection.source),
+          suggestionsForSource,
         );
       }
 
@@ -659,8 +785,6 @@ export async function runQuerySuggestionsModule(
   }
 
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
-
-  persistOccurrences();
 
   const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
   const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;

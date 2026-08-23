@@ -1468,6 +1468,24 @@ export class RunStore {
     hl: string = '',
     gl: string = '',
     parserVersion: string = '',
+    suggestions: Array<{
+      normalizedSuggestion: string;
+      rawText: string;
+      volume: number | null;
+      cpc: number | null;
+      ordinal: number | null;
+      collectionStatus: string;
+      occurrences: Array<{
+        parentKeyword: string;
+        normalizedParent: string;
+        source: string;
+        market: string;
+        hl: string;
+        gl: string;
+        parserVersion: string;
+        collectionStatus: string;
+      }>;
+    }> = [],
   ): void {
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
@@ -1487,8 +1505,29 @@ export class RunStore {
          cache_status = excluded.cache_status,
          error = excluded.error`,
     );
+    const suggestionStmt = this.db.prepare(
+      `INSERT OR REPLACE INTO enrichment_query_suggestions
+        (enrichment_id, normalized_suggestion, raw_text, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
     const now = fetchedAt;
     const tx = this.db.transaction(() => {
+      for (const s of suggestions) {
+        suggestionStmt.run(
+          enrichmentId,
+          s.normalizedSuggestion,
+          s.rawText,
+          s.volume,
+          s.cpc,
+          s.ordinal,
+          market,
+          hl,
+          gl,
+          parserVersion,
+          s.collectionStatus,
+          JSON.stringify(s.occurrences),
+        );
+      }
       stmt.run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
       itemStmt.run(
         enrichmentId,
