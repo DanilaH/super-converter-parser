@@ -19,7 +19,11 @@ export type ResearchErrorCode =
   | 'RESUME_NOT_FOUND'
   | 'RESUME_TERMINAL_RUN'
   | 'RESUME_PARSER_MISMATCH'
-  | 'RESUME_CONFIG_MISMATCH';
+  | 'RESUME_CONFIG_MISMATCH'
+  | 'RDAP_RATE_LIMIT'
+  | 'RDAP_ERROR'
+  | 'FIRST_SEEN_ERROR'
+  | 'FIRST_SEEN_NOT_CONFIGURED';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

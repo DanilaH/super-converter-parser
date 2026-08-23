@@ -45,6 +45,15 @@ export type ResearchConfig = {
       domainOkMs: number;
       domainNotFoundMs: number;
       domainErrorMs: number;
+      domainAge: {
+        rdapOkMs: number;
+        rdapNotFoundMs: number;
+        rdapUnsupportedMs: number;
+        rdapErrorMs: number;
+        firstSeenOkMs: number;
+        firstSeenErrorMs: number;
+        firstSeenUnavailableMs: number;
+      };
     };
   };
   ahrefs: {
@@ -53,6 +62,25 @@ export type ResearchConfig = {
     rateLimitMaxDelayMs: number;
     timeoutMs: number;
     requireAhrefs: boolean;
+  };
+  rdap: {
+    bootstrapBase: string;
+    bootstrapFile: string;
+    bootstrapTtlMs: number;
+    queryTimeoutMs: number;
+    perHostMinDelayMs: number;
+    maxAttempts: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+  };
+  firstSeen: {
+    provider: string;
+    endpoint: string;
+    timeoutMs: number;
+    minDelayMs: number;
+    maxAttempts: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
   };
   // Centralized DR classification thresholds for candidate scoring. See
   // SCORING.md: very weak < veryWeakMax <= weak < weakMax <= neutral
@@ -111,6 +139,15 @@ const DEFAULTS: ResearchConfig = {
       domainOkMs: 30 * 24 * 60 * 60 * 1000,
       domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
       domainErrorMs: 60 * 60 * 1000,
+      domainAge: {
+        rdapOkMs: 180 * 24 * 60 * 60 * 1000,
+        rdapNotFoundMs: 30 * 24 * 60 * 60 * 1000,
+        rdapUnsupportedMs: 30 * 24 * 60 * 60 * 1000,
+        rdapErrorMs: 60 * 60 * 1000,
+        firstSeenOkMs: 30 * 24 * 60 * 60 * 1000,
+        firstSeenErrorMs: 60 * 60 * 1000,
+        firstSeenUnavailableMs: 24 * 60 * 60 * 1000,
+      },
     },
   },
   ahrefs: {
@@ -119,6 +156,25 @@ const DEFAULTS: ResearchConfig = {
     rateLimitMaxDelayMs: 10_000,
     timeoutMs: 15_000,
     requireAhrefs: false,
+  },
+  rdap: {
+    bootstrapBase: 'https://data.iana.org/rdap/',
+    bootstrapFile: 'dns.json',
+    bootstrapTtlMs: 24 * 60 * 60 * 1000,
+    queryTimeoutMs: 15_000,
+    perHostMinDelayMs: 500,
+    maxAttempts: 3,
+    baseDelayMs: 1_000,
+    maxDelayMs: 15_000,
+  },
+  firstSeen: {
+    provider: '',
+    endpoint: '',
+    timeoutMs: 15_000,
+    minDelayMs: 1_000,
+    maxAttempts: 3,
+    baseDelayMs: 1_000,
+    maxDelayMs: 15_000,
   },
   scoring: {
     drThresholds: {
@@ -232,8 +288,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       env.CACHE_TTL_DOMAIN_NOT_FOUND_MS,
       DEFAULTS.cache.ttl.domainNotFoundMs,
     ),
-    domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
-  };
+     domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
+     domainAge: {
+       rdapOkMs: readPositiveInt('CACHE_TTL_RDAP_OK_MS', env.CACHE_TTL_RDAP_OK_MS, DEFAULTS.cache.ttl.domainAge.rdapOkMs),
+       rdapNotFoundMs: readPositiveInt('CACHE_TTL_RDAP_NOT_FOUND_MS', env.CACHE_TTL_RDAP_NOT_FOUND_MS, DEFAULTS.cache.ttl.domainAge.rdapNotFoundMs),
+       rdapUnsupportedMs: readPositiveInt('CACHE_TTL_RDAP_UNSUPPORTED_MS', env.CACHE_TTL_RDAP_UNSUPPORTED_MS, DEFAULTS.cache.ttl.domainAge.rdapUnsupportedMs),
+       rdapErrorMs: readPositiveInt('CACHE_TTL_RDAP_ERROR_MS', env.CACHE_TTL_RDAP_ERROR_MS, DEFAULTS.cache.ttl.domainAge.rdapErrorMs),
+       firstSeenOkMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_OK_MS', env.CACHE_TTL_FIRST_SEEN_OK_MS, DEFAULTS.cache.ttl.domainAge.firstSeenOkMs),
+       firstSeenErrorMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_ERROR_MS', env.CACHE_TTL_FIRST_SEEN_ERROR_MS, DEFAULTS.cache.ttl.domainAge.firstSeenErrorMs),
+       firstSeenUnavailableMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS', env.CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS, DEFAULTS.cache.ttl.domainAge.firstSeenUnavailableMs),
+     },
+   };
 
   const drThresholds = {
     veryWeakMax: readPositiveNumber(
@@ -330,6 +395,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       timeoutMs: readPositiveNumber('AHREFS_TIMEOUT_MS', env.AHREFS_TIMEOUT_MS, DEFAULTS.ahrefs.timeoutMs),
       requireAhrefs: readBoolean('REQUIRE_AHREFS', env.REQUIRE_AHREFS, DEFAULTS.ahrefs.requireAhrefs),
     },
+    rdap: {
+      bootstrapBase: (env.RDAP_BOOTSTRAP_BASE ?? DEFAULTS.rdap.bootstrapBase).trim(),
+      bootstrapFile: (env.RDAP_BOOTSTRAP_FILE ?? DEFAULTS.rdap.bootstrapFile).trim(),
+      bootstrapTtlMs: readPositiveInt('RDAP_BOOTSTRAP_TTL_MS', env.RDAP_BOOTSTRAP_TTL_MS, DEFAULTS.rdap.bootstrapTtlMs),
+      queryTimeoutMs: readPositiveInt('RDAP_QUERY_TIMEOUT_MS', env.RDAP_QUERY_TIMEOUT_MS, DEFAULTS.rdap.queryTimeoutMs),
+      perHostMinDelayMs: readPositiveInt('RDAP_PER_HOST_MIN_DELAY_MS', env.RDAP_PER_HOST_MIN_DELAY_MS, DEFAULTS.rdap.perHostMinDelayMs),
+      maxAttempts: readPositiveInt('RDAP_MAX_ATTEMPTS', env.RDAP_MAX_ATTEMPTS, DEFAULTS.rdap.maxAttempts),
+      baseDelayMs: readPositiveNumber('RDAP_BASE_DELAY_MS', env.RDAP_BASE_DELAY_MS, DEFAULTS.rdap.baseDelayMs),
+      maxDelayMs: readPositiveNumber('RDAP_MAX_DELAY_MS', env.RDAP_MAX_DELAY_MS, DEFAULTS.rdap.maxDelayMs),
+    },
+    firstSeen: {
+      provider: (env.FIRST_SEEN_PROVIDER ?? '').trim().toLowerCase(),
+      endpoint: (env.FIRST_SEEN_ENDPOINT ?? '').trim(),
+      timeoutMs: readPositiveInt('FIRST_SEEN_TIMEOUT_MS', env.FIRST_SEEN_TIMEOUT_MS, DEFAULTS.firstSeen.timeoutMs),
+      minDelayMs: readPositiveInt('FIRST_SEEN_MIN_DELAY_MS', env.FIRST_SEEN_MIN_DELAY_MS, DEFAULTS.firstSeen.minDelayMs),
+      maxAttempts: readPositiveInt('FIRST_SEEN_MAX_ATTEMPTS', env.FIRST_SEEN_MAX_ATTEMPTS, DEFAULTS.firstSeen.maxAttempts),
+      baseDelayMs: readPositiveNumber('FIRST_SEEN_BASE_DELAY_MS', env.FIRST_SEEN_BASE_DELAY_MS, DEFAULTS.firstSeen.baseDelayMs),
+      maxDelayMs: readPositiveNumber('FIRST_SEEN_MAX_DELAY_MS', env.FIRST_SEEN_MAX_DELAY_MS, DEFAULTS.firstSeen.maxDelayMs),
+    },
     scoring: {
       drThresholds,
     },
@@ -365,5 +449,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'CACHE_DB_PATH must not be empty.');
   }
 
+  if (!config.rdap.bootstrapBase) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'RDAP_BOOTSTRAP_BASE must not be empty.');
+  }
+
+  if (!config.rdap.bootstrapFile) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'RDAP_BOOTSTRAP_FILE must not be empty.');
+  }
+
+  if (config.firstSeen.provider && !['wayback'].includes(config.firstSeen.provider)) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `FIRST_SEEN_PROVIDER must be 'wayback' or blank (unconfigured); got "${config.firstSeen.provider}".`,
+    );
+  }
+
+  if (config.firstSeen.provider === 'wayback') {
+    if (config.firstSeen.endpoint && !isValidUrl(config.firstSeen.endpoint)) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', 'FIRST_SEEN_ENDPOINT must be a valid URL when set.');
+    }
+  }
+
   return config;
+}
+
+function isValidUrl(value: string): boolean {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
 }

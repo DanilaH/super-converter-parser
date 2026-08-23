@@ -5,8 +5,10 @@ import { ResearchError } from '../shared/errors.js';
 import type { CacheIdentity } from './keys.js';
 import type { SerpResult } from '../google/serp.js';
 import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
+import type { RdapRegistrationStatus } from '../rdap/types.js';
+import type { FirstSeenStatus } from '../firstseen/types.js';
 
-export const CACHE_SCHEMA_VERSION = 4;
+export const CACHE_SCHEMA_VERSION = 5;
 
 // Rows that expired less than this long ago survive an open-time cleanup so
 // the next run can still classify them as expired (real expired accounting
@@ -87,6 +89,25 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE serp_cache ADD COLUMN registrable_domain TEXT NOT NULL DEFAULT '';
   `,
+  // v5: domain-age enrichment cache. Stores the resolved registration date
+  // (RDAP) and first-seen date plus their statuses so each fact carries its own
+  // TTL, but the row expires at the freshest-facts-first minimum. Registration
+  // and first-seen are separate facts and never alias one another.
+  `
+  CREATE TABLE domain_age_cache (
+    domain TEXT PRIMARY KEY,
+    registration_date TEXT,
+    registration_status TEXT NOT NULL,
+    registration_rule TEXT NOT NULL DEFAULT '',
+    registration_is_redacted INTEGER NOT NULL DEFAULT 0,
+    first_seen_date TEXT,
+    first_seen_status TEXT NOT NULL,
+    first_seen_source TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    stored_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export type CachedKeywordEntry = {
@@ -127,6 +148,30 @@ export type CachedDomainEntry = {
   expiresAt: string;
 };
 
+export type CachedDomainAgeEntry = {
+  domain: string;
+  registrationDate: string | null;
+  registrationStatus: RdapRegistrationStatus;
+  registrationRule: string;
+  registrationIsRedacted: boolean;
+  firstSeenDate: string | null;
+  firstSeenStatus: FirstSeenStatus;
+  firstSeenSource: string;
+  error: string | null;
+  storedAt: string;
+  expiresAt: string;
+};
+
+export type DomainAgeTtlSettings = {
+  rdapOkMs: number;
+  rdapNotFoundMs: number;
+  rdapUnsupportedMs: number;
+  rdapErrorMs: number;
+  firstSeenOkMs: number;
+  firstSeenErrorMs: number;
+  firstSeenUnavailableMs: number;
+};
+
 export type CacheTtlSettings = {
   completedMs: number;
   partialMs: number;
@@ -136,6 +181,8 @@ export type CacheTtlSettings = {
   domainOkMs: number;
   domainNotFoundMs: number;
   domainErrorMs: number;
+  /** Domain-age enrichment cache (registration date via RDAP + first-seen). */
+  domainAge: DomainAgeTtlSettings;
 };
 
 export function ttlMsForKeywordStatus(status: KeywordStatus, ttl: CacheTtlSettings): number {
@@ -166,6 +213,48 @@ export function ttlMsForDomainStatus(
     case 'error':
       return ttl.domainErrorMs;
   }
+}
+
+export function ttlMsForRdapStatus(status: RdapRegistrationStatus, ttl: DomainAgeTtlSettings): number {
+  switch (status) {
+    case 'ok':
+      return ttl.rdapOkMs;
+    case 'not_found':
+      return ttl.rdapNotFoundMs;
+    case 'unsupported':
+      return ttl.rdapUnsupportedMs;
+    case 'error':
+      return ttl.rdapErrorMs;
+  }
+}
+
+export function ttlMsForFirstSeenStatus(status: FirstSeenStatus, ttl: DomainAgeTtlSettings): number {
+  switch (status) {
+    case 'ok':
+      return ttl.firstSeenOkMs;
+    case 'error':
+      return ttl.firstSeenErrorMs;
+    case 'unavailable':
+      return ttl.firstSeenUnavailableMs;
+  }
+}
+
+// The cache row expires when its NEXT-to-expire fact expires, so a stale fact
+// is refreshed even when its sibling fact is still fresh. A first-seen fact
+// that is 'unavailable' (no provider configured) will not change without a
+// config change, so it is excluded from the minimum: only the registration TTL
+// governs refresh in that case. 'not_attempted' (first-seen never run this row)
+// likewise defers to the registration TTL alone.
+export function ttlMsForDomainAgeEntry(
+  regStatus: RdapRegistrationStatus,
+  firstSeenStatus: FirstSeenStatus | 'not_attempted',
+  ttl: DomainAgeTtlSettings,
+): number {
+  const regTtl = ttlMsForRdapStatus(regStatus, ttl);
+  if (firstSeenStatus === 'not_attempted' || firstSeenStatus === 'unavailable') {
+    return regTtl;
+  }
+  return Math.min(regTtl, ttlMsForFirstSeenStatus(firstSeenStatus, ttl));
 }
 
 export function ttlMsForRelatedStatus(status: CachedRelatedStatus, ttl: CacheTtlSettings): number {
@@ -209,7 +298,18 @@ export interface KeywordCache {
   getKeyword(cacheKey: string): CachedKeywordEntry | null;
   putKeyword(entry: CachedKeywordEntry): void;
   getRelated?(cacheKey: string): CachedRelatedEntry | null;
-  putRelated?(entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>, storedAt: string, ttlMs: number): void;
+  putRelated?(
+    entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void;
+  getDomainAge?(domain: string): CachedDomainAgeEntry | null;
+  putDomainAge?(
+    domain: string,
+    entry: Omit<CachedDomainAgeEntry, 'domain' | 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void;
 }
 
 // Validates the related-entry contract enforced by putRelated: status, rows,
@@ -371,6 +471,8 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
+        const ageResult = this.db.prepare('DELETE FROM domain_age_cache WHERE expires_at <= ?').run(cutoff);
+        deleted += ageResult.changes;
       });
       purge();
       return deleted;
@@ -593,11 +695,79 @@ export class CacheStore implements KeywordCache {
     this.wrap('putDomain', () => {
       const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
       this.db
+         .prepare(
+           `INSERT OR REPLACE INTO domain_cache (domain, dr, status, error, stored_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+         )
+         .run(domain, entry.dr, entry.status, entry.error, storedAt, expiresAt);
+    });
+  }
+
+  getDomainAge(domain: string): CachedDomainAgeEntry | null {
+    return this.wrap('getDomainAge', () => {
+      const row = this.db
+        .prepare('SELECT * FROM domain_age_cache WHERE domain = ?')
+        .get(domain) as
+        | {
+            domain: string;
+            registration_date: string | null;
+            registration_status: string;
+            registration_rule: string;
+            registration_is_redacted: number;
+            first_seen_date: string | null;
+            first_seen_status: string;
+            first_seen_source: string;
+            error: string | null;
+            stored_at: string;
+            expires_at: string;
+          }
+        | undefined;
+      if (!row) return null;
+      return {
+        domain: row.domain,
+        registrationDate: row.registration_date,
+        registrationStatus: row.registration_status as RdapRegistrationStatus,
+        registrationRule: row.registration_rule,
+        registrationIsRedacted: row.registration_is_redacted !== 0,
+        firstSeenDate: row.first_seen_date,
+        firstSeenStatus: row.first_seen_status as FirstSeenStatus,
+        firstSeenSource: row.first_seen_source,
+        error: row.error,
+        storedAt: row.stored_at,
+        expiresAt: row.expires_at,
+      };
+    });
+  }
+
+  putDomainAge(
+    domain: string,
+    entry: Omit<CachedDomainAgeEntry, 'domain' | 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void {
+    this.wrap('putDomainAge', () => {
+      const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
+      this.db
         .prepare(
-          `INSERT OR REPLACE INTO domain_cache (domain, dr, status, error, stored_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT OR REPLACE INTO domain_age_cache
+             (domain, registration_date, registration_status, registration_rule,
+              registration_is_redacted, first_seen_date, first_seen_status,
+              first_seen_source, error, stored_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(domain, entry.dr, entry.status, entry.error, storedAt, expiresAt);
+        .run(
+          domain,
+          entry.registrationDate,
+          entry.registrationStatus,
+          entry.registrationRule,
+          entry.registrationIsRedacted ? 1 : 0,
+          entry.firstSeenDate,
+          entry.firstSeenStatus,
+          entry.firstSeenSource,
+          entry.error,
+          storedAt,
+          expiresAt,
+        );
     });
   }
 }

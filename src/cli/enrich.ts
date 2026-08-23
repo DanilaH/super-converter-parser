@@ -3,10 +3,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
+import { CacheStore } from '../cache/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
 import { runEnrichment, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
+import { createRdapClient } from '../rdap/client.js';
+import { createFirstSeenClient } from '../firstseen/client.js';
+import type { ResearchConfig } from '../config/config.js';
+import type { RdapClientConfig } from '../rdap/types.js';
+import type { FirstSeenClientConfig } from '../firstseen/types.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   KNOWN_ENRICHMENT_MODULES,
@@ -189,6 +195,7 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
+  let cacheStore: CacheStore | undefined;
   const signal: CancellationSignal = { cancelled: false };
 
   const sigintHandler = (): void => {
@@ -225,7 +232,7 @@ async function main(): Promise<void> {
       }
     }
 
-    loadConfig(process.env);
+    const config: ResearchConfig = loadConfig(process.env);
 
     let enrichmentId: string;
     let enrichmentDirectory: string;
@@ -268,7 +275,7 @@ async function main(): Promise<void> {
       sourceStorePath = resolve(sourceDir, 'run.sqlite');
       enrichmentId = createRunId();
       enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
-      createRunDirectory(enrichmentDirectory);
+      await createRunDirectory(enrichmentDirectory);
       clusteringConfig = {
         topN: args.topN,
         edgeRule: {
@@ -283,6 +290,36 @@ async function main(): Promise<void> {
 
     store ??= RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
 
+    const needsDomainAge = modules.includes('domain_age');
+    if (needsDomainAge) {
+      cacheStore = CacheStore.open(resolve(config.cache.path));
+    }
+    const rdapClient = needsDomainAge
+      ? createRdapClient({
+          bootstrapBase: config.rdap.bootstrapBase,
+          bootstrapFile: config.rdap.bootstrapFile,
+          bootstrapTtlMs: config.rdap.bootstrapTtlMs,
+          queryTimeoutMs: config.rdap.queryTimeoutMs,
+          perHostMinDelayMs: config.rdap.perHostMinDelayMs,
+          maxAttempts: config.rdap.maxAttempts,
+          baseDelayMs: config.rdap.baseDelayMs,
+          maxDelayMs: config.rdap.maxDelayMs,
+          random: Math.random,
+        } as RdapClientConfig)
+      : null;
+    const firstSeenClient = needsDomainAge
+      ? createFirstSeenClient({
+          provider: config.firstSeen.provider,
+          endpoint: config.firstSeen.endpoint,
+          apiKey: null,
+          timeoutMs: config.firstSeen.timeoutMs,
+          minDelayMs: config.firstSeen.minDelayMs,
+          maxAttempts: config.firstSeen.maxAttempts,
+          baseDelayMs: config.firstSeen.baseDelayMs,
+          maxDelayMs: config.firstSeen.maxDelayMs,
+        } as FirstSeenClientConfig)
+      : null;
+
     console.log('Utility Research Runner — Enrichment');
     console.log('');
     const logger: EnrichmentLogger = (line: string) => console.log(line);
@@ -296,6 +333,10 @@ async function main(): Promise<void> {
       modules,
       shortlist,
       config: { clusters: clusteringConfig },
+      ...(needsDomainAge ? { researchConfig: config } : {}),
+      ...(cacheStore ? { cacheStore } : {}),
+      ...(rdapClient ? { rdapClient } : {}),
+      ...(firstSeenClient ? { firstSeenClient } : {}),
       logger,
       signal,
       resume: isResume,
@@ -311,6 +352,25 @@ async function main(): Promise<void> {
       console.log(`Artifacts: ${enrichmentDirectory}/`);
       console.log('  keyword-clusters.csv');
       console.log('  keyword-clusters.json');
+      console.log('  manifest.json');
+      console.log('  status.json');
+    } else if (outcome.kind === 'completed' && outcome.domainAgeRecords) {
+      console.log('');
+      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+      console.log(`Artifacts: ${enrichmentDirectory}/`);
+      console.log('  domain-age.csv');
+      console.log('  domain-age.json');
+      console.log('  manifest.json');
+      console.log('  status.json');
+    } else if (outcome.kind === 'completed' && outcome.result && outcome.domainAgeRecords) {
+      console.log('');
+      console.log(`Clusters: ${outcome.result.clusters.length}`);
+      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+      console.log(`Artifacts: ${enrichmentDirectory}/`);
+      console.log('  keyword-clusters.csv');
+      console.log('  keyword-clusters.json');
+      console.log('  domain-age.csv');
+      console.log('  domain-age.json');
       console.log('  manifest.json');
       console.log('  status.json');
     } else if (outcome.kind === 'failed') {
@@ -331,6 +391,7 @@ async function main(): Promise<void> {
     }
   } finally {
     store?.close();
+    cacheStore?.close();
     process.off('SIGINT', sigintHandler);
     process.off('SIGTERM', sigtermHandler);
   }

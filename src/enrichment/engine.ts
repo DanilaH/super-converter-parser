@@ -5,8 +5,13 @@ import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { writeTextAtomic } from '../runs/run.js';
 import type { SerpResult } from '../google/serp.js';
+import type { ResearchConfig } from '../config/config.js';
+import type { CacheStore } from '../cache/store.js';
+import type { RdapClient } from '../rdap/types.js';
+import type { FirstSeenClient } from '../firstseen/types.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson } from './outputs.js';
+import { runDomainAgeModule, renderDomainAgeCsv, renderDomainAgeJson, type DomainAgeRecord } from '../runs/domainAge.js';
 import type {
   EnrichmentItemSource,
   EnrichmentModuleConfig,
@@ -43,6 +48,15 @@ export type EnrichmentOptions = {
   logger: EnrichmentLogger;
   signal?: CancellationSignal;
   resume?: boolean;
+  /**
+   * Optional research-config-scoped dependencies required only by the
+   * `domain_age` module. Clusters does not need them, so they remain optional
+   * to keep that path unchanged.
+   */
+  cacheStore?: CacheStore;
+  researchConfig?: ResearchConfig;
+  rdapClient?: RdapClient;
+  firstSeenClient?: FirstSeenClient;
 };
 
 export type EnrichmentOutcome = {
@@ -50,6 +64,7 @@ export type EnrichmentOutcome = {
   enrichmentId: string;
   state: EnrichmentRunState;
   result?: ClusteringResult;
+  domainAgeRecords?: Map<string, DomainAgeRecord>;
   error?: string;
 };
 
@@ -89,6 +104,28 @@ function buildClusteringInputs(
     });
   }
   return inputs;
+}
+
+// Collects the deduplicated set of registrable domains from a source run's
+// organic SERP rows, preserving first-seen order so progress and outputs are
+// deterministic. domain_age operates on domains; the keyword-level shortlist is
+// a clustering concern, so all observed organic domains are resolved here (the
+// TTL cache deduplicates across runs and a domain shared by many keywords is
+// fetched only once within a run).
+function collectSourceDomains(sourceStore: RunStore, sourceRunId: string, logger: EnrichmentLogger): string[] {
+  const serpRows = sourceStore.loadSerpRows(sourceRunId);
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const row of serpRows) {
+    if (row.resultType !== 'organic') continue;
+    const domain = row.registrableDomain ?? '';
+    if (domain && !seen.has(domain)) {
+      seen.add(domain);
+      order.push(domain);
+    }
+  }
+  logger(`Domain-age: ${order.length} unique domains observed in organic SERPs.`);
+  return order;
 }
 
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
@@ -141,6 +178,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     logger(`Modules: ${modules.join(', ')}`);
 
     let result: ClusteringResult | undefined;
+    let domainAgeRecords: Map<string, DomainAgeRecord> | undefined;
     if (modules.includes('clusters')) {
       const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
         (item) => item.itemId === 'clusters' && item.module === 'clusters',
@@ -174,7 +212,36 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       }
     }
 
-    if (!result) {
+    if (modules.includes('domain_age')) {
+      const cacheStore = options.cacheStore;
+      const researchConfig = options.researchConfig;
+      if (!cacheStore || !researchConfig) {
+        throw new Error(
+          "The 'domain_age' module requires cacheStore and researchConfig options (CacheStore + ResearchConfig).",
+        );
+      }
+      checkCancellation(signal);
+      const domains = collectSourceDomains(sourceConn.store, sourceRunId, logger);
+      // runDomainAgeModule is cache-idempotent: a resume re-entry cache-hits
+      // completed domains and never re-fetches them, satisfying the
+      // "completed work is not repeated" acceptance.
+      domainAgeRecords = await runDomainAgeModule({
+        domains,
+        cache: cacheStore,
+        rdap: options.rdapClient ?? null,
+        firstSeen: options.firstSeenClient ?? null,
+        ttl: researchConfig.cache.ttl.domainAge,
+        forceRefresh: false,
+        store: enrichmentStore,
+        runId: enrichmentId,
+        logger,
+        signal,
+        now: Date.now,
+        onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
+      });
+    }
+
+    if (!result && !domainAgeRecords) {
       throw new Error('No modules executed');
     }
 
@@ -185,35 +252,55 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     const csvPath = join(enrichmentDirectory, 'keyword-clusters.csv');
     const jsonPath = join(enrichmentDirectory, 'keyword-clusters.json');
+    const domainAgeCsvPath = join(enrichmentDirectory, 'domain-age.csv');
+    const domainAgeJsonPath = join(enrichmentDirectory, 'domain-age.json');
     const manifestPath = join(enrichmentDirectory, 'manifest.json');
     const statusPath = join(enrichmentDirectory, 'status.json');
 
     await mkdir(enrichmentDirectory, { recursive: true });
 
-    await writeKeywordClustersCsv(csvPath, result.clusters);
-    await writeKeywordClustersJson(jsonPath, {
-      enrichmentId,
-      sourceRunId,
-      outputDirectory: enrichmentDirectory,
-      clusters: result.clusters,
-      pairs: result.pairs,
-      exclusions: result.exclusions,
-      edgeCount: result.edgeCount,
-      inputCount: result.inputCount,
-      excludedCount: result.excludedCount,
-      algorithmVersion: result.algorithmVersion,
-      config: result.config,
-    });
+    if (result) {
+      await writeKeywordClustersCsv(csvPath, result.clusters);
+      await writeKeywordClustersJson(jsonPath, {
+        enrichmentId,
+        sourceRunId,
+        outputDirectory: enrichmentDirectory,
+        clusters: result.clusters,
+        pairs: result.pairs,
+        exclusions: result.exclusions,
+        edgeCount: result.edgeCount,
+        inputCount: result.inputCount,
+        excludedCount: result.excludedCount,
+        algorithmVersion: result.algorithmVersion,
+        config: result.config,
+      });
+    }
+
+    if (domainAgeRecords) {
+      const records = [...domainAgeRecords.values()].sort((a, b) => a.domain.localeCompare(b.domain));
+      await writeTextAtomic(domainAgeCsvPath, renderDomainAgeCsv(records), 'domain age CSV');
+      await writeTextAtomic(
+        domainAgeJsonPath,
+        renderDomainAgeJson(records) + '\n',
+        'domain age JSON',
+      );
+    }
+
     const summary = {
-      inputCount: result.inputCount,
-      excludedCount: result.excludedCount,
-      clusterCount: result.clusters.length,
-      pairCount: result.pairs.length,
-      edgeCount: result.edgeCount,
+      ...(result
+        ? {
+            inputCount: result.inputCount,
+            excludedCount: result.excludedCount,
+            clusterCount: result.clusters.length,
+            pairCount: result.pairs.length,
+            edgeCount: result.edgeCount,
+          }
+        : {}),
+      ...(domainAgeRecords ? { domainCount: domainAgeRecords.size } : {}),
     };
     const artifacts = [
-      'keyword-clusters.csv',
-      'keyword-clusters.json',
+      ...(result ? ['keyword-clusters.csv', 'keyword-clusters.json'] : []),
+      ...(domainAgeRecords ? ['domain-age.csv', 'domain-age.json'] : []),
       'manifest.json',
       'status.json',
     ];
@@ -245,13 +332,20 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     );
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
-    logger(`Enrichment completed: ${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`);
-
+    if (result) {
+      logger(
+        `Enrichment completed: ${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`,
+      );
+    }
+    if (domainAgeRecords) {
+      logger(`Domain-age: resolved ${domainAgeRecords.size} domains.`);
+    }
     return {
       kind: 'completed',
       enrichmentId,
       state: 'completed',
-      result,
+      ...(result ? { result } : {}),
+      ...(domainAgeRecords ? { domainAgeRecords } : {}),
     };
   } catch (error) {
     if (error instanceof EnrichmentCancelledError) {

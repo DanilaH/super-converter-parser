@@ -1,0 +1,12 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "example.com",
+  "unicodeName": "example.com",
+  "status": ["client transfer prohibited", "server delete prohibited"],
+  "events": [
+    { "eventAction": "last update of RDAP database", "eventDate": "2024-06-01T00:00:00Z" },
+    { "eventAction": "registration", "eventDate": "2010-05-03T04:00:00Z" },
+    { "eventAction": "add", "eventDate": "2010-05-03T04:00:00Z" },
+    { "eventAction": "expiration", "eventDate": "2025-08-04T04:00:00Z" }
+  ]
+}

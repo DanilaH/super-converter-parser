@@ -4,10 +4,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunStore } from '../db/store.js';
+import { CacheStore } from '../cache/store.js';
 import { createRunDirectory } from '../runs/run.js';
 import { loadConfig } from '../config/config.js';
 import { runEnrichment, type EnrichmentOptions } from './engine.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from './clustering.js';
+import type { RdapClient, RdapRegistrationResult } from '../rdap/types.js';
+import type { FirstSeenClient, FirstSeenResult } from '../firstseen/types.js';
 
 const CLUSTERING_CONFIG: ClusteringConfig = {
   topN: 10,
@@ -371,3 +374,127 @@ test('runEnrichment: artifact publication failure leaves the run failed, not com
   enrichmentStore.close();
   await rm(tempDir, { recursive: true, force: true });
 });
+
+const makeRdap = (counts: { value: number }): RdapClient => {
+  return (domain: string): Promise<RdapRegistrationResult> => {
+    counts.value += 1;
+    return Promise.resolve({
+      domain,
+      registrationDate: '2010-05-03T04:00:00Z',
+      status: 'ok',
+      error: null,
+      source: 'rdap',
+      rule: 'earliest eventDate among eventAction in {registration, add, create}',
+      events: [],
+      isRedacted: false,
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      requestCount: 1,
+      httpStatus: 200,
+    });
+  };
+};
+
+const makeFirstSeen = (counts: { value: number }): FirstSeenClient => {
+  return (domain: string): Promise<FirstSeenResult> => {
+    counts.value += 1;
+    return Promise.resolve({
+      domain,
+      firstSeenDate: '2001-04-09T13:50:45Z',
+      status: 'ok',
+      error: null,
+      source: 'wayback',
+      sourceReason: null,
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      requestCount: 1,
+      httpStatus: 200,
+    });
+  };
+};
+
+test('runEnrichment: domain_age resolves domains and writes artifacts', async () => {
+  const runId = 'da-source';
+  const sourceStore = createTestSourceStore(runId);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-domain-age-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
+  const cacheStore = CacheStore.openInMemory();
+  const rdapCalls = { value: 0 };
+  const fsCalls = { value: 0 };
+
+  const outcome = await runEnrichment({
+    enrichmentId: 'da-run',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['domain_age'],
+    config: {},
+    researchConfig: BASE_CONFIG,
+    cacheStore,
+    rdapClient: makeRdap(rdapCalls),
+    firstSeenClient: makeFirstSeen(fsCalls),
+    logger: () => {},
+  });
+
+  assert.equal(outcome.kind, 'completed');
+  assert.ok(outcome.domainAgeRecords);
+  // 5 unique organic domains across the two source keywords (a/b/c/e/f).
+  assert.equal(outcome.domainAgeRecords!.size, 5);
+  assert.equal(rdapCalls.value, 5);
+  assert.equal(fsCalls.value, 5);
+
+  // Resolved once and cached for resume.
+  assert.ok(cacheStore.getDomainAge('a.com'));
+  assert.equal(cacheStore.getDomainAge('a.com')?.registrationDate, '2010-05-03T04:00:00Z');
+
+  const csv = await readFile(join(enrichmentDir, 'domain-age.csv'), 'utf8');
+  assert.match(csv, /^"domain"/);
+  assert.equal(csv.split('\r\n').filter((l) => l.length > 0).length, 6); // header + 5
+
+  const jsonText = await readFile(join(enrichmentDir, 'domain-age.json'), 'utf8');
+  const json = JSON.parse(jsonText) as Array<{ domain: string; registrationDate: string }>;
+  assert.equal(json.length, 5);
+  assert.equal(json.find((r) => r.domain === 'a.com')?.registrationDate, '2010-05-03T04:00:00Z');
+
+  sourceStore.close();
+  enrichmentStore.close();
+  cacheStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});
+
+test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls', async () => {
+  const runId = 'da-resume-source';
+  const sourceStore = createTestSourceStore(runId);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-domain-age-resume-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
+  const cacheStore = CacheStore.openInMemory();
+  const rdapCalls = { value: 0 };
+
+  const options: EnrichmentOptions = {
+    enrichmentId: 'da-resume',
+    sourceStoreOrPath: sourceStore,
+    sourceRunId: runId,
+    enrichmentStore,
+    enrichmentDirectory: enrichmentDir,
+    modules: ['domain_age'],
+    config: {},
+    researchConfig: BASE_CONFIG,
+    cacheStore,
+    rdapClient: makeRdap(rdapCalls),
+    firstSeenClient: makeFirstSeen({ value: 0 }),
+    logger: () => {},
+  };
+
+  await runEnrichment(options);
+  assert.equal(rdapCalls.value, 5);
+
+  const resumed = await runEnrichment({ ...options, resume: true });
+  assert.equal(resumed.kind, 'completed');
+  assert.equal(rdapCalls.value, 5); // no fresh calls: all cache hits
+  assert.equal(resumed.domainAgeRecords?.size, 5);
+
+  sourceStore.close();
+  enrichmentStore.close();
+  cacheStore.close();
+  await rm(enrichmentDir, { recursive: true, force: true });
+});
+

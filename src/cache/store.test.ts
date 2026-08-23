@@ -12,6 +12,7 @@ import {
   ttlMsForKeywordStatus,
   ttlMsForDomainStatus,
   ttlMsForRelatedStatus,
+  ttlMsForDomainAgeEntry,
   type CacheTtlSettings,
   type CachedKeywordEntry,
   type CachedRelatedEntry,
@@ -179,6 +180,15 @@ test('failed entries keep their error and short TTL mapping', () => {
     domainOkMs: 30 * 24 * 60 * 60 * 1000,
     domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
     domainErrorMs: 60 * 60 * 1000,
+    domainAge: {
+      rdapOkMs: 180 * 24 * 60 * 60 * 1000,
+      rdapNotFoundMs: 30 * 24 * 60 * 60 * 1000,
+      rdapUnsupportedMs: 30 * 24 * 60 * 60 * 1000,
+      rdapErrorMs: 60 * 60 * 1000,
+      firstSeenOkMs: 30 * 24 * 60 * 60 * 1000,
+      firstSeenErrorMs: 60 * 60 * 1000,
+      firstSeenUnavailableMs: 24 * 60 * 60 * 1000,
+    },
   };
   assert.equal(ttlMsForKeywordStatus('completed', ttl), 7 * 24 * 60 * 60 * 1000);
   assert.equal(ttlMsForKeywordStatus('partial', ttl), 6 * 60 * 60 * 1000);
@@ -807,6 +817,69 @@ test('domain cache roundtrip with explicit TTL', () => {
   store.close();
 });
 
+test('domain_age_cache roundtrip preserves registration/first-seen data and TTL-derived expiry', () => {
+  const store = CacheStore.openInMemory();
+  store.putDomainAge(
+    'example.com',
+    {
+      registrationDate: '2010-05-03T04:00:00Z',
+      registrationStatus: 'ok',
+      registrationRule: 'earliest eventDate',
+      registrationIsRedacted: false,
+      firstSeenDate: '2001-04-09T13:50:45Z',
+      firstSeenStatus: 'ok',
+      firstSeenSource: 'wayback',
+      error: null,
+    },
+    '2026-01-01T00:00:00.000Z',
+    180 * 24 * 60 * 60 * 1000,
+  );
+  const loaded = store.getDomainAge('example.com');
+  assert.equal(loaded?.registrationDate, '2010-05-03T04:00:00Z');
+  assert.equal(loaded?.registrationStatus, 'ok');
+  assert.equal(loaded?.firstSeenDate, '2001-04-09T13:50:45Z');
+  assert.equal(loaded?.firstSeenStatus, 'ok');
+  assert.equal(loaded?.firstSeenSource, 'wayback');
+  assert.equal(loaded?.registrationIsRedacted, false);
+  assert.equal(loaded?.expiresAt, '2026-06-30T00:00:00.000Z');
+  store.putDomainAge(
+    'redacted.example',
+    {
+      registrationDate: null,
+      registrationStatus: 'ok',
+      registrationRule: 'no registration-class event present',
+      registrationIsRedacted: true,
+      firstSeenDate: null,
+      firstSeenStatus: 'unavailable',
+      firstSeenSource: 'unconfigured',
+      error: 'registration event redacted or absent',
+    },
+    '2026-01-01T00:00:00.000Z',
+    24 * 60 * 60 * 1000,
+  );
+  const redacted = store.getDomainAge('redacted.example');
+  assert.equal(redacted?.registrationDate, null);
+  assert.equal(redacted?.registrationIsRedacted, true);
+  assert.equal(redacted?.firstSeenStatus, 'unavailable');
+  store.close();
+});
+
+test('ttlMsForDomainAgeEntry picks the freshest-facts-first minimum', () => {
+  // registration ok (180d) is the freshest fact relative to an error (1d).
+  assert.equal(ttlMsForDomainAgeEntry('ok', 'error', CONFIG.cache.ttl.domainAge), 60 * 60 * 1000);
+  // registration ok (180d) is fresher than... no: firstSeen ok (30d) is fresher
+  // than registration ok (180d) -> 30d.
+  assert.equal(
+    ttlMsForDomainAgeEntry('ok', 'ok', CONFIG.cache.ttl.domainAge),
+    30 * 24 * 60 * 60 * 1000,
+  );
+  // not_attempted first-seen -> only the registration TTL governs.
+  assert.equal(
+    ttlMsForDomainAgeEntry('not_found', 'not_attempted', CONFIG.cache.ttl.domainAge),
+    30 * 24 * 60 * 60 * 1000,
+  );
+});
+
 test('cleanup removes expired entries and orphaned SERP rows but keeps valid ones', () => {
   const store = CacheStore.openInMemory();
   store.putKeyword(entry({ cacheKey: 'valid', expiresAt: '2026-02-01T00:00:00.000Z' }));
@@ -825,6 +898,21 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
     1000,
   );
   store.putDomain('old.com', { dr: null, status: 'error', error: 'x' }, '2020-01-01T00:00:00.000Z', 1000);
+  store.putDomainAge(
+    'age-old.com',
+    {
+      registrationDate: null,
+      registrationStatus: 'error',
+      registrationRule: 'unreachable',
+      registrationIsRedacted: false,
+      firstSeenDate: null,
+      firstSeenStatus: 'error',
+      firstSeenSource: 'wayback',
+      error: 'timeout',
+    },
+    '2020-01-01T00:00:00.000Z',
+    1000,
+  );
 
   const deleted = store.cleanup(Date.parse('2026-01-01T00:00:00.000Z'));
   assert.ok(deleted >= 3);
@@ -833,6 +921,7 @@ test('cleanup removes expired entries and orphaned SERP rows but keeps valid one
   assert.equal(store.getKeyword('expired2'), null);
   assert.equal(store.getRelated('related-expired'), null);
   assert.equal(store.getDomain('old.com'), null);
+  assert.equal(store.getDomainAge('age-old.com'), null);
   store.close();
 });
 
@@ -913,6 +1002,9 @@ test('TTL defaults match the documented cache semantics', () => {
   assert.equal(CONFIG.cache.ttl.relatedErrorMs, 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.domainOkMs, 30 * 24 * 60 * 60 * 1000);
   assert.equal(CONFIG.cache.ttl.domainErrorMs, 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.domainAge.rdapOkMs, 180 * 24 * 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.domainAge.rdapErrorMs, 60 * 60 * 1000);
+  assert.equal(CONFIG.cache.ttl.domainAge.firstSeenUnavailableMs, 24 * 60 * 60 * 1000);
 });
 
 test('keywordCacheIdentity comes from config and parser versions', () => {
