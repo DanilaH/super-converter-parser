@@ -7,6 +7,9 @@ import { writeTextAtomic } from '../runs/run.js';
 import type { SerpResult } from '../google/serp.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson } from './outputs.js';
+import { CacheStore } from '../cache/store.js';
+import { runQuerySuggestionsModule, createBrowserSuggestionCollector, buildQueryResultFromStore, defaultQuerySuggestionsConfig, type SuggestionCollector } from './querySuggestions.js';
+import { writeQuerySuggestionsCsv, writeQuerySuggestionsJson } from './querySuggestionsOutputs.js';
 import type {
   EnrichmentItemSource,
   EnrichmentModuleConfig,
@@ -14,22 +17,12 @@ import type {
   EnrichmentRunState,
   EnrichmentCacheStatus,
   EnrichmentRunRecord,
+  EnrichmentLogger,
+  CancellationSignal,
+  QuerySuggestionResult,
+  QuerySuggestionsConfig,
 } from './types.js';
-
-export type EnrichmentLogger = (line: string) => void;
-
-export type CancellationSignal = {
-  cancelled: boolean;
-};
-
-export const NEVER_CANCELLED: CancellationSignal = Object.freeze({ cancelled: false });
-
-export class EnrichmentCancelledError extends Error {
-  constructor() {
-    super('Cancelled');
-    this.name = 'EnrichmentCancelledError';
-  }
-}
+import { EnrichmentCancelledError, NEVER_CANCELLED } from './types.js';
 
 export type EnrichmentOptions = {
   enrichmentId: string;
@@ -49,7 +42,7 @@ export type EnrichmentOutcome = {
   kind: 'completed' | 'paused' | 'failed';
   enrichmentId: string;
   state: EnrichmentRunState;
-  result?: ClusteringResult;
+  result: ClusteringResult | undefined;
   error?: string;
 };
 
@@ -132,7 +125,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (signal.cancelled) {
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'running');
@@ -141,6 +134,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     logger(`Modules: ${modules.join(', ')}`);
 
     let result: ClusteringResult | undefined;
+    let queryResult: QuerySuggestionResult | undefined;
     if (modules.includes('clusters')) {
       const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
         (item) => item.itemId === 'clusters' && item.module === 'clusters',
@@ -174,13 +168,55 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       }
     }
 
-    if (!result) {
+    if (modules.includes('query_suggestions')) {
+      const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
+        (item) => item.itemId === 'query_suggestions' && item.module === 'query_suggestions',
+      );
+      if (existingItem?.status === 'completed') {
+        logger('Skipping completed query_suggestions module');
+        queryResult = buildQueryResultFromStore(enrichmentId, enrichmentStore, config.query_suggestions ?? defaultQuerySuggestionsConfig());
+      } else {
+        const runConfig = sourceConn.store.loadRun(sourceRunId);
+        if (!runConfig) {
+          throw new Error(`Source run not found for query suggestions: ${sourceRunId}`);
+        }
+        const researchConfig = runConfig.configSnapshot;
+        const cacheStore = CacheStore.open(researchConfig.cache.path);
+        let collector: SuggestionCollector | undefined;
+        try {
+          collector = await createBrowserSuggestionCollector(
+            researchConfig,
+            join(enrichmentDirectory, 'debug'),
+            signal,
+          );
+          queryResult = await runQuerySuggestionsModule({
+            enrichmentId,
+            sourceStore: sourceConn.store,
+            enrichmentStore,
+            sourceRunId,
+            config: config.query_suggestions ?? defaultQuerySuggestionsConfig(),
+            shortlist,
+            logger,
+            signal,
+            collector,
+            cache: cacheStore,
+            researchConfig,
+            debugRoot: join(enrichmentDirectory, 'debug'),
+          });
+        } finally {
+          await collector?.close().catch(() => undefined);
+          cacheStore.close();
+        }
+      }
+    }
+
+    if (!result && !queryResult) {
       throw new Error('No modules executed');
     }
 
     if (signal.cancelled) {
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
 
     const csvPath = join(enrichmentDirectory, 'keyword-clusters.csv');
@@ -190,33 +226,57 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     await mkdir(enrichmentDirectory, { recursive: true });
 
-    await writeKeywordClustersCsv(csvPath, result.clusters);
-    await writeKeywordClustersJson(jsonPath, {
-      enrichmentId,
-      sourceRunId,
-      outputDirectory: enrichmentDirectory,
-      clusters: result.clusters,
-      pairs: result.pairs,
-      exclusions: result.exclusions,
-      edgeCount: result.edgeCount,
-      inputCount: result.inputCount,
-      excludedCount: result.excludedCount,
-      algorithmVersion: result.algorithmVersion,
-      config: result.config,
-    });
-    const summary = {
-      inputCount: result.inputCount,
-      excludedCount: result.excludedCount,
-      clusterCount: result.clusters.length,
-      pairCount: result.pairs.length,
-      edgeCount: result.edgeCount,
-    };
-    const artifacts = [
-      'keyword-clusters.csv',
-      'keyword-clusters.json',
-      'manifest.json',
-      'status.json',
-    ];
+    const summary: Record<string, unknown> = {};
+    const artifacts: string[] = ['manifest.json', 'status.json'];
+
+    if (result) {
+      await writeKeywordClustersCsv(csvPath, result.clusters);
+      await writeKeywordClustersJson(jsonPath, {
+        enrichmentId,
+        sourceRunId,
+        outputDirectory: enrichmentDirectory,
+        clusters: result.clusters,
+        pairs: result.pairs,
+        exclusions: result.exclusions,
+        edgeCount: result.edgeCount,
+        inputCount: result.inputCount,
+        excludedCount: result.excludedCount,
+        algorithmVersion: result.algorithmVersion,
+        config: result.config,
+      });
+      summary.inputCount = result.inputCount;
+      summary.excludedCount = result.excludedCount;
+      summary.clusterCount = result.clusters.length;
+      summary.pairCount = result.pairs.length;
+      summary.edgeCount = result.edgeCount;
+      artifacts.push('keyword-clusters.csv', 'keyword-clusters.json');
+    }
+
+    if (queryResult) {
+      const qCsvPath = join(enrichmentDirectory, 'query-suggestions.csv');
+      const qJsonPath = join(enrichmentDirectory, 'query-suggestions.json');
+      await writeQuerySuggestionsCsv(qCsvPath, queryResult);
+      await writeQuerySuggestionsJson(qJsonPath, {
+        enrichmentId,
+        sourceRunId,
+        outputDirectory: enrichmentDirectory,
+        suggestions: queryResult.suggestions,
+        perSourceStatus: queryResult.perSourceStatus,
+        sourceStats: queryResult.sourceStats,
+        inputCount: queryResult.inputCount,
+        emptyCount: queryResult.emptyCount,
+        errorCount: queryResult.errorCount,
+        algorithmVersion: queryResult.algorithmVersion,
+        config: queryResult.config,
+      });
+      summary.queryInputCount = queryResult.inputCount;
+      summary.querySuggestionCount = queryResult.suggestions.length;
+      summary.queryEmptyCount = queryResult.emptyCount;
+      summary.queryErrorCount = queryResult.errorCount;
+      summary.querySourceStats = queryResult.sourceStats;
+      artifacts.push('query-suggestions.csv', 'query-suggestions.json');
+    }
+
     await writeTextAtomic(
       manifestPath,
       JSON.stringify({
@@ -245,7 +305,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     );
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
-    logger(`Enrichment completed: ${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`);
+    const parts: string[] = [];
+    if (result) parts.push(`${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`);
+    if (queryResult) parts.push(`${queryResult.suggestions.length} query suggestions from ${queryResult.inputCount} keywords (${queryResult.emptyCount} empty, ${queryResult.errorCount} errors)`);
+    logger(`Enrichment completed: ${parts.join('; ')}`);
 
     return {
       kind: 'completed',
@@ -258,7 +321,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
       logger('Enrichment paused by user');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
     const message = error instanceof Error ? error.message : String(error);
     enrichmentStore.setEnrichmentState(enrichmentId, 'failed', message);
@@ -267,6 +330,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       kind: 'failed',
       enrichmentId,
       state: 'failed',
+      result: undefined,
       error: message,
     };
   } finally {

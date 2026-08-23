@@ -30,7 +30,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -216,6 +216,28 @@ const MIGRATIONS: string[] = [
     reason TEXT NOT NULL,
     serp_size INTEGER NOT NULL,
     PRIMARY KEY (enrichment_id, keyword)
+  );
+  `,
+  // v10: query-suggestions collection (TASK-013). One row per collected
+  // suggestion, deduped on normalized_suggestion but retaining every
+  // (parent_keyword, source) occurrence in occurrences_json. Status is the
+  // per-collection truth (ok/empty/unavailable/error) so an absent source is
+  // never rewritten as a successful invented row.
+  `
+  CREATE TABLE IF NOT EXISTS enrichment_query_suggestions (
+    enrichment_id TEXT NOT NULL,
+    normalized_suggestion TEXT NOT NULL,
+    raw_text TEXT NOT NULL,
+    volume INTEGER,
+    cpc REAL,
+    ordinal INTEGER,
+    market TEXT NOT NULL,
+    hl TEXT NOT NULL,
+    gl TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    collection_status TEXT NOT NULL,
+    occurrences_json TEXT NOT NULL,
+    PRIMARY KEY (enrichment_id, normalized_suggestion)
   );
   `,
 ];
@@ -1228,6 +1250,117 @@ export class RunStore {
       normalizedKeyword: row.normalized_keyword,
       reason: row.reason,
       serpSize: row.serp_size,
+    }));
+  }
+
+  // Persists the deduped query-suggestion set. Each row is keyed by the
+  // normalized suggestion and carries every retaining (parent, source) occurrence
+  // in occurrences_json. Existing rows for the enrichment are replaced wholesale.
+  saveQuerySuggestions(
+    enrichmentId: string,
+    suggestions: Array<{
+      normalizedSuggestion: string;
+      rawText: string;
+      volume: number | null;
+      cpc: number | null;
+      ordinal: number | null;
+      market: string;
+      hl: string;
+      gl: string;
+      parserVersion: string;
+      collectionStatus: string;
+      occurrences: Array<{
+        parentKeyword: string;
+        normalizedParent: string;
+        source: string;
+        market: string;
+        hl: string;
+        gl: string;
+        parserVersion: string;
+        collectionStatus: string;
+      }>;
+    }>,
+  ): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      `INSERT OR REPLACE INTO enrichment_query_suggestions
+        (enrichment_id, normalized_suggestion, raw_text, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const deleteExisting = this.db.prepare(
+      'DELETE FROM enrichment_query_suggestions WHERE enrichment_id = ?',
+    );
+    const tx = this.db.transaction(() => {
+      deleteExisting.run(enrichmentId);
+      for (const s of suggestions) {
+        stmt.run(
+          enrichmentId,
+          s.normalizedSuggestion,
+          s.rawText,
+          s.volume,
+          s.cpc,
+          s.ordinal,
+          s.market,
+          s.hl,
+          s.gl,
+          s.parserVersion,
+          s.collectionStatus,
+          JSON.stringify(s.occurrences),
+        );
+      }
+    });
+    tx();
+  }
+
+  loadQuerySuggestions(enrichmentId: string): Array<{
+    normalizedSuggestion: string;
+    rawText: string;
+    volume: number | null;
+    cpc: number | null;
+    ordinal: number | null;
+    market: string;
+    hl: string;
+    gl: string;
+    parserVersion: string;
+    collectionStatus: string;
+    occurrences: Array<{
+      parentKeyword: string;
+      normalizedParent: string;
+      source: string;
+      market: string;
+      hl: string;
+      gl: string;
+      parserVersion: string;
+      collectionStatus: string;
+    }>;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichment_query_suggestions WHERE enrichment_id = ? ORDER BY normalized_suggestion')
+      .all(enrichmentId) as Array<{
+      normalized_suggestion: string;
+      raw_text: string;
+      volume: number | null;
+      cpc: number | null;
+      ordinal: number | null;
+      market: string;
+      hl: string;
+      gl: string;
+      parser_version: string;
+      collection_status: string;
+      occurrences_json: string;
+    }>;
+    return rows.map((row) => ({
+      normalizedSuggestion: row.normalized_suggestion,
+      rawText: row.raw_text,
+      volume: row.volume,
+      cpc: row.cpc,
+      ordinal: row.ordinal,
+      market: row.market,
+      hl: row.hl,
+      gl: row.gl,
+      parserVersion: row.parser_version,
+      collectionStatus: row.collection_status,
+      occurrences: JSON.parse(row.occurrences_json),
     }));
   }
 

@@ -56,3 +56,25 @@ export function normalizeDomain(domain: string): string {
 export function buildDomainCacheKey(domain: string): string {
   return cacheKey('domain', { domain: normalizeDomain(domain) });
 }
+
+// Query-suggestion collection is cached per (source + parent keyword + market/hl/gl
+// + parser version) so a re-run or a resume does not re-hit the browser for an
+// already-collected parent/source. Google-sourced suggestions carry no volume/CPC,
+// so the parser version is what makes an entry comparable across runs.
+export function buildSuggestionCacheKey(
+  source: string,
+  normalizedParent: string,
+  identity: CacheIdentity,
+  parserVersion: string,
+): string {
+  return cacheKey('suggestion', {
+    source,
+    normalizedParent,
+    market: identity.market,
+    hl: identity.hl,
+    gl: identity.gl,
+    surferParserVersion: identity.surferParserVersion,
+    googleParserVersion: identity.googleParserVersion,
+    parserVersion,
+  });
+}

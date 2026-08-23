@@ -19,7 +19,8 @@ export type ResearchErrorCode =
   | 'RESUME_NOT_FOUND'
   | 'RESUME_TERMINAL_RUN'
   | 'RESUME_PARSER_MISMATCH'
-  | 'RESUME_CONFIG_MISMATCH';
+  | 'RESUME_CONFIG_MISMATCH'
+  | 'ENRICHMENT_ERROR';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

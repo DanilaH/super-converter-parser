@@ -4,13 +4,18 @@ import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
+import { runEnrichment } from '../enrichment/engine.js';
+import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   KNOWN_ENRICHMENT_MODULES,
+  QUERY_SUGGESTION_SOURCES,
+  QUERY_SUGGESTION_PARSER_VERSION,
+  type EnrichmentModuleConfig,
   type EnrichmentModuleId,
+  type QuerySuggestionSource,
 } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -56,6 +61,8 @@ interface ParsedArgs {
   minShared: number;
   minJaccard: number;
   shortlist: string[];
+  sources: QuerySuggestionSource[];
+  maxSuggestions: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -67,6 +74,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let minShared = 3;
   let minJaccard = 0.3;
   let shortlist: string[] = [];
+  let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
+  let maxSuggestions = 20;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -120,6 +129,29 @@ function parseArgs(argv: string[]): ParsedArgs {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist requires a value');
       shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (arg === '--sources') {
+      const value = args.shift();
+      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources requires a value');
+      const parsed = value.split(',').map((s) => s.trim()).filter(Boolean) as QuerySuggestionSource[];
+      if (parsed.length === 0) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources must contain at least one source');
+      }
+      for (const s of parsed) {
+        if (!QUERY_SUGGESTION_SOURCES.includes(s)) {
+          throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown suggestion source: ${s}. Known: ${QUERY_SUGGESTION_SOURCES.join(', ')}`);
+        }
+      }
+      sources = parsed;
+    } else if (arg === '--max-suggestions-per-source') {
+      const value = args.shift();
+      if (!value || Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-suggestions-per-source requires a numeric value');
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-suggestions-per-source must be a positive integer, got ${value}`);
+      }
+      maxSuggestions = parsed;
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
@@ -138,7 +170,26 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist };
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions };
+}
+
+function buildEnrichmentConfig(
+  modules: EnrichmentModuleId[],
+  clusteringConfig: ClusteringConfig,
+  sources: QuerySuggestionSource[],
+  maxSuggestions: number,
+): EnrichmentModuleConfig {
+  const config: EnrichmentModuleConfig = { clusters: clusteringConfig };
+  if (modules.includes('query_suggestions')) {
+    config.query_suggestions = {
+      sources,
+      maxSuggestionsPerSource: maxSuggestions,
+      rateLimitMinDelayMs: 1000,
+      rateLimitMaxDelayMs: 10000,
+      algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,
+    };
+  }
+  return config;
 }
 
 function findSourceRunDirectory(sourceRunId: string): string {
@@ -215,7 +266,7 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
     }
     if (args.resumeEnrichmentId) {
-      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist'];
+      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--sources', '--max-suggestions-per-source'];
       const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
       if (supplied.length > 0) {
         throw new ResearchError(
@@ -295,7 +346,7 @@ async function main(): Promise<void> {
       enrichmentDirectory,
       modules,
       shortlist,
-      config: { clusters: clusteringConfig },
+      config: buildEnrichmentConfig(modules, clusteringConfig, args.sources, args.maxSuggestions),
       logger,
       signal,
       resume: isResume,
@@ -305,12 +356,18 @@ async function main(): Promise<void> {
       console.log('Run paused. Resume with:');
       console.log(`  npm run enrich -- --resume ${enrichmentId}`);
       exitCode = EXIT_PAUSED;
-    } else if (outcome.kind === 'completed' && outcome.result) {
+    } else if (outcome.kind === 'completed') {
       console.log('');
-      console.log(`Clusters: ${outcome.result.clusters.length}`);
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  keyword-clusters.csv');
-      console.log('  keyword-clusters.json');
+      if (outcome.result) {
+        console.log(`Clusters: ${outcome.result.clusters.length}`);
+        console.log('  keyword-clusters.csv');
+        console.log('  keyword-clusters.json');
+      }
+      if (modules.includes('query_suggestions')) {
+        console.log('  query-suggestions.csv');
+        console.log('  query-suggestions.json');
+      }
       console.log('  manifest.json');
       console.log('  status.json');
     } else if (outcome.kind === 'failed') {

@@ -45,6 +45,9 @@ export type ResearchConfig = {
       domainOkMs: number;
       domainNotFoundMs: number;
       domainErrorMs: number;
+      suggestionOkMs: number;
+      suggestionEmptyMs: number;
+      suggestionErrorMs: number;
     };
   };
   ahrefs: {
@@ -111,6 +114,9 @@ const DEFAULTS: ResearchConfig = {
       domainOkMs: 30 * 24 * 60 * 60 * 1000,
       domainNotFoundMs: 30 * 24 * 60 * 60 * 1000,
       domainErrorMs: 60 * 60 * 1000,
+      suggestionOkMs: 7 * 24 * 60 * 60 * 1000,
+      suggestionEmptyMs: 7 * 24 * 60 * 60 * 1000,
+      suggestionErrorMs: 60 * 60 * 1000,
     },
   },
   ahrefs: {
@@ -233,6 +239,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       DEFAULTS.cache.ttl.domainNotFoundMs,
     ),
     domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
+    suggestionOkMs: readPositiveInt('CACHE_TTL_SUGGESTION_OK_MS', env.CACHE_TTL_SUGGESTION_OK_MS, DEFAULTS.cache.ttl.suggestionOkMs),
+    suggestionEmptyMs: readPositiveInt(
+      'CACHE_TTL_SUGGESTION_EMPTY_MS',
+      env.CACHE_TTL_SUGGESTION_EMPTY_MS,
+      DEFAULTS.cache.ttl.suggestionEmptyMs,
+    ),
+    suggestionErrorMs: readPositiveInt(
+      'CACHE_TTL_SUGGESTION_ERROR_MS',
+      env.CACHE_TTL_SUGGESTION_ERROR_MS,
+      DEFAULTS.cache.ttl.suggestionErrorMs,
+    ),
   };
 
   const drThresholds = {

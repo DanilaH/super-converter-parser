@@ -6,7 +6,7 @@ import type { CacheIdentity } from './keys.js';
 import type { SerpResult } from '../google/serp.js';
 import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 
-export const CACHE_SCHEMA_VERSION = 4;
+export const CACHE_SCHEMA_VERSION = 5;
 
 // Rows that expired less than this long ago survive an open-time cleanup so
 // the next run can still classify them as expired (real expired accounting
@@ -87,6 +87,25 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE serp_cache ADD COLUMN registrable_domain TEXT NOT NULL DEFAULT '';
   `,
+  // v5: query-suggestion collection cache. One row per (source + parent keyword
+  // + market/hl/gl + parser version) so a resume or a fresh enrichment run does
+  // not re-hit the browser for an already-collected parent/source. Status is
+  // ok/empty/error so a genuinely empty or failed collection is cacheable and
+  // distinguishable from "never fetched".
+  `
+  CREATE TABLE IF NOT EXISTS suggestion_cache (
+    cache_key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    normalized_parent TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    suggestions_json TEXT NOT NULL DEFAULT '[]',
+    stored_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export type CachedKeywordEntry = {
@@ -127,6 +146,28 @@ export type CachedDomainEntry = {
   expiresAt: string;
 };
 
+export type CachedSuggestionStatus = 'ok' | 'empty' | 'error' | 'unavailable';
+
+export type CachedSuggestionRow = {
+  text: string;
+  volume: number | null;
+  cpc: number | null;
+  ordinal: number | null;
+};
+
+export type CachedSuggestionEntry = {
+  cacheKey: string;
+  source: string;
+  normalizedParent: string;
+  identity: CacheIdentity;
+  parserVersion: string;
+  status: CachedSuggestionStatus;
+  error: string | null;
+  suggestions: CachedSuggestionRow[];
+  storedAt: string;
+  expiresAt: string;
+};
+
 export type CacheTtlSettings = {
   completedMs: number;
   partialMs: number;
@@ -136,7 +177,27 @@ export type CacheTtlSettings = {
   domainOkMs: number;
   domainNotFoundMs: number;
   domainErrorMs: number;
+  suggestionOkMs: number;
+  suggestionEmptyMs: number;
+  suggestionErrorMs: number;
 };
+
+export type CachedSuggestionStatusTtl = CachedSuggestionStatus;
+
+export function ttlMsForSuggestionStatus(
+  status: CachedSuggestionStatus,
+  ttl: CacheTtlSettings,
+): number {
+  switch (status) {
+    case 'ok':
+      return ttl.suggestionOkMs;
+    case 'empty':
+    case 'unavailable':
+      return ttl.suggestionEmptyMs;
+    case 'error':
+      return ttl.suggestionErrorMs;
+  }
+}
 
 export function ttlMsForKeywordStatus(status: KeywordStatus, ttl: CacheTtlSettings): number {
   switch (status) {
@@ -210,6 +271,18 @@ export interface KeywordCache {
   putKeyword(entry: CachedKeywordEntry): void;
   getRelated?(cacheKey: string): CachedRelatedEntry | null;
   putRelated?(entry: Omit<CachedRelatedEntry, 'storedAt' | 'expiresAt'>, storedAt: string, ttlMs: number): void;
+}
+
+// Narrow surface for query-suggestion collection caching. The real CacheStore
+// implements it structurally; tests can substitute an in-memory fake without
+// opening the shared cache database.
+export interface SuggestionCache {
+  getSuggestion(cacheKey: string): CachedSuggestionEntry | null;
+  putSuggestion(
+    entry: Omit<CachedSuggestionEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void;
 }
 
 // Validates the related-entry contract enforced by putRelated: status, rows,
@@ -371,6 +444,8 @@ export class CacheStore implements KeywordCache {
         deleted += relatedResult.changes;
         const domainResult = this.db.prepare('DELETE FROM domain_cache WHERE expires_at <= ?').run(cutoff);
         deleted += domainResult.changes;
+        const suggestionResult = this.db.prepare('DELETE FROM suggestion_cache WHERE expires_at <= ?').run(cutoff);
+        deleted += suggestionResult.changes;
       });
       purge();
       return deleted;
@@ -598,6 +673,68 @@ export class CacheStore implements KeywordCache {
            VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(domain, entry.dr, entry.status, entry.error, storedAt, expiresAt);
+    });
+  }
+
+  getSuggestion(cacheKey: string): CachedSuggestionEntry | null {
+    return this.wrap('getSuggestion', () => {
+      const row = this.db
+        .prepare('SELECT * FROM suggestion_cache WHERE cache_key = ?')
+        .get(cacheKey) as
+        | {
+            cache_key: string;
+            source: string;
+            normalized_parent: string;
+            identity: string;
+            parser_version: string;
+            status: string;
+            error: string | null;
+            suggestions_json: string;
+            stored_at: string;
+            expires_at: string;
+          }
+        | undefined;
+      if (!row) return null;
+      return {
+        cacheKey: row.cache_key,
+        source: row.source,
+        normalizedParent: row.normalized_parent,
+        identity: JSON.parse(row.identity) as CacheIdentity,
+        parserVersion: row.parser_version,
+        status: row.status as CachedSuggestionStatus,
+        error: row.error,
+        suggestions: JSON.parse(row.suggestions_json) as CachedSuggestionRow[],
+        storedAt: row.stored_at,
+        expiresAt: row.expires_at,
+      };
+    });
+  }
+
+  putSuggestion(
+    entry: Omit<CachedSuggestionEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void {
+    this.wrap('putSuggestion', () => {
+      const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO suggestion_cache
+            (cache_key, source, normalized_parent, identity, parser_version, status, error, suggestions_json, stored_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.cacheKey,
+          entry.source,
+          entry.normalizedParent,
+          JSON.stringify(entry.identity),
+          entry.parserVersion,
+          entry.status,
+          entry.error,
+          JSON.stringify(entry.suggestions),
+          storedAt,
+          expiresAt,
+        );
     });
   }
 }
