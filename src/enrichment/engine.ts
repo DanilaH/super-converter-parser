@@ -1506,6 +1506,28 @@ function rebuildPagesFromTargets(enrichmentStore: RunStore, enrichmentId: string
         rebuiltPages.push({ ...parsed, cacheStatus: 'none' });
       } catch {
         enrichmentStore.upsertPageTarget(enrichmentId, { url: t.url, status: 'error', error: 'corrupted checkpoint data' });
+        rebuiltPages.push({
+          url: t.url,
+          finalUrl: t.url,
+          redirectCount: 0,
+          redirectChain: [],
+          httpStatus: 0,
+          contentType: null,
+          fetchStatus: 'error',
+          fetchError: 'corrupted checkpoint data',
+          fetchedAt: t.fetchedAt ?? new Date().toISOString(),
+          cacheStatus: 'none',
+          title: null,
+          metaDescription: null,
+          h1: null,
+          canonical: null,
+          language: null,
+          wordCount: null,
+          forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
+          structuredDataTypes: [],
+          sourceKeywords: JSON.parse(t.sourceKeywords),
+          sourcePositions: JSON.parse(t.sourcePositions),
+        });
       }
     } else if (t.status === 'error' && t.error) {
       rebuiltPages.push({
@@ -1545,6 +1567,26 @@ function rebuildSiteStructureFromTargets(enrichmentStore: RunStore, enrichmentId
         rebuiltRecords.push({ ...parsed, cacheStatus: 'none' });
       } catch {
         enrichmentStore.upsertSiteStructureTarget(enrichmentId, { domain: t.domain, status: 'error', error: 'corrupted checkpoint data' });
+        rebuiltRecords.push({
+          domain: t.domain,
+          homepageStatus: 'error',
+          homepageHttpStatus: null,
+          robotsStatus: 'error',
+          robotsHttpStatus: null,
+          robotsUrl: null,
+          sitemapUrlsFromRobots: [],
+          sitemapFallbackUrl: null,
+          sitemapType: 'none',
+          declaredSitemapCount: 0,
+          discoveredUrlCount: 0,
+          sampledUrls: [],
+          sampledUtilityUrls: [],
+          errors: [{ url: `https://${t.domain}/`, error: 'corrupted checkpoint data' }],
+          fetchedAt: t.fetchedAt ?? new Date().toISOString(),
+          cacheStatus: 'none',
+          sourceKeywords: [],
+          sourceBestPosition: null,
+        });
       }
     }
   }

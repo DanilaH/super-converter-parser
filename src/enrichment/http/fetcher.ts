@@ -1,5 +1,9 @@
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { connect as netConnect, isIP, Socket } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { isPrivateIp } from './ssrf.js';
+
+type Response = any;
 
 export type SsrfChecker = (url: string) => Promise<{ allowed: boolean; reason?: string; ip?: string }>;
 
@@ -87,16 +91,35 @@ export function parseRetryAfter(header: string | null): number | null {
   return null;
 }
 
-class PinnedAgent extends Agent {
-  constructor(validatedIp: string, servername: string, opts: Agent.Options = {}) {
-    super({
-      ...opts,
-      connect: {
-        host: validatedIp,
-        servername,
-      },
-    });
-  }
+interface PinnedConnectContext {
+  validatedIp: string;
+  servername: string;
+}
+
+function createPinnedAgent(ctx: PinnedConnectContext): Agent {
+  const connector = (opts: any, callback: (err: Error | null, socket?: Socket) => void) => {
+    const port = opts.port || (opts.protocol === 'https:' ? 443 : 80);
+
+    if (opts.protocol === 'https:') {
+      const socket = tlsConnect({
+        host: ctx.validatedIp,
+        port,
+        servername: ctx.servername,
+        rejectUnauthorized: opts.rejectUnauthorized,
+      });
+      socket.once('secureConnect', () => callback(null, socket));
+      socket.once('error', (err: Error) => callback(err));
+    } else {
+      const socket = netConnect({
+        host: ctx.validatedIp,
+        port,
+      });
+      socket.once('connect', () => callback(null, socket));
+      socket.once('error', (err: Error) => callback(err));
+    }
+  };
+
+  return new Agent({ connect: connector as any });
 }
 
 async function readBody(
@@ -160,6 +183,8 @@ async function readBody(
       bodyError: true,
       failureReason: isTimeout ? 'timeout' : 'read_error',
     };
+  } finally {
+    reader.cancel().catch(() => {});
   }
 }
 
@@ -172,7 +197,6 @@ export async function boundedFetch(
   const redirectChain: string[] = [];
   let logicalUrl = url;
   let retryCount = 0;
-  let retryRedirectBudget = 0;
 
   const ssrfResult = await ssrfCheck(url);
   if (!ssrfResult.allowed) {
@@ -191,171 +215,222 @@ export async function boundedFetch(
   }
 
   let validatedIp: string | undefined = ssrfResult.ip;
-  let dispatcher: PinnedAgent | undefined;
+  let servername = new URL(url).hostname;
+  let dispatcher: Agent | undefined;
   if (validatedIp) {
-    dispatcher = new PinnedAgent(validatedIp, new URL(url).hostname);
+    dispatcher = createPinnedAgent({ validatedIp, servername });
   }
 
-  for (let redirect = 0; redirect <= cfg.maxRedirects; redirect++) {
-    const domain = getDomain(logicalUrl);
-    if (domain) {
-      await applyDomainDelay(domain, cfg);
-    }
+  const cleanupAgents: Agent[] = [];
+  if (dispatcher) cleanupAgents.push(dispatcher);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs);
+  try {
+    for (let redirect = 0; redirect <= cfg.maxRedirects; redirect++) {
+      const domain = getDomain(logicalUrl);
+      if (domain) {
+        await applyDomainDelay(domain, cfg);
+      }
 
-    let response: Response;
-    try {
-      response = await fetch(logicalUrl, {
-        method: 'GET',
-        headers: {
-          'User-Agent': cfg.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-        },
-        redirect: 'manual',
-        signal: controller.signal,
-        ...(dispatcher ? { dispatcher } : {}),
-      });
-    } catch (error) {
-      clearTimeout(timeout);
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        status: 0,
-        contentType: null,
-        finalUrl: logicalUrl,
-        redirectChain,
-        body: null,
-        error: message,
-        aborted: message.includes('abort'),
-        retryAfter: null,
-        bodyError: false,
-        failureReason: message.includes('abort') ? 'timeout' : 'network',
-      };
-    }
+      let retryAfter: string | null = null;
+      let response: Response | undefined;
 
-    const { status } = response;
-    const contentType = response.headers.get('content-type');
-    const retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
+      for (let retry = 0; retry <= cfg.maxRetries; retry++) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs);
 
-    if (status >= 300 && status < 400) {
-      const location = response.headers.get('location');
-      if (!location) {
-        clearTimeout(timeout);
+        try {
+          response = await undiciFetch(logicalUrl, {
+            method: 'GET',
+            headers: {
+              'User-Agent': cfg.userAgent,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5',
+            },
+            redirect: 'manual',
+            signal: controller.signal,
+            ...(dispatcher ? { dispatcher } : {}),
+          });
+        } catch (error) {
+          clearTimeout(timeout);
+          const message = error instanceof Error ? error.message : String(error);
+          if (retry < cfg.maxRetries && message.includes('abort')) {
+            await new Promise((resolve) => setTimeout(resolve, cfg.baseRetryDelayMs * (retry + 1)));
+            continue;
+          }
+          return {
+            status: 0,
+            contentType: null,
+            finalUrl: logicalUrl,
+            redirectChain,
+            body: null,
+            error: message,
+            aborted: message.includes('abort'),
+            retryAfter: null,
+            bodyError: false,
+            failureReason: message.includes('abort') ? 'timeout' : 'network',
+          };
+        }
+
+        const { status } = response;
+        const contentType = response.headers.get('content-type');
+        retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
+
+        if (status === 429 || (status === 503 && retryAfter)) {
+          clearTimeout(timeout);
+          if (retry < cfg.maxRetries) {
+            const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retry + 1));
+            retryCount++;
+            await drainBody(response);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            continue;
+          }
+          return {
+            status,
+            contentType,
+            finalUrl: logicalUrl,
+            redirectChain,
+            body: null,
+            error: `Rate limited: ${status}`,
+            aborted: false,
+            retryAfter,
+            bodyError: false,
+            failureReason: 'rate_limited',
+          };
+        }
+
+        break;
+      }
+
+      if (!response) {
         return {
-          status,
-          contentType,
+          status: 0,
+          contentType: null,
           finalUrl: logicalUrl,
           redirectChain,
           body: null,
-          error: 'Redirect without Location header',
+          error: 'No response after retries',
           aborted: false,
-          retryAfter,
+          retryAfter: null,
           bodyError: false,
           failureReason: 'network',
         };
       }
 
-      let nextUrl: string;
-      try {
-        nextUrl = new URL(location, logicalUrl).href;
-      } catch {
-        clearTimeout(timeout);
-        return {
-          status,
-          contentType,
-          finalUrl: logicalUrl,
-          redirectChain,
-          body: null,
-          error: `Invalid redirect URL: ${location}`,
-          aborted: false,
-          retryAfter,
-          bodyError: false,
-          failureReason: 'network',
-        };
-      }
+      const { status } = response;
+      const contentType = response.headers.get('content-type');
+      retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
-      const targetSsrf = await ssrfCheck(nextUrl);
-      if (!targetSsrf.allowed) {
-        clearTimeout(timeout);
-        return {
-          status,
-          contentType,
-          finalUrl: logicalUrl,
-          redirectChain,
-          body: null,
-          error: `SSRF blocked redirect: ${targetSsrf.reason}`,
-          aborted: false,
-          retryAfter,
-          bodyError: false,
-          failureReason: 'blocked',
-        };
-      }
+      if (status >= 300 && status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          return {
+            status,
+            contentType,
+            finalUrl: logicalUrl,
+            redirectChain,
+            body: null,
+            error: 'Redirect without Location header',
+            aborted: false,
+            retryAfter,
+            bodyError: false,
+            failureReason: 'network',
+          };
+        }
 
-      clearTimeout(timeout);
-      logicalUrl = nextUrl;
-      redirectChain.push(logicalUrl);
-      if (targetSsrf.ip && targetSsrf.ip !== validatedIp) {
-        validatedIp = targetSsrf.ip;
-        dispatcher = new PinnedAgent(validatedIp, new URL(nextUrl).hostname);
-      }
-      continue;
-    }
+        let nextUrl: string;
+        try {
+          nextUrl = new URL(location, logicalUrl).href;
+        } catch {
+          return {
+            status,
+            contentType,
+            finalUrl: logicalUrl,
+            redirectChain,
+            body: null,
+            error: `Invalid redirect URL: ${location}`,
+            aborted: false,
+            retryAfter,
+            bodyError: false,
+            failureReason: 'network',
+          };
+        }
 
-    if (status === 429 || (status === 503 && retryAfter)) {
-      clearTimeout(timeout);
-      if (retryCount < cfg.maxRetries && retryRedirectBudget < cfg.maxRedirects) {
-        const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retryCount + 1));
-        retryCount++;
-        retryRedirectBudget++;
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        const targetSsrf = await ssrfCheck(nextUrl);
+        if (!targetSsrf.allowed) {
+          return {
+            status,
+            contentType,
+            finalUrl: logicalUrl,
+            redirectChain,
+            body: null,
+            error: `SSRF blocked redirect: ${targetSsrf.reason}`,
+            aborted: false,
+            retryAfter,
+            bodyError: false,
+            failureReason: 'blocked',
+          };
+        }
+
+        logicalUrl = nextUrl;
+        redirectChain.push(logicalUrl);
+
+        const nextServername = new URL(nextUrl).hostname;
+        if (targetSsrf.ip && (targetSsrf.ip !== validatedIp || nextServername !== servername)) {
+          validatedIp = targetSsrf.ip;
+          servername = nextServername;
+          dispatcher = createPinnedAgent({ validatedIp, servername });
+          cleanupAgents.push(dispatcher);
+        }
+
+        await drainBody(response);
         continue;
       }
+
+      const bodyResult = await readBody(response, cfg.maxBytes, new AbortController());
+
       return {
         status,
         contentType,
         finalUrl: logicalUrl,
         redirectChain,
-        body: null,
-        error: `Rate limited: ${status}`,
-        aborted: false,
+        body: bodyResult.content,
+        error: bodyResult.error,
+        aborted: bodyResult.aborted,
         retryAfter,
-        bodyError: false,
-        failureReason: 'rate_limited',
+        bodyError: bodyResult.bodyError,
+        failureReason: bodyResult.failureReason,
       };
     }
 
-    const bodyResult = await readBody(response, cfg.maxBytes, controller);
-
-    clearTimeout(timeout);
-
     return {
-      status,
-      contentType,
+      status: 0,
+      contentType: null,
       finalUrl: logicalUrl,
       redirectChain,
-      body: bodyResult.content,
-      error: bodyResult.error,
-      aborted: bodyResult.aborted,
-      retryAfter,
-      bodyError: bodyResult.bodyError,
-      failureReason: bodyResult.failureReason,
+      body: null,
+      error: `Too many redirects (max ${cfg.maxRedirects})`,
+      aborted: false,
+      retryAfter: null,
+      bodyError: false,
+      failureReason: 'too_many_redirects',
     };
+  } finally {
+    for (const agent of cleanupAgents) {
+      agent.close().catch(() => {});
+    }
   }
+}
 
-  return {
-    status: 0,
-    contentType: null,
-    finalUrl: logicalUrl,
-    redirectChain,
-    body: null,
-    error: `Too many redirects (max ${cfg.maxRedirects})`,
-    aborted: false,
-    retryAfter: null,
-    bodyError: false,
-    failureReason: 'too_many_redirects',
-  };
+async function drainBody(response: Response): Promise<void> {
+  try {
+    if (response.body) {
+      await response.body.cancel();
+    } else {
+      await response.text().catch(() => {});
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; reason?: string; ip?: string }> {
@@ -379,9 +454,10 @@ export async function checkUrlAllowed(url: string): Promise<{ allowed: boolean; 
     return { allowed: false, reason: 'Blocked hostname: localhost', ip: '127.0.0.1' };
   }
 
+  const { isIP } = await import('node:net');
   const ipRegex = /^\[?([0-9a-fA-F:.]+)\]?$/;
   const ipMatch = hostname.match(ipRegex);
-  if (ipMatch) {
+  if (ipMatch && isIP(ipMatch[1]!) !== 0) {
     const ip = ipMatch[1]!;
     return isPrivateIp(ip)
       ? { allowed: false, reason: `Blocked IP: ${ip}`, ip }
