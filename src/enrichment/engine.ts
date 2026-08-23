@@ -264,6 +264,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (queryResult) {
       const qCsvPath = join(enrichmentDirectory, 'query-suggestions.csv');
       const qJsonPath = join(enrichmentDirectory, 'query-suggestions.json');
+      const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
       await writeQuerySuggestionsCsv(qCsvPath, queryResult);
       await writeQuerySuggestionsJson(qJsonPath, {
         enrichmentId,
@@ -272,6 +273,13 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         suggestions: queryResult.suggestions,
         perSourceStatus: queryResult.perSourceStatus,
         sourceStats: queryResult.sourceStats,
+        sourceRecords: sourceRecords.map((r) => ({
+          normalizedParent: r.normalizedParent,
+          source: r.source,
+          status: r.status,
+          error: r.error,
+          fetchedAt: r.fetchedAt,
+        })),
         inputCount: queryResult.inputCount,
         emptyCount: queryResult.emptyCount,
         errorCount: queryResult.errorCount,

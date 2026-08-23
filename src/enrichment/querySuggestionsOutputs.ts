@@ -4,7 +4,16 @@ import type {
   QuerySuggestionResult,
   QuerySuggestion,
   QuerySuggestionsConfig,
+  QuerySuggestionSource,
 } from './types.js';
+
+export type QuerySuggestionSourceRecord = {
+  normalizedParent: string;
+  source: QuerySuggestionSource;
+  status: string;
+  error: string | null;
+  fetchedAt: string;
+};
 
 export type QuerySuggestionsOutputOptions = {
   enrichmentId: string;
@@ -13,6 +22,7 @@ export type QuerySuggestionsOutputOptions = {
   suggestions: QuerySuggestion[];
   perSourceStatus: QuerySuggestionResult['perSourceStatus'];
   sourceStats: QuerySuggestionResult['sourceStats'];
+  sourceRecords: QuerySuggestionSourceRecord[];
   inputCount: number;
   emptyCount: number;
   errorCount: number;
@@ -72,6 +82,7 @@ export function writeQuerySuggestionsJson(
     errorCount: options.errorCount,
     perSourceStatus: options.perSourceStatus,
     sourceStats: options.sourceStats,
+    sourceRecords: options.sourceRecords,
     suggestionCount: options.suggestions.length,
     suggestions: options.suggestions.map((s) => ({
       normalizedSuggestion: s.normalizedSuggestion,

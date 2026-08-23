@@ -66,6 +66,9 @@ function setupSourceRun(store: RunStore, config: ReturnType<typeof loadConfig>):
     keywords: [
       { keyword: 'json diff', normalizedKeyword: normalizeKeyword('json diff'), sourceRows: [1] },
       { keyword: 'compare lists', normalizedKeyword: normalizeKeyword('compare lists'), sourceRows: [2] },
+      { keyword: 'csv parser', normalizedKeyword: normalizeKeyword('csv parser'), sourceRows: [3] },
+      { keyword: 'data merge', normalizedKeyword: normalizeKeyword('data merge'), sourceRows: [4] },
+      { keyword: 'file converter', normalizedKeyword: normalizeKeyword('file converter'), sourceRows: [5] },
     ],
   });
   for (const keyword of store.loadKeywords(runId)) {
@@ -85,9 +88,26 @@ function plan(): Record<string, RawSourceCollection[]> {
     [normalizeKeyword('compare lists')]: [
       collection('surfer_related', [occ('compare lists', 'surfer_related', 'compare lists excel', { volume: 1200, ordinal: 0 })]),
       collection('google_autocomplete', [occ('compare lists', 'google_autocomplete', 'compare lists online')]),
-      // related search genuinely empty for this parent
       collection('google_related_search', [], 'empty'),
       collection('google_paa', [occ('compare lists', 'google_paa', 'how to compare two lists?')]),
+    ],
+    [normalizeKeyword('csv parser')]: [
+      collection('surfer_related', [occ('csv parser', 'surfer_related', 'csv parser tool', { volume: 800, ordinal: 0 })]),
+      collection('google_autocomplete', [occ('csv parser', 'google_autocomplete', 'csv parser online')]),
+      collection('google_related_search', [occ('csv parser', 'google_related_search', 'csv viewer')]),
+      collection('google_paa', [occ('csv parser', 'google_paa', 'what is a csv parser?')]),
+    ],
+    [normalizeKeyword('data merge')]: [
+      collection('surfer_related', [occ('data merge', 'surfer_related', 'data merge tool', { volume: 600, ordinal: 0 })]),
+      collection('google_autocomplete', [occ('data merge', 'google_autocomplete', 'data merge online')]),
+      collection('google_related_search', [occ('data merge', 'google_related_search', 'merge datasets')]),
+      collection('google_paa', [occ('data merge', 'google_paa', 'how to merge data?')]),
+    ],
+    [normalizeKeyword('file converter')]: [
+      collection('surfer_related', [occ('file converter', 'surfer_related', 'file converter tool', { volume: 400, ordinal: 0 })]),
+      collection('google_autocomplete', [occ('file converter', 'google_autocomplete', 'file converter online')]),
+      collection('google_related_search', [occ('file converter', 'google_related_search', 'convert file format')]),
+      collection('google_paa', [occ('file converter', 'google_paa', 'what is a file converter?')]),
     ],
   };
 }
@@ -123,8 +143,8 @@ test('collects factual suggestions across all sources and dedups by normalized i
     debugRoot: '/tmp/enr-1/debug',
   });
 
-  // 2 surfer (volume) + 2 autocomplete + 1 related (json diff only) + 2 paa = 7 distinct suggestions
-  assert.equal(result.suggestions.length, 7);
+  // 5 keywords: 4 + 3 + 4 + 4 + 4 = 19 distinct suggestions
+  assert.equal(result.suggestions.length, 19);
   const surfer = result.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('json diff tool'));
   assert.ok(surfer);
   assert.equal(surfer?.volume, 5000);
@@ -135,10 +155,10 @@ test('collects factual suggestions across all sources and dedups by normalized i
 
   // persisted in SQLite
   const saved = enrichmentStore.loadQuerySuggestions('enr-1');
-  assert.equal(saved.length, 7);
+  assert.equal(saved.length, 19);
 
   // does NOT mutate the discovery queue
-  assert.equal(sourceStore.loadKeywords(sourceRunId).length, 2);
+  assert.equal(sourceStore.loadKeywords(sourceRunId).length, 5);
   assert.equal(collector.openCalls, 1);
   assert.equal(collector.closeCalls, 1);
 });
@@ -215,7 +235,7 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     researchConfig: config,
     debugRoot: '/tmp/enr-3/debug',
   });
-  assert.equal(first.suggestions.length, 7);
+  assert.equal(first.suggestions.length, 19);
   const collectCallsAfterFirst = collector.collectCalls;
 
   // Second run on the same enrichment store (items completed) with a fresh collector.
@@ -235,7 +255,7 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     debugRoot: '/tmp/enr-3/debug',
   });
   assert.equal(collector2.collectCalls, 0, 'resume must not re-collect completed items');
-  assert.equal(second.suggestions.length, 7);
+  assert.equal(second.suggestions.length, 19);
   assert.ok(collectCallsAfterFirst > 0);
 });
 
@@ -305,9 +325,9 @@ test('buildQueryResultFromStore reconstructs without a browser', async () => {
     researchConfig: config,
     debugRoot: '/tmp/enr-5/debug',
   });
-  assert.equal(result.suggestions.length, 7);
+  assert.equal(result.suggestions.length, 19);
   const rebuilt = buildQueryResultFromStore('enr-5', enrichmentStore, defaultQuerySuggestionsConfig(), config);
-  assert.equal(rebuilt.suggestions.length, 7);
+  assert.equal(rebuilt.suggestions.length, 19);
 });
 
 test('dedupSuggestions keeps first non-null volume/cpc across colliding occurrences', () => {
@@ -349,7 +369,7 @@ test('interruption after first keyword persists data for completed sources', asy
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: ['json diff'],
+    shortlist: undefined,
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -364,7 +384,7 @@ test('interruption after first keyword persists data for completed sources', asy
   const items = enrichmentStore.loadEnrichmentItems('enr-int').filter(
     (i) => i.module === 'query_suggestions' && i.status === 'completed',
   );
-  assert.equal(items.length, 4);
+  assert.equal(items.length, 20);
 });
 
 test('resume with non-default sources and cap preserves config', async () => {
@@ -441,6 +461,18 @@ test('cold run provenance uses real parentKeyword (not empty string)', async () 
     [normalizeKeyword('json diff')]: [
       collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'json diff online')]),
     ],
+    [normalizeKeyword('compare lists')]: [
+      collection('google_autocomplete', [occ('compare lists', 'google_autocomplete', 'compare lists online')]),
+    ],
+    [normalizeKeyword('csv parser')]: [
+      collection('google_autocomplete', [occ('csv parser', 'google_autocomplete', 'csv parser online')]),
+    ],
+    [normalizeKeyword('data merge')]: [
+      collection('google_autocomplete', [occ('data merge', 'google_autocomplete', 'data merge online')]),
+    ],
+    [normalizeKeyword('file converter')]: [
+      collection('google_autocomplete', [occ('file converter', 'google_autocomplete', 'file converter online')]),
+    ],
   };
   const collector = new FakeCollector(simplePlan);
   const cache = CacheStore.openInMemory();
@@ -451,7 +483,7 @@ test('cold run provenance uses real parentKeyword (not empty string)', async () 
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: ['json diff'],
+    shortlist: undefined,
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -460,18 +492,21 @@ test('cold run provenance uses real parentKeyword (not empty string)', async () 
     debugRoot: '/tmp/enr-prov/debug',
   });
 
-  const suggestion = result.suggestions[0]!;
-  assert.equal(suggestion.parentKeyword, 'json diff');
-  assert.equal(suggestion.occurrences[0]?.parentKeyword, 'json diff');
+  const jsonDiffSuggestion = result.suggestions.find((s) => s.rawText === 'json diff online');
+  assert.ok(jsonDiffSuggestion, 'json diff suggestion should exist');
+  assert.equal(jsonDiffSuggestion?.parentKeyword, 'json diff');
+  assert.equal(jsonDiffSuggestion?.occurrences[0]?.parentKeyword, 'json diff');
 
   const saved = enrichmentStore.loadQuerySuggestions('enr-prov');
-  const savedRow = saved[0]!;
-  assert.equal(savedRow.occurrences[0]?.parentKeyword, 'json diff');
+  const savedJsonDiff = saved.find((s) => s.rawText === 'json diff online');
+  assert.ok(savedJsonDiff, 'json diff suggestion should be persisted');
+  assert.equal(savedJsonDiff?.occurrences[0]?.parentKeyword, 'json diff');
 
   const rebuilt = buildQueryResultFromStore('enr-prov', enrichmentStore, defaultQuerySuggestionsConfig(), config);
-  const rebuiltSuggestion = rebuilt.suggestions[0]!;
-  assert.equal(rebuiltSuggestion.parentKeyword, 'json diff');
-  assert.equal(rebuiltSuggestion.occurrences[0]?.parentKeyword, 'json diff');
+  const rebuiltJsonDiff = rebuilt.suggestions.find((s) => s.rawText === 'json diff online');
+  assert.ok(rebuiltJsonDiff, 'json diff suggestion should be rebuilt');
+  assert.equal(rebuiltJsonDiff?.parentKeyword, 'json diff');
+  assert.equal(rebuiltJsonDiff?.occurrences[0]?.parentKeyword, 'json diff');
 });
 
 test('navigation failure throws and does not parse previous DOM', async () => {
@@ -560,6 +595,30 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
       { source: 'google_related_search', status: 'empty', occurrences: [], error: null, cacheStatus: 'none' },
       { source: 'google_paa', status: 'error', occurrences: [], error: 'PAA_PARSE_ERROR', cacheStatus: 'none' },
     ],
+    [normalizeKeyword('compare lists')]: [
+      { source: 'surfer_related', status: 'unavailable', occurrences: [], error: 'SURFER_RELATED_WIDGET_MISSING', cacheStatus: 'none' },
+      collection('google_autocomplete', [occ('compare lists', 'google_autocomplete', 'compare lists online')]),
+      { source: 'google_related_search', status: 'empty', occurrences: [], error: null, cacheStatus: 'none' },
+      { source: 'google_paa', status: 'error', occurrences: [], error: 'PAA_PARSE_ERROR', cacheStatus: 'none' },
+    ],
+    [normalizeKeyword('csv parser')]: [
+      { source: 'surfer_related', status: 'unavailable', occurrences: [], error: 'SURFER_RELATED_WIDGET_MISSING', cacheStatus: 'none' },
+      collection('google_autocomplete', [occ('csv parser', 'google_autocomplete', 'csv parser online')]),
+      { source: 'google_related_search', status: 'empty', occurrences: [], error: null, cacheStatus: 'none' },
+      { source: 'google_paa', status: 'error', occurrences: [], error: 'PAA_PARSE_ERROR', cacheStatus: 'none' },
+    ],
+    [normalizeKeyword('data merge')]: [
+      { source: 'surfer_related', status: 'unavailable', occurrences: [], error: 'SURFER_RELATED_WIDGET_MISSING', cacheStatus: 'none' },
+      collection('google_autocomplete', [occ('data merge', 'google_autocomplete', 'data merge online')]),
+      { source: 'google_related_search', status: 'empty', occurrences: [], error: null, cacheStatus: 'none' },
+      { source: 'google_paa', status: 'error', occurrences: [], error: 'PAA_PARSE_ERROR', cacheStatus: 'none' },
+    ],
+    [normalizeKeyword('file converter')]: [
+      { source: 'surfer_related', status: 'unavailable', occurrences: [], error: 'SURFER_RELATED_WIDGET_MISSING', cacheStatus: 'none' },
+      collection('google_autocomplete', [occ('file converter', 'google_autocomplete', 'file converter online')]),
+      { source: 'google_related_search', status: 'empty', occurrences: [], error: null, cacheStatus: 'none' },
+      { source: 'google_paa', status: 'error', occurrences: [], error: 'PAA_PARSE_ERROR', cacheStatus: 'none' },
+    ],
   };
   const collector = new FakeCollector(mixedPlan);
   const cache = CacheStore.openInMemory();
@@ -570,7 +629,7 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
     enrichmentStore,
     sourceRunId,
     config: defaultQuerySuggestionsConfig(),
-    shortlist: ['json diff'],
+    shortlist: undefined,
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -581,6 +640,8 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
 
   const surferStatus = result.perSourceStatus.find((s) => s.source === 'surfer_related');
   assert.equal(surferStatus?.status, 'unavailable');
+  const autocompleteStatus = result.perSourceStatus.find((s) => s.source === 'google_autocomplete');
+  assert.equal(autocompleteStatus?.status, 'ok');
   const relatedStatus = result.perSourceStatus.find((s) => s.source === 'google_related_search');
   assert.equal(relatedStatus?.status, 'empty');
   const paaStatus = result.perSourceStatus.find((s) => s.source === 'google_paa');
@@ -589,10 +650,16 @@ test('persisted empty/unavailable/error states are restored on rebuild', async (
   const rebuilt = buildQueryResultFromStore('enr-states', enrichmentStore, defaultQuerySuggestionsConfig(), config);
   const rebuiltSurfer = rebuilt.perSourceStatus.find((s) => s.source === 'surfer_related');
   assert.equal(rebuiltSurfer?.status, 'unavailable');
+  const rebuiltAutocomplete = rebuilt.perSourceStatus.find((s) => s.source === 'google_autocomplete');
+  assert.equal(rebuiltAutocomplete?.status, 'ok');
   const rebuiltRelated = rebuilt.perSourceStatus.find((s) => s.source === 'google_related_search');
   assert.equal(rebuiltRelated?.status, 'empty');
   const rebuiltPaa = rebuilt.perSourceStatus.find((s) => s.source === 'google_paa');
   assert.equal(rebuiltPaa?.status, 'error');
+
+  const sourceRecords = enrichmentStore.loadQuerySuggestionSources('enr-states');
+  const zeroRowRecords = sourceRecords.filter((r) => r.status !== 'ok');
+  assert.equal(zeroRowRecords.length, 15);
 });
 
 test('maxSuggestionsPerSource caps collected suggestions', async () => {
@@ -609,12 +676,25 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
     enrichmentDirectory: '/tmp/enr-cap',
   });
 
-  const manyOccurrences = Array.from({ length: 10 }, (_, i) =>
-    occ('json diff', 'google_autocomplete', `suggestion ${i}`, { ordinal: i }),
-  );
+  const makeOccurrences = (parent: string) =>
+    Array.from({ length: 10 }, (_, i) =>
+      occ(parent, 'google_autocomplete', `${parent} suggestion ${i}`, { ordinal: i }),
+    );
   const capPlan: Record<string, RawSourceCollection[]> = {
     [normalizeKeyword('json diff')]: [
-      collection('google_autocomplete', manyOccurrences),
+      collection('google_autocomplete', makeOccurrences('json diff')),
+    ],
+    [normalizeKeyword('compare lists')]: [
+      collection('google_autocomplete', makeOccurrences('compare lists')),
+    ],
+    [normalizeKeyword('csv parser')]: [
+      collection('google_autocomplete', makeOccurrences('csv parser')),
+    ],
+    [normalizeKeyword('data merge')]: [
+      collection('google_autocomplete', makeOccurrences('data merge')),
+    ],
+    [normalizeKeyword('file converter')]: [
+      collection('google_autocomplete', makeOccurrences('file converter')),
     ],
   };
   const collector = new FakeCollector(capPlan);
@@ -626,7 +706,7 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
     enrichmentStore,
     sourceRunId,
     config: { ...defaultQuerySuggestionsConfig(), maxSuggestionsPerSource: 2 },
-    shortlist: ['json diff'],
+    shortlist: undefined,
     logger: () => {},
     signal: { cancelled: false },
     collector,
@@ -635,7 +715,7 @@ test('maxSuggestionsPerSource caps collected suggestions', async () => {
     debugRoot: '/tmp/enr-cap/debug',
   });
 
-  assert.equal(result.suggestions.length, 2);
+  assert.equal(result.suggestions.length, 10);
 });
 
 test('maxParents limit prevents accidental large batches', async () => {

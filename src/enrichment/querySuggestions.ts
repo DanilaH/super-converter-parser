@@ -254,48 +254,37 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   }
 
   private async collectSurferRelated(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
-    try {
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
-      await page.waitForTimeout(1000);
-      const rows = await readSurferRelated(
-        page,
-        this.config.browser.surferRelatedWidgetSelector,
-        this.config.browser.surferWaitTimeoutMs,
-        this.config.browser.surferRelatedMissingWidgetTimeoutMs,
-      );
-      if (rows === null) {
-        return {
-          source: 'surfer_related',
-          status: 'unavailable',
-          occurrences: [],
-          error: 'SURFER_RELATED_WIDGET_MISSING',
-          cacheStatus: 'none',
-        };
-      }
-      const occurrences = makeOccurrences(
-        parentKeyword,
-        normalizedParent,
-        'surfer_related',
-        [],
-        rows.map((r, i) => ({ text: r.keyword, volume: r.volume, cpc: null, ordinal: i })),
-      );
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+    await page.waitForTimeout(1000);
+    const rows = await readSurferRelated(
+      page,
+      this.config.browser.surferRelatedWidgetSelector,
+      this.config.browser.surferWaitTimeoutMs,
+      this.config.browser.surferRelatedMissingWidgetTimeoutMs,
+    );
+    if (rows === null) {
       return {
         source: 'surfer_related',
-        status: occurrences.length > 0 ? 'ok' : 'empty',
-        occurrences,
-        error: null,
-        cacheStatus: 'none',
-      };
-    } catch (error) {
-      const code = error instanceof ResearchError ? error.code : 'SURFER_RELATED_PARSE_ERROR';
-      return {
-        source: 'surfer_related',
-        status: 'error',
+        status: 'unavailable',
         occurrences: [],
-        error: code,
+        error: 'SURFER_RELATED_WIDGET_MISSING',
         cacheStatus: 'none',
       };
     }
+    const occurrences = makeOccurrences(
+      parentKeyword,
+      normalizedParent,
+      'surfer_related',
+      [],
+      rows.map((r, i) => ({ text: r.keyword, volume: r.volume, cpc: null, ordinal: i })),
+    );
+    return {
+      source: 'surfer_related',
+      status: occurrences.length > 0 ? 'ok' : 'empty',
+      occurrences,
+      error: null,
+      cacheStatus: 'none',
+    };
   }
 
   private async collectFromScript(
@@ -306,43 +295,33 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     script: string,
     parse: (raw: string[]) => string[],
   ): Promise<RawSourceCollection> {
-    try {
-      const raw = (await page.evaluate(script)) as string[];
-      const texts = parse((raw ?? []).map((r) => String(r)));
-      const occurrences = makeOccurrences(parentKeyword, normalizedParent, source, texts, []);
-      return {
-        source,
-        status: occurrences.length > 0 ? 'ok' : 'empty',
-        occurrences,
-        error: null,
-        cacheStatus: 'none',
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { source, status: 'error', occurrences: [], error: message, cacheStatus: 'none' };
-    }
+    const raw = (await page.evaluate(script)) as string[];
+    const texts = parse((raw ?? []).map((r) => String(r)));
+    const occurrences = makeOccurrences(parentKeyword, normalizedParent, source, texts, []);
+    return {
+      source,
+      status: occurrences.length > 0 ? 'ok' : 'empty',
+      occurrences,
+      error: null,
+      cacheStatus: 'none',
+    };
   }
 
   private async collectAutocomplete(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
-    try {
-      const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
-      const payload = (await page.evaluate(async (target: string) => {
-        const response = await fetch(target, { headers: { Accept: 'application/json' } });
-        return response.text();
-      }, url)) as string;
-      const texts = parseGoogleAutocomplete(payload ?? '');
-      const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
-      return {
-        source: 'google_autocomplete',
-        status: occurrences.length > 0 ? 'ok' : 'empty',
-        occurrences,
-        error: null,
-        cacheStatus: 'none',
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { source: 'google_autocomplete', status: 'error', occurrences: [], error: message, cacheStatus: 'none' };
-    }
+    const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
+    const payload = (await page.evaluate(async (target: string) => {
+      const response = await fetch(target, { headers: { Accept: 'application/json' } });
+      return response.text();
+    }, url)) as string;
+    const texts = parseGoogleAutocomplete(payload ?? '');
+    const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
+    return {
+      source: 'google_autocomplete',
+      status: occurrences.length > 0 ? 'ok' : 'empty',
+      occurrences,
+      error: null,
+      cacheStatus: 'none',
+    };
   }
 }
 
@@ -421,6 +400,13 @@ export async function runQuerySuggestionsModule(
     throw new ResearchError(
       'ENRICHMENT_ERROR',
       `Too many parent keywords (${selectedKeywords.length}) for query_suggestions; limit is ${config.maxParents}. Use --shortlist to limit the set.`,
+    );
+  }
+
+  if (selectedKeywords.length < 5) {
+    throw new ResearchError(
+      'ENRICHMENT_ERROR',
+      `Too few parent keywords (${selectedKeywords.length}) for query_suggestions; minimum is 5. Use --shortlist to specify at least 5 parents.`,
     );
   }
 
@@ -521,13 +507,25 @@ export async function runQuerySuggestionsModule(
 
       const fetched: RawSourceCollection[] = [];
 
+      let usedBrowser = false;
+      const expiredSources: QuerySuggestionSource[] = [];
       const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
         if (cached) {
           const isExpired = Date.parse(cached.expiresAt) <= Date.now();
-          if (!isExpired && cached.status !== 'error') {
+          if (!isExpired) {
+            if (cached.status === 'error') {
+              fetched.push({
+                source,
+                status: 'error',
+                occurrences: [],
+                error: cached.error,
+                cacheStatus: 'hit',
+              });
+              continue;
+            }
             const rows = cached.suggestions;
             const occurrencesForSource = makeOccurrences(
               keyword.keyword,
@@ -545,11 +543,13 @@ export async function runQuerySuggestionsModule(
             });
             continue;
           }
+          expiredSources.push(source);
         }
         cacheMissSources.push(source);
       }
 
       if (cacheMissSources.length > 0) {
+        usedBrowser = true;
         const collected = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
         for (const col of collected) {
           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
@@ -569,7 +569,8 @@ export async function runQuerySuggestionsModule(
             storedAt,
             ttlMsForSuggestionStatus(col.status, researchConfig.cache.ttl),
           );
-          fetched.push({ ...col, cacheStatus: 'miss' });
+          const wasExpired = expiredSources.includes(col.source);
+          fetched.push({ ...col, cacheStatus: wasExpired ? 'expired' : 'miss' });
         }
       }
 
@@ -602,7 +603,13 @@ export async function runQuerySuggestionsModule(
 
       persistOccurrences();
 
+      let countedRequestForParent = false;
       for (const collection of fetched) {
+        const isBrowserSource = collection.cacheStatus !== 'hit';
+        const requestCount = isBrowserSource && !countedRequestForParent ? 1 : 0;
+        if (isBrowserSource) {
+          countedRequestForParent = true;
+        }
         enrichmentStore.persistSourceCollectionAtomic(
           enrichmentId,
           keyword.normalizedKeyword,
@@ -610,7 +617,7 @@ export async function runQuerySuggestionsModule(
           collection.status,
           collection.error,
           new Date().toISOString(),
-          collection.cacheStatus === 'hit' ? 0 : 1,
+          requestCount,
           collection.cacheStatus,
         );
       }
@@ -619,7 +626,7 @@ export async function runQuerySuggestionsModule(
         `  ${keyword.keyword}: ${fetched.map((f) => `${f.source}=${f.status}`).join(', ')}`,
       );
 
-      if (config.rateLimitMinDelayMs > 0 || config.rateLimitMaxDelayMs > 0) {
+      if (usedBrowser && (config.rateLimitMinDelayMs > 0 || config.rateLimitMaxDelayMs > 0)) {
         const minDelay = config.rateLimitMinDelayMs;
         const maxDelay = Math.max(minDelay, config.rateLimitMaxDelayMs);
         const delay = minDelay === maxDelay ? minDelay : minDelay + Math.floor(Math.random() * (maxDelay - minDelay));
