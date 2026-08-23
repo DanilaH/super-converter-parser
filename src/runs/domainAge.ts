@@ -285,15 +285,18 @@ export async function runDomainAgeModule(
     let fsFetched = false;
     // Pre-compute freshness/version for the !fsConfigured path so we can also
     // use them for cache-hit accounting below.
-    // 'unavailable' is a stable fact (no provider, can't change without config
-    // change): it is always "fresh" regardless of TTL.
-    const isStableUnavailable = !fsConfigured && cached?.firstSeenStatus === 'unavailable';
+    // Stable unavailable: only genuinely unconfigured (source='unconfigured')
+    // with matching query version and no expiry. NOT source='expired' (written
+    // by us after TTL expiry) — that must remain stale for correct accounting.
+    const isStableUnconfigured = !fsConfigured
+      && cached?.firstSeenStatus === 'unavailable'
+      && cached?.firstSeenSource === 'unconfigured';
     const versionMatch = !fsConfigured && cached && cached.firstSeenQueryVersion === FIRST_SEEN_QUERY_VERSION;
-    const fsFresh = !fsConfigured && cached && (isStableUnavailable || isFresh(cached.firstSeenExpiresAt, nowMs));
+    const fsFresh = !fsConfigured && cached && (isStableUnconfigured || isFresh(cached.firstSeenExpiresAt, nowMs));
     if (!fsConfigured) {
       // No provider configured: deterministic unavailable. Reuse a cached value only
       // if its query version matches the current contract AND the TTL is fresh
-      // (or the fact is a stable 'unavailable' that never changes).
+      // (or the fact is a stable unconfigured unavailable that never changes).
       // A stale-version fact (e.g. v1 exact match under v2 domain scope) or an
       // expired TTL must NOT be served as valid: provider disabled does not grant
       // the right to ignore TTL.
@@ -316,10 +319,10 @@ export async function runDomainAgeModule(
       fsFetched = true;
     }
 
-    // Track whether the cached first-seen was stale (version mismatch or expired TTL)
-    // so we don't report a full cache hit and don't serve the stale fact.
-    // Stable 'unavailable' is never stale.
-    const firstSeenStale = !fsConfigured && cached !== null && !isStableUnavailable && (!versionMatch || !fsFresh);
+    // Stale = version mismatch OR (not stable-unconfigured AND TTL expired).
+    // Stable unconfigured unavailable is exempt from TTL but NOT from version mismatch.
+    const firstSeenStale = !fsConfigured && cached !== null
+      && (!versionMatch || (!isStableUnconfigured && !fsFresh));
 
     const cacheHit = !regFetched && !fsFetched && cached !== null && !firstSeenStale;
     if (cacheHit) cacheHits += 1;

@@ -310,6 +310,7 @@ test('cache hit with cached checkpoint is used as-is (registration 180d not refe
   const cached = fullCached('example.com', {
     registrationExpiresAt: FUTURE, // 180d, still fresh
     firstSeenStatus: 'unavailable',
+    firstSeenSource: 'unconfigured',
     firstSeenExpiresAt: PAST, // was 24h, now past — but unavailable is stable, reused
   });
   const { cache } = mockCache([cached]);
@@ -586,6 +587,70 @@ test('v2 first-seen expired TTL + provider disabled: old fact NOT served as vali
   // Registration is fresh from cache.
   assert.equal(rec.registrationDate, '2010-05-03T04:00:00Z');
   // Cache status is partial (first-seen expired), not hit.
+  assert.equal(rec.cacheStatus, 'partial');
+  assert.equal(rec.cacheHit, false);
+});
+
+test('second run after expired-v2: source=expired is NOT treated as stable hit', async () => {
+  // Run 1: expired v2 + provider disabled → partial/expired, cache writes source=expired.
+  // Run 2: same cache → must still NOT be a hit (source=expired is not stable unconfigured).
+  const cached = fullCached('example.com', {
+    firstSeenQueryVersion: 2,
+    firstSeenDate: '2001-04-09T13:50:45Z',
+    firstSeenStatus: 'ok',
+    firstSeenSource: 'wayback',
+    firstSeenExpiresAt: PAST, // expired
+  });
+  const { cache, puts } = mockCache([cached]);
+
+  // Run 1
+  const res1 = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: null,
+    now: () => Date.parse(NOW_ISO),
+  });
+  assert.equal(res1.results.get('example.com')!.cacheStatus, 'partial');
+  assert.equal(res1.results.get('example.com')!.firstSeenSource, 'expired');
+  assert.equal(puts.length, 1); // cache rewritten
+
+  // Run 2: read from the cache written by run 1
+  const res2 = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: null,
+    now: () => Date.parse(NOW_ISO),
+  });
+  const rec2 = res2.results.get('example.com')!;
+  // Must still NOT be a hit: source=expired is not stable unconfigured.
+  assert.equal(rec2.firstSeenDate, null);
+  assert.equal(rec2.firstSeenSource, 'expired');
+  assert.equal(rec2.firstSeenStatus, 'unavailable');
+  assert.equal(rec2.cacheStatus, 'partial');
+  assert.equal(rec2.cacheHit, false);
+});
+
+test('v1 unavailable (source=unconfigured) is NOT a valid hit', async () => {
+  // v1 query version + source=unconfigured: version mismatch → stale, not hit.
+  const cached = fullCached('example.com', {
+    firstSeenQueryVersion: 1, // stale version
+    firstSeenStatus: 'unavailable',
+    firstSeenSource: 'unconfigured',
+    firstSeenExpiresAt: null,
+  });
+  const { cache } = mockCache([cached]);
+  const res = await runOne({
+    domains: ['example.com'],
+    cache,
+    rdap: () => Promise.resolve(rdapEntry('example.com')),
+    firstSeen: null,
+    now: () => Date.parse(NOW_ISO),
+  });
+  const rec = res.results.get('example.com')!;
+  assert.equal(rec.firstSeenSource, 'stale_query_version');
+  assert.equal(rec.firstSeenStatus, 'unavailable');
   assert.equal(rec.cacheStatus, 'partial');
   assert.equal(rec.cacheHit, false);
 });
