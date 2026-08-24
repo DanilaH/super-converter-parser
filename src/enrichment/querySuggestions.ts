@@ -80,6 +80,10 @@ export interface SuggestionCollector {
   ): Promise<CollectResult>;
 }
 
+export function classifyHttpResponse(status: number, parentKeyword: string): ResearchError {
+  return new ResearchError('GOOGLE_UNAVAILABLE', `Autocomplete HTTP ${status} for "${parentKeyword}"`, { httpStatus: status });
+}
+
 function parserVersionForSource(source: QuerySuggestionSource): string {
   switch (source) {
     case 'surfer_related':
@@ -380,8 +384,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       }, url)) as { status: number; ok: boolean; body: string };
 
       if (!response.ok) {
-        const code = response.status === 429 ? 'AHREFS_RATE_LIMIT' : 'GOOGLE_UNAVAILABLE';
-        throw new ResearchError(code, `Autocomplete HTTP ${response.status} for "${parentKeyword}"`);
+        throw classifyHttpResponse(response.status, parentKeyword);
       }
 
       const texts = parseGoogleAutocomplete(response.body ?? '');

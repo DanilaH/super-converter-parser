@@ -10,6 +10,7 @@ import {
   buildQueryResultFromStore,
   defaultQuerySuggestionsConfig,
   dedupSuggestions,
+  classifyHttpResponse,
   type SuggestionCollector,
   type CollectResult,
   type RawSourceCollection,
@@ -520,7 +521,19 @@ test('corrupt provenance in DB fails explicitly instead of silent recovery', asy
   );
 });
 
-test('autocomplete HTTP 429/500 does not become empty', async () => {
+test('classifyHttpResponse returns GOOGLE_UNAVAILABLE with httpStatus', () => {
+  const error429 = classifyHttpResponse(429, 'test keyword');
+  assert.equal(error429.code, 'GOOGLE_UNAVAILABLE');
+  assert.equal(error429.httpStatus, 429);
+  assert.ok(error429.message.includes('429'));
+
+  const error500 = classifyHttpResponse(500, 'test keyword');
+  assert.equal(error500.code, 'GOOGLE_UNAVAILABLE');
+  assert.equal(error500.httpStatus, 500);
+  assert.ok(error500.message.includes('500'));
+});
+
+test('autocomplete HTTP 429/500 does not become empty via real HTTP path', async () => {
   const config = loadConfig(process.env);
   const sourceStore = RunStore.openInMemory();
   const enrichmentStore = RunStore.openInMemory();
@@ -549,13 +562,12 @@ test('autocomplete HTTP 429/500 does not become empty', async () => {
     async collect(): Promise<CollectResult> {
       this.collectCalls += 1;
       callCount += 1;
-      // Simulate HTTP 429 on first call, 500 on second
       const status = callCount === 1 ? 429 : 500;
       return {
         collections: [],
         navigationRequests: 1,
         xhrRequests: 1,
-        partialError: new ResearchError(status === 429 ? 'AHREFS_RATE_LIMIT' : 'GOOGLE_UNAVAILABLE', `HTTP ${status}`),
+        partialError: classifyHttpResponse(status, 'test keyword'),
       };
     }
   }
