@@ -598,9 +598,12 @@ test('boundedFetch: DNS validation timeout does not hang (redirect hop)', async 
     });
     const elapsed = Date.now() - startTime;
 
-    assert.equal(result.status, 0);
-    assert.equal(result.failureReason, 'timeout');
-    assert.ok(elapsed < 15000, `Redirect DNS timeout should be bounded, took ${elapsed}ms`);
+    assert.equal(result.status, 302, 'Should return initial 302 response');
+    assert.equal(result.failureReason, 'timeout', 'Redirect target DNS should timeout');
+    assert.match(result.error!, /SSRF timeout redirect/);
+    assert.equal(result.finalUrl, `http://initial.test:${serverPort}/redirect`, 'finalUrl should be initial URL');
+    assert.equal(result.redirectChain.length, 0, 'redirectChain should be empty');
+    assert.ok(elapsed >= 4000 && elapsed < 15000, `Should wait for DNS timeout, took ${elapsed}ms`);
   } finally {
     server.close();
   }
@@ -616,4 +619,51 @@ test('boundedFetch: DNS operational error is not classified as SSRF block', asyn
   assert.equal(result.status, 0);
   assert.equal(result.failureReason, 'network');
   assert.ok(!result.error!.includes('SSRF blocked'), 'Error should not claim SSRF block');
+});
+
+test('boundedFetch: HTTPS with pinned IP and SNI', async () => {
+  const https = await import('node:https');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+
+  const fixturesDir = path.join(__dirname, '..', '..', '..', 'test', 'fixtures');
+  const caCert = fs.readFileSync(path.join(fixturesDir, 'ca.pem'), 'utf8');
+  const leafCert = fs.readFileSync(path.join(fixturesDir, 'leaf-cert.pem'), 'utf8');
+  const leafKey = fs.readFileSync(path.join(fixturesDir, 'leaf-key.pem'), 'utf8');
+
+  const server = https.createServer(
+    { cert: leafCert, key: leafKey },
+    (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>https-ok</body></html>');
+    },
+  );
+
+  server.on('tlsClientError', () => {});
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const allowLoopbackPolicy: IpPolicy = () => false;
+    const customSsrfChecker: SsrfChecker = async () => ({ allowed: true, ip: '127.0.0.1' });
+
+    const result = await boundedFetch(`https://test1.example.com:${serverPort}/`, {
+      timeoutMs: 5000,
+      ssrfChecker: customSsrfChecker,
+      ipPolicy: allowLoopbackPolicy,
+      ca: caCert,
+    });
+
+    assert.equal(result.status, 200, 'HTTPS request should succeed');
+    assert.match(result.body ?? '', /https-ok/);
+    assert.equal(result.finalUrl, `https://test1.example.com:${serverPort}/`);
+  } finally {
+    server.close();
+  }
 });

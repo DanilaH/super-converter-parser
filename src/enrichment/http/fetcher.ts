@@ -27,6 +27,7 @@ export type FetcherConfig = {
   ssrfChecker?: SsrfChecker;
   dnsResolver?: DnsResolver;
   ipPolicy?: IpPolicy;
+  ca?: string;
   maxRetries: number;
   baseRetryDelayMs: number;
 };
@@ -104,6 +105,7 @@ export function parseRetryAfter(header: string | null): number | null {
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
+  ca?: string;
 }
 
 function createPinnedAgent(ctx: PinnedConnectContext): Agent {
@@ -117,6 +119,7 @@ function createPinnedAgent(ctx: PinnedConnectContext): Agent {
           cb(null, ctx.validatedIp, family || 4);
         }
       },
+      ...(ctx.ca ? { tls: { ca: ctx.ca, rejectUnauthorized: true } } : {}),
     },
   });
 }
@@ -269,7 +272,7 @@ export async function boundedFetch(
   let servername = new URL(url).hostname;
   let dispatcher: Agent | undefined;
   if (validatedIp) {
-    dispatcher = createPinnedAgent({ validatedIp, servername });
+    dispatcher = createPinnedAgent({ validatedIp, servername, ca: cfg.ca });
   }
 
   const cleanupAgents: Agent[] = [];
@@ -441,7 +444,7 @@ export async function boundedFetch(
         if (targetSsrf.ip && (targetSsrf.ip !== validatedIp || nextServername !== servername)) {
           validatedIp = targetSsrf.ip;
           servername = nextServername;
-          dispatcher = createPinnedAgent({ validatedIp, servername });
+          dispatcher = createPinnedAgent({ validatedIp, servername, ca: cfg.ca });
           cleanupAgents.push(dispatcher);
         }
 
