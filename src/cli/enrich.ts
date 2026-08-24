@@ -260,6 +260,7 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
+  let enrichmentId: string | undefined;
   const signal: CancellationSignal = { cancelled: false };
 
   const sigintHandler = (): void => {
@@ -269,6 +270,13 @@ async function main(): Promise<void> {
     (signal as { cancelled: boolean }).cancelled = true;
     console.log('');
     console.log('Stopping gracefully...');
+    if (store && enrichmentId) {
+      try {
+        store.setEnrichmentState(enrichmentId, 'paused');
+      } catch {
+        // ignore errors during shutdown
+      }
+    }
   };
   const sigtermHandler = (): void => {
     (signal as { cancelled: boolean }).cancelled = true;
@@ -345,7 +353,7 @@ async function main(): Promise<void> {
       sourceStorePath = resolve(sourceDir, 'run.sqlite');
       enrichmentId = createRunId();
       enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
-      createRunDirectory(enrichmentDirectory);
+      await createRunDirectory(enrichmentDirectory);
       clusteringConfig = {
         topN: args.topN,
         edgeRule: {
