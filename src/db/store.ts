@@ -6,9 +6,13 @@ const VALID_SOURCES: readonly string[] = ['surfer_related', 'google_autocomplete
 const VALID_STATUSES: readonly string[] = ['ok', 'empty', 'unavailable', 'error'];
 
 function validateOccurrence(
-  occurrence: Record<string, unknown>,
+  raw: unknown,
   normalizedSuggestion: string,
 ): { parentKeyword: string; normalizedParent: string; source: QuerySuggestionSource; market: string; hl: string; gl: string; parserVersion: string; collectionStatus: QuerySuggestionCollectionStatus } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": expected object, got ${Array.isArray(raw) ? 'array' : raw === null ? 'null' : typeof raw}`);
+  }
+  const occurrence = raw as Record<string, unknown>;
   const parentKeyword = occurrence.parentKeyword;
   const normalizedParent = occurrence.normalizedParent;
   const source = occurrence.source;
@@ -520,12 +524,6 @@ export class RunStore {
 
   close(): void {
     this.db.close();
-  }
-
-  corruptSuggestionRow(enrichmentId: string, normalizedSuggestion: string, corruptJson: string): void {
-    this.db
-      .prepare('UPDATE enrichment_query_suggestions SET occurrences_json = ? WHERE enrichment_id = ? AND normalized_suggestion = ?')
-      .run(corruptJson, enrichmentId, normalizedSuggestion);
   }
 
   createRun(input: {

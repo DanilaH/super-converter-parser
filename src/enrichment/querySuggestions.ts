@@ -373,11 +373,18 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   private async collectAutocomplete(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
     try {
       const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
-      const payload = (await page.evaluate(async (target: string) => {
-        const response = await fetch(target, { headers: { Accept: 'application/json' } });
-        return response.text();
-      }, url)) as string;
-      const texts = parseGoogleAutocomplete(payload ?? '');
+      const response = (await page.evaluate(async (target: string) => {
+        const res = await fetch(target, { headers: { Accept: 'application/json' } });
+        const body = await res.text();
+        return { status: res.status, ok: res.ok, body };
+      }, url)) as { status: number; ok: boolean; body: string };
+
+      if (!response.ok) {
+        const code = response.status === 429 ? 'AHREFS_RATE_LIMIT' : 'GOOGLE_UNAVAILABLE';
+        throw new ResearchError(code, `Autocomplete HTTP ${response.status} for "${parentKeyword}"`);
+      }
+
+      const texts = parseGoogleAutocomplete(response.body ?? '');
       const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
       return {
         source: 'google_autocomplete',
@@ -389,6 +396,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.saveFailureArtifacts(page, parentKeyword, 'GOOGLE_SERP_PARSE_ERROR', `Autocomplete fetch/parse failed: ${message}`);
+      if (error instanceof ResearchError) throw error;
       throw new ResearchError('GOOGLE_SERP_PARSE_ERROR', `Autocomplete fetch/parse failed: ${message}`);
     }
   }

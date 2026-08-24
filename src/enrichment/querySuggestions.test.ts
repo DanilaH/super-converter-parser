@@ -84,6 +84,12 @@ function testShortlist(): string[] {
   return ['json diff', 'compare lists', 'csv parser', 'data merge', 'file converter'];
 }
 
+function corruptSuggestionRow(store: RunStore, enrichmentId: string, normalizedSuggestion: string, corruptJson: string): void {
+  const db = (store as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } } }).db;
+  db.prepare('UPDATE enrichment_query_suggestions SET occurrences_json = ? WHERE enrichment_id = ? AND normalized_suggestion = ?')
+    .run(corruptJson, enrichmentId, normalizedSuggestion);
+}
+
 function createTestEnrichmentRun(
   store: RunStore,
   enrichmentId: string,
@@ -327,14 +333,15 @@ test('DB merge keeps FIRST non-null volume/CPC when sources conflict', async () 
     shortlistKeywords: testShortlist(),
   });
 
-  // Google first (no volume), then Surfer (with volume) for same suggestion
-  // The first non-null value should be preserved
+  // Two different non-null values: Surfer first (100/1.0), then Google (200/2.0)
+  // The FIRST non-null value should be preserved (100/1.0)
   const conflictPlan: Record<string, RawSourceCollection[]> = {
     [normalizeKeyword('json diff')]: [
-      collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'conflicting keyword')]),
+      collection('surfer_related', [occ('json diff', 'surfer_related', 'conflicting keyword', { volume: 100, cpc: 1.0, ordinal: 0 })]),
     ],
     [normalizeKeyword('compare lists')]: [
-      collection('surfer_related', [occ('compare lists', 'surfer_related', 'conflicting keyword', { volume: 1200, cpc: 5.5, ordinal: 0 })]),
+      collection('google_autocomplete', [occ('compare lists', 'google_autocomplete', 'conflicting keyword')]),
+      collection('surfer_related', [occ('compare lists', 'surfer_related', 'conflicting keyword', { volume: 200, cpc: 2.0, ordinal: 1 })]),
     ],
   };
   const collector = new FakeCollector(conflictPlan);
@@ -353,26 +360,35 @@ test('DB merge keeps FIRST non-null volume/CPC when sources conflict', async () 
     debugRoot: '/tmp/enr-conflict/debug',
   });
 
-  // Cold result should have volume/CPC from Surfer (first non-null)
+  // Cold result should have volume/CPC from first source (100/1.0)
   const coldSuggestion = result.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
   assert.ok(coldSuggestion);
-  assert.equal(coldSuggestion?.volume, 1200);
-  assert.equal(coldSuggestion?.cpc, 5.5);
-  assert.equal(coldSuggestion?.occurrences.length, 2);
+  assert.equal(coldSuggestion?.volume, 100);
+  assert.equal(coldSuggestion?.cpc, 1.0);
+  assert.equal(coldSuggestion?.ordinal, 0);
+  assert.equal(coldSuggestion?.occurrences.length, 3);
 
-  // Perserved result should also have volume/CPC from Surfer
+  // Perserved result should also have volume/CPC from first source (100/1.0)
   const saved = enrichmentStore.loadQuerySuggestions('enr-conflict');
   const savedSuggestion = saved.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
   assert.ok(savedSuggestion);
-  assert.equal(savedSuggestion?.volume, 1200);
-  assert.equal(savedSuggestion?.cpc, 5.5);
+  assert.equal(savedSuggestion?.volume, 100);
+  assert.equal(savedSuggestion?.cpc, 1.0);
+  assert.equal(savedSuggestion?.ordinal, 0);
 
-  // Rebuild should also have volume/CPC from Surfer
+  // Rebuild should also have volume/CPC from first source (100/1.0)
   const rebuilt = buildQueryResultFromStore('enr-conflict', enrichmentStore, defaultQuerySuggestionsConfig(), config);
   const rebuiltSuggestion = rebuilt.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
   assert.ok(rebuiltSuggestion);
-  assert.equal(rebuiltSuggestion?.volume, 1200);
-  assert.equal(rebuiltSuggestion?.cpc, 5.5);
+  assert.equal(rebuiltSuggestion?.volume, 100);
+  assert.equal(rebuiltSuggestion?.cpc, 1.0);
+  assert.equal(rebuiltSuggestion?.ordinal, 0);
+
+  // Full cold object should match full rebuild object
+  assert.deepEqual(
+    { volume: coldSuggestion.volume, cpc: coldSuggestion.cpc, ordinal: coldSuggestion.ordinal },
+    { volume: rebuiltSuggestion.volume, cpc: rebuiltSuggestion.cpc, ordinal: rebuiltSuggestion.ordinal },
+  );
 });
 
 test('invalid occurrence in DB fails with DB_ERROR', async () => {
@@ -406,7 +422,7 @@ test('invalid occurrence in DB fails with DB_ERROR', async () => {
   }]);
 
   // Corrupt the row with an occurrence that has missing parentKeyword
-  enrichmentStore.corruptSuggestionRow('enr-invalid', 'invalid occurrence', JSON.stringify([{
+  corruptSuggestionRow(enrichmentStore, 'enr-invalid', 'invalid occurrence', JSON.stringify([{
     normalizedParent: 'some parent',
     source: 'google_autocomplete',
     market: '',
@@ -474,7 +490,7 @@ test('corrupt provenance in DB fails explicitly instead of silent recovery', asy
   }]);
 
   // Corrupt the row by updating occurrences_json with invalid JSON
-  enrichmentStore.corruptSuggestionRow('enr-corrupt', 'corrupt suggestion', '{invalid json');
+  corruptSuggestionRow(enrichmentStore, 'enr-corrupt', 'corrupt suggestion', '{invalid json');
 
   // Use a plan that includes the corrupt suggestion so persistParentAtomic reads it
   const corruptPlan: Record<string, RawSourceCollection[]> = {
@@ -501,6 +517,130 @@ test('corrupt provenance in DB fails explicitly instead of silent recovery', asy
       debugRoot: '/tmp/enr-corrupt/debug',
     }),
     (error: Error) => error.message.includes('Corrupt occurrences_json'),
+  );
+});
+
+test('autocomplete HTTP 429/500 does not become empty', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-http',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: { ...defaultQuerySuggestionsConfig(), sources: ['google_autocomplete'] } }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-http',
+    shortlistKeywords: testShortlist(),
+  });
+
+  let callCount = 0;
+  class HttpErrorCollector implements SuggestionCollector {
+    openCalls = 0;
+    closeCalls = 0;
+    collectCalls = 0;
+    async open(): Promise<void> {
+      this.openCalls += 1;
+    }
+    async close(): Promise<void> {
+      this.closeCalls += 1;
+    }
+    async collect(): Promise<CollectResult> {
+      this.collectCalls += 1;
+      callCount += 1;
+      // Simulate HTTP 429 on first call, 500 on second
+      const status = callCount === 1 ? 429 : 500;
+      return {
+        collections: [],
+        navigationRequests: 1,
+        xhrRequests: 1,
+        partialError: new ResearchError(status === 429 ? 'AHREFS_RATE_LIMIT' : 'GOOGLE_UNAVAILABLE', `HTTP ${status}`),
+      };
+    }
+  }
+  const collector = new HttpErrorCollector();
+  const cache = CacheStore.openInMemory();
+
+  const result = await runQuerySuggestionsModule({
+    enrichmentId: 'enr-http',
+    sourceStore,
+    enrichmentStore,
+    sourceRunId,
+    config: { ...defaultQuerySuggestionsConfig(), sources: ['google_autocomplete'] },
+    shortlist: testShortlist(),
+    logger: () => {},
+    signal: { cancelled: false },
+    collector,
+    cache,
+    researchConfig: config,
+    debugRoot: '/tmp/enr-http/debug',
+  });
+
+  // HTTP errors should NOT produce empty status - they should be errors
+  assert.equal(result.suggestions.length, 0);
+  const autocompleteStatus = result.perSourceStatus.find((s) => s.source === 'google_autocomplete');
+  assert.ok(autocompleteStatus);
+  assert.equal(autocompleteStatus?.status, 'error');
+});
+
+test('primitive/null occurrence element fails with DB_ERROR', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-primitive',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-primitive',
+    shortlistKeywords: testShortlist(),
+  });
+
+  // Insert a row with a null element in occurrences_json
+  enrichmentStore.saveQuerySuggestions('enr-primitive', [{
+    normalizedSuggestion: 'primitive suggestion',
+    rawText: 'primitive suggestion',
+    volume: null,
+    cpc: null,
+    ordinal: null,
+    market: '',
+    hl: '',
+    gl: '',
+    parserVersion: '1.0.0',
+    collectionStatus: 'ok',
+    occurrences: [],
+  }]);
+
+  // Corrupt with null element
+  corruptSuggestionRow(enrichmentStore, 'enr-primitive', 'primitive suggestion', JSON.stringify([null]));
+
+  const primitivePlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'primitive suggestion')]),
+    ],
+  };
+  const collector = new FakeCollector(primitivePlan);
+  const cache = CacheStore.openInMemory();
+
+  await assert.rejects(
+    () => runQuerySuggestionsModule({
+      enrichmentId: 'enr-primitive',
+      sourceStore,
+      enrichmentStore,
+      sourceRunId,
+      config: defaultQuerySuggestionsConfig(),
+      shortlist: testShortlist(),
+      logger: () => {},
+      signal: { cancelled: false },
+      collector,
+      cache,
+      researchConfig: config,
+      debugRoot: '/tmp/enr-primitive/debug',
+    }),
+    (error: Error) => error.message.includes('Invalid occurrence') && error.message.includes('null'),
   );
 });
 
