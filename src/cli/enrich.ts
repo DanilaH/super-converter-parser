@@ -5,7 +5,8 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment, type EnrichmentLogger, type CancellationSignal } from '../enrichment/engine.js';
+import { runEnrichment } from '../enrichment/engine.js';
+import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
 import { createRdapClient } from '../rdap/client.js';
@@ -20,7 +21,11 @@ import type { ResearchConfig } from '../config/config.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   KNOWN_ENRICHMENT_MODULES,
+  QUERY_SUGGESTION_SOURCES,
+  QUERY_SUGGESTION_PARSER_VERSION,
+  type EnrichmentModuleConfig,
   type EnrichmentModuleId,
+  type QuerySuggestionSource,
 } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -66,6 +71,9 @@ interface ParsedArgs {
   minShared: number;
   minJaccard: number;
   shortlist: string[];
+  sources: QuerySuggestionSource[];
+  maxSuggestions: number;
+  maxParents: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -77,6 +85,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   let minShared = 3;
   let minJaccard = 0.3;
   let shortlist: string[] = [];
+  let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
+  let maxSuggestions = 20;
+  let maxParents = 30;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -130,6 +141,39 @@ function parseArgs(argv: string[]): ParsedArgs {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist requires a value');
       shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (arg === '--sources') {
+      const value = args.shift();
+      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources requires a value');
+      const parsed = value.split(',').map((s) => s.trim()).filter(Boolean) as QuerySuggestionSource[];
+      if (parsed.length === 0) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources must contain at least one source');
+      }
+      for (const s of parsed) {
+        if (!QUERY_SUGGESTION_SOURCES.includes(s)) {
+          throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown suggestion source: ${s}. Known: ${QUERY_SUGGESTION_SOURCES.join(', ')}`);
+        }
+      }
+      sources = parsed;
+    } else if (arg === '--max-suggestions-per-source') {
+      const value = args.shift();
+      if (!value || Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-suggestions-per-source requires a numeric value');
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-suggestions-per-source must be a positive integer, got ${value}`);
+      }
+      maxSuggestions = parsed;
+    } else if (arg === '--max-parents') {
+      const value = args.shift();
+      if (!value || Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-parents requires a numeric value');
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 30) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be an integer in [5, 30], got ${value}`);
+      }
+      maxParents = parsed;
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
@@ -148,7 +192,28 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist };
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions, maxParents };
+}
+
+function buildEnrichmentConfig(
+  modules: EnrichmentModuleId[],
+  clusteringConfig: ClusteringConfig,
+  sources: QuerySuggestionSource[],
+  maxSuggestions: number,
+  maxParents: number,
+): EnrichmentModuleConfig {
+  const config: EnrichmentModuleConfig = { clusters: clusteringConfig };
+  if (modules.includes('query_suggestions')) {
+    config.query_suggestions = {
+      sources,
+      maxSuggestionsPerSource: maxSuggestions,
+      maxParents,
+      rateLimitMinDelayMs: 1000,
+      rateLimitMaxDelayMs: 10000,
+      algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,
+    };
+  }
+  return config;
 }
 
 function findSourceRunDirectory(sourceRunId: string): string {
@@ -183,6 +248,12 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
       sourceStore.loadKeywords(sourceRunId).map((keyword) => keyword.normalizedKeyword),
     );
     const normalized = [...new Set(rawShortlist.map(normalizeKeyword))];
+    if (normalized.length < 5 || normalized.length > 30) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `--shortlist must contain 5-30 unique keywords, got ${normalized.length}`,
+      );
+    }
     const rejected = normalized.filter((keyword) => !available.has(keyword));
     if (rejected.length > 0) {
       throw new ResearchError(
@@ -200,6 +271,7 @@ async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
   let cacheStore: CacheStore | undefined;
+  let enrichmentId: string | undefined;
   const signal: CancellationSignal = { cancelled: false };
 
   const sigintHandler = (): void => {
@@ -226,7 +298,7 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
     }
     if (args.resumeEnrichmentId) {
-      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist'];
+      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--sources', '--max-suggestions-per-source', '--max-parents'];
       const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
       if (supplied.length > 0) {
         throw new ResearchError(
@@ -238,7 +310,7 @@ async function main(): Promise<void> {
 
     const config: ResearchConfig = loadConfig(process.env);
 
-    let enrichmentId: string;
+    enrichmentId = '';
     let enrichmentDirectory: string;
     let sourceRunId: string;
     let sourceStorePath: string;
@@ -273,6 +345,12 @@ async function main(): Promise<void> {
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
       shortlist = existingRun.shortlistKeywords;
+      if (existingRun.modules.includes('query_suggestions') && (shortlist.length < 5 || shortlist.length > 30)) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `Persisted shortlist has ${shortlist.length} keywords; required 5-30. Cannot resume.`,
+        );
+      }
       modules = existingRun.modules;
       // Restore the domain_age config snapshot so resume reproduces the original
       // provider/endpoints/TTL semantics instead of the current environment.
@@ -292,12 +370,14 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-       shortlist = validateShortlist(sourceStorePath, sourceRunId, args.shortlist);
-       modules = args.modules;
-       if (modules.includes('domain_age')) {
-         domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
-       }
-     }
+      modules = args.modules;
+      shortlist = modules.includes('query_suggestions') || modules.includes('domain_age')
+        ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
+        : (args.shortlist && args.shortlist.length > 0 ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist) : []);
+      if (modules.includes('domain_age')) {
+        domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
+      }
+    }
 
     store ??= RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
 
@@ -322,6 +402,20 @@ async function main(): Promise<void> {
     console.log('');
     const logger: EnrichmentLogger = (line: string) => console.log(line);
 
+    let enrichmentConfig: EnrichmentModuleConfig;
+    if (isResume) {
+      const persistedRun = store.loadEnrichmentRun(enrichmentId);
+      if (!persistedRun) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
+      }
+      enrichmentConfig = persistedRun.config;
+      if (!enrichmentConfig.clusters) {
+        enrichmentConfig.clusters = clusteringConfig;
+      }
+    } else {
+      enrichmentConfig = buildEnrichmentConfig(modules, clusteringConfig, args.sources, args.maxSuggestions, args.maxParents);
+    }
+
     const outcome = await runEnrichment({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
@@ -331,7 +425,7 @@ async function main(): Promise<void> {
       modules,
       shortlist,
       config: {
-        clusters: clusteringConfig,
+        ...enrichmentConfig,
         ...(domainAgeSnapshot ? { domain_age: domainAgeSnapshot } : {}),
       },
       ...(domainAgeSnapshot ? { domainAgeConfig: domainAgeSnapshot } : {}),
@@ -347,23 +441,36 @@ async function main(): Promise<void> {
       console.log('Run paused. Resume with:');
       console.log(`  npm run enrich -- --resume ${enrichmentId}`);
       exitCode = EXIT_PAUSED;
-    } else if (outcome.kind === 'completed' && outcome.result && outcome.domainAgeRecords) {
+    } else if (outcome.kind === 'completed') {
       console.log('');
-      console.log(`Clusters: ${outcome.result.clusters.length}`);
-      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  keyword-clusters.csv');
-      console.log('  keyword-clusters.json');
-      console.log('  domain-age.csv');
-      console.log('  domain-age.json');
+      if (outcome.result) {
+        console.log(`Clusters: ${outcome.result.clusters.length}`);
+        console.log('  keyword-clusters.csv');
+        console.log('  keyword-clusters.json');
+      }
+      if (outcome.domainAgeRecords) {
+        console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+        console.log('  domain-age.csv');
+        console.log('  domain-age.json');
+      }
+      if (modules.includes('query_suggestions')) {
+        console.log('  query-suggestions.csv');
+        console.log('  query-suggestions.json');
+      }
       console.log('  manifest.json');
       console.log('  status.json');
-    } else if (outcome.kind === 'completed' && outcome.result) {
       console.log('');
-      console.log(`Clusters: ${outcome.result.clusters.length}`);
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  keyword-clusters.csv');
-      console.log('  keyword-clusters.json');
+      if (outcome.result) {
+        console.log(`Clusters: ${outcome.result.clusters.length}`);
+        console.log('  keyword-clusters.csv');
+        console.log('  keyword-clusters.json');
+      }
+      if (modules.includes('query_suggestions')) {
+        console.log('  query-suggestions.csv');
+        console.log('  query-suggestions.json');
+      }
       console.log('  manifest.json');
       console.log('  status.json');
     } else if (outcome.kind === 'completed' && outcome.domainAgeRecords) {

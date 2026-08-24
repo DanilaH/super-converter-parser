@@ -8,7 +8,7 @@ import type { KeywordRecord, KeywordStatus } from '../runs/run.js';
 import type { RdapRegistrationStatus } from '../rdap/types.js';
 import type { FirstSeenStatus } from '../firstseen/types.js';
 
-export const CACHE_SCHEMA_VERSION = 7;
+export const CACHE_SCHEMA_VERSION = 8;
 
 // Query version for first-seen facts. Bump when query semantics change so that
 // stale results from an older query contract are invalidated on next access.
@@ -121,6 +121,19 @@ const MIGRATIONS: string[] = [
    // columns so they remain consumable; they are refreshed under the per-source
    // contract on next access.
    `
+   CREATE TABLE IF NOT EXISTS domain_age_cache (
+     domain TEXT PRIMARY KEY,
+     registration_date TEXT,
+     registration_status TEXT NOT NULL,
+     registration_rule TEXT NOT NULL DEFAULT '',
+     registration_is_redacted INTEGER NOT NULL DEFAULT 0,
+     first_seen_date TEXT,
+     first_seen_status TEXT NOT NULL,
+     first_seen_source TEXT NOT NULL DEFAULT '',
+     error TEXT,
+     stored_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );
    ALTER TABLE domain_age_cache ADD COLUMN registration_fetched_at TEXT;
    ALTER TABLE domain_age_cache ADD COLUMN registration_expires_at TEXT;
    ALTER TABLE domain_age_cache ADD COLUMN registration_error TEXT;
@@ -158,6 +171,25 @@ const MIGRATIONS: string[] = [
            registration_events = ''
      WHERE first_seen_query_version = 0;
     `,
+  // v8: query-suggestion collection cache. One row per (source + parent keyword
+  // + market/hl/gl + parser version) so a resume or a fresh enrichment run does
+  // not re-hit the browser for an already-collected parent/source. Status is
+  // ok/empty/error so a genuinely empty or failed collection is cacheable and
+  // distinguishable from "never fetched".
+  `
+  CREATE TABLE IF NOT EXISTS suggestion_cache (
+    cache_key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    normalized_parent TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    suggestions_json TEXT NOT NULL DEFAULT '[]',
+    stored_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export type CachedKeywordEntry = {
@@ -242,6 +274,28 @@ export type DomainAgeTtlSettings = {
   firstSeenUnavailableMs: number;
 };
 
+export type CachedSuggestionStatus = 'ok' | 'empty' | 'error' | 'unavailable';
+
+export type CachedSuggestionRow = {
+  text: string;
+  volume: number | null;
+  cpc: number | null;
+  ordinal: number | null;
+};
+
+export type CachedSuggestionEntry = {
+  cacheKey: string;
+  source: string;
+  normalizedParent: string;
+  identity: CacheIdentity;
+  parserVersion: string;
+  status: CachedSuggestionStatus;
+  error: string | null;
+  suggestions: CachedSuggestionRow[];
+  storedAt: string;
+  expiresAt: string;
+};
+
 export type CacheTtlSettings = {
   completedMs: number;
   partialMs: number;
@@ -253,7 +307,27 @@ export type CacheTtlSettings = {
   domainErrorMs: number;
   /** Domain-age enrichment cache (registration date via RDAP + first-seen). */
   domainAge: DomainAgeTtlSettings;
+  suggestionOkMs: number;
+  suggestionEmptyMs: number;
+  suggestionErrorMs: number;
 };
+
+export type CachedSuggestionStatusTtl = CachedSuggestionStatus;
+
+export function ttlMsForSuggestionStatus(
+  status: CachedSuggestionStatus,
+  ttl: CacheTtlSettings,
+): number {
+  switch (status) {
+    case 'ok':
+      return ttl.suggestionOkMs;
+    case 'empty':
+    case 'unavailable':
+      return ttl.suggestionEmptyMs;
+    case 'error':
+      return ttl.suggestionErrorMs;
+  }
+}
 
 export function ttlMsForKeywordStatus(status: KeywordStatus, ttl: CacheTtlSettings): number {
   switch (status) {
@@ -386,6 +460,18 @@ export interface KeywordCache {
     domain: string,
     entry: Omit<CachedDomainAgeEntry, 'domain' | 'storedAt' | 'expiresAt'>,
     storedAt: string,
+  ): void;
+}
+
+// Narrow surface for query-suggestion collection caching. The real CacheStore
+// implements it structurally; tests can substitute an in-memory fake without
+// opening the shared cache database.
+export interface SuggestionCache {
+  getSuggestion(cacheKey: string): CachedSuggestionEntry | null;
+  putSuggestion(
+    entry: Omit<CachedSuggestionEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
   ): void;
 }
 
@@ -571,6 +657,8 @@ export class CacheStore implements KeywordCache {
           )
           .run(cutoff, cutoff, cutoff, cutoff);
         deleted += ageResult.changes;
+        const suggestionResult = this.db.prepare('DELETE FROM suggestion_cache WHERE expires_at <= ?').run(cutoff);
+        deleted += suggestionResult.changes;
       });
       purge();
       return deleted;
@@ -924,6 +1012,68 @@ export class CacheStore implements KeywordCache {
           storedAt,
           expiresAt,
           now,
+        );
+    });
+  }
+
+  getSuggestion(cacheKey: string): CachedSuggestionEntry | null {
+    return this.wrap('getSuggestion', () => {
+      const row = this.db
+        .prepare('SELECT * FROM suggestion_cache WHERE cache_key = ?')
+        .get(cacheKey) as
+        | {
+            cache_key: string;
+            source: string;
+            normalized_parent: string;
+            identity: string;
+            parser_version: string;
+            status: string;
+            error: string | null;
+            suggestions_json: string;
+            stored_at: string;
+            expires_at: string;
+          }
+        | undefined;
+      if (!row) return null;
+      return {
+        cacheKey: row.cache_key,
+        source: row.source,
+        normalizedParent: row.normalized_parent,
+        identity: JSON.parse(row.identity) as CacheIdentity,
+        parserVersion: row.parser_version,
+        status: row.status as CachedSuggestionStatus,
+        error: row.error,
+        suggestions: JSON.parse(row.suggestions_json) as CachedSuggestionRow[],
+        storedAt: row.stored_at,
+        expiresAt: row.expires_at,
+      };
+    });
+  }
+
+  putSuggestion(
+    entry: Omit<CachedSuggestionEntry, 'storedAt' | 'expiresAt'>,
+    storedAt: string,
+    ttlMs: number,
+  ): void {
+    this.wrap('putSuggestion', () => {
+      const expiresAt = new Date(Date.parse(storedAt) + ttlMs).toISOString();
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO suggestion_cache
+            (cache_key, source, normalized_parent, identity, parser_version, status, error, suggestions_json, stored_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.cacheKey,
+          entry.source,
+          entry.normalizedParent,
+          JSON.stringify(entry.identity),
+          entry.parserVersion,
+          entry.status,
+          entry.error,
+          JSON.stringify(entry.suggestions),
+          storedAt,
+          expiresAt,
         );
     });
   }

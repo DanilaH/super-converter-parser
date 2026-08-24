@@ -23,7 +23,8 @@ export type ResearchErrorCode =
   | 'RDAP_RATE_LIMIT'
   | 'RDAP_ERROR'
   | 'FIRST_SEEN_ERROR'
-  | 'FIRST_SEEN_NOT_CONFIGURED';
+  | 'FIRST_SEEN_NOT_CONFIGURED'
+  | 'ENRICHMENT_ERROR';
 
 export class ResearchError extends Error {
   readonly code: ResearchErrorCode;

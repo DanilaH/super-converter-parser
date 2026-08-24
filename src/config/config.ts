@@ -54,6 +54,9 @@ export type ResearchConfig = {
         firstSeenErrorMs: number;
         firstSeenUnavailableMs: number;
       };
+      suggestionOkMs: number;
+      suggestionEmptyMs: number;
+      suggestionErrorMs: number;
     };
   };
   ahrefs: {
@@ -148,6 +151,9 @@ const DEFAULTS: ResearchConfig = {
         firstSeenErrorMs: 60 * 60 * 1000,
         firstSeenUnavailableMs: 24 * 60 * 60 * 1000,
       },
+      suggestionOkMs: 7 * 24 * 60 * 60 * 1000,
+      suggestionEmptyMs: 7 * 24 * 60 * 60 * 1000,
+      suggestionErrorMs: 60 * 60 * 1000,
     },
   },
   ahrefs: {
@@ -288,17 +294,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
       env.CACHE_TTL_DOMAIN_NOT_FOUND_MS,
       DEFAULTS.cache.ttl.domainNotFoundMs,
     ),
-     domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
-     domainAge: {
-       rdapOkMs: readPositiveInt('CACHE_TTL_RDAP_OK_MS', env.CACHE_TTL_RDAP_OK_MS, DEFAULTS.cache.ttl.domainAge.rdapOkMs),
-       rdapNotFoundMs: readPositiveInt('CACHE_TTL_RDAP_NOT_FOUND_MS', env.CACHE_TTL_RDAP_NOT_FOUND_MS, DEFAULTS.cache.ttl.domainAge.rdapNotFoundMs),
-       rdapUnsupportedMs: readPositiveInt('CACHE_TTL_RDAP_UNSUPPORTED_MS', env.CACHE_TTL_RDAP_UNSUPPORTED_MS, DEFAULTS.cache.ttl.domainAge.rdapUnsupportedMs),
-       rdapErrorMs: readPositiveInt('CACHE_TTL_RDAP_ERROR_MS', env.CACHE_TTL_RDAP_ERROR_MS, DEFAULTS.cache.ttl.domainAge.rdapErrorMs),
-       firstSeenOkMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_OK_MS', env.CACHE_TTL_FIRST_SEEN_OK_MS, DEFAULTS.cache.ttl.domainAge.firstSeenOkMs),
-       firstSeenErrorMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_ERROR_MS', env.CACHE_TTL_FIRST_SEEN_ERROR_MS, DEFAULTS.cache.ttl.domainAge.firstSeenErrorMs),
-       firstSeenUnavailableMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS', env.CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS, DEFAULTS.cache.ttl.domainAge.firstSeenUnavailableMs),
-     },
-   };
+    domainErrorMs: readPositiveInt('CACHE_TTL_DOMAIN_ERROR_MS', env.CACHE_TTL_DOMAIN_ERROR_MS, DEFAULTS.cache.ttl.domainErrorMs),
+    suggestionOkMs: readPositiveInt('CACHE_TTL_SUGGESTION_OK_MS', env.CACHE_TTL_SUGGESTION_OK_MS, DEFAULTS.cache.ttl.suggestionOkMs),
+    suggestionEmptyMs: readPositiveInt(
+      'CACHE_TTL_SUGGESTION_EMPTY_MS',
+      env.CACHE_TTL_SUGGESTION_EMPTY_MS,
+      DEFAULTS.cache.ttl.suggestionEmptyMs,
+    ),
+    suggestionErrorMs: readPositiveInt(
+      'CACHE_TTL_SUGGESTION_ERROR_MS',
+      env.CACHE_TTL_SUGGESTION_ERROR_MS,
+      DEFAULTS.cache.ttl.suggestionErrorMs,
+    ),
+    domainAge: {
+      rdapOkMs: readPositiveInt('CACHE_TTL_RDAP_OK_MS', env.CACHE_TTL_RDAP_OK_MS, DEFAULTS.cache.ttl.domainAge.rdapOkMs),
+      rdapNotFoundMs: readPositiveInt('CACHE_TTL_RDAP_NOT_FOUND_MS', env.CACHE_TTL_RDAP_NOT_FOUND_MS, DEFAULTS.cache.ttl.domainAge.rdapNotFoundMs),
+      rdapUnsupportedMs: readPositiveInt('CACHE_TTL_RDAP_UNSUPPORTED_MS', env.CACHE_TTL_RDAP_UNSUPPORTED_MS, DEFAULTS.cache.ttl.domainAge.rdapUnsupportedMs),
+      rdapErrorMs: readPositiveInt('CACHE_TTL_RDAP_ERROR_MS', env.CACHE_TTL_RDAP_ERROR_MS, DEFAULTS.cache.ttl.domainAge.rdapErrorMs),
+      firstSeenOkMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_OK_MS', env.CACHE_TTL_FIRST_SEEN_OK_MS, DEFAULTS.cache.ttl.domainAge.firstSeenOkMs),
+      firstSeenErrorMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_ERROR_MS', env.CACHE_TTL_FIRST_SEEN_ERROR_MS, DEFAULTS.cache.ttl.domainAge.firstSeenErrorMs),
+      firstSeenUnavailableMs: readPositiveInt('CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS', env.CACHE_TTL_FIRST_SEEN_UNAVAILABLE_MS, DEFAULTS.cache.ttl.domainAge.firstSeenUnavailableMs),
+    },
+  };
 
   const drThresholds = {
     veryWeakMax: readPositiveNumber(

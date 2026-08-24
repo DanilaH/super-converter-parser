@@ -17,6 +17,9 @@ import {
   type DomainAgeConfigSnapshot,
   type DomainAgeRecord,
 } from '../runs/domainAge.js';
+import { CacheStore } from '../cache/store.js';
+import { runQuerySuggestionsModule, createBrowserSuggestionCollector, buildQueryResultFromStore, defaultQuerySuggestionsConfig, type SuggestionCollector } from './querySuggestions.js';
+import { writeQuerySuggestionsCsv, writeQuerySuggestionsJson } from './querySuggestionsOutputs.js';
 import type {
   EnrichmentItemSource,
   EnrichmentModuleConfig,
@@ -24,22 +27,12 @@ import type {
   EnrichmentRunState,
   EnrichmentCacheStatus,
   EnrichmentRunRecord,
+  EnrichmentLogger,
+  CancellationSignal,
+  QuerySuggestionResult,
+  QuerySuggestionsConfig,
 } from './types.js';
-
-export type EnrichmentLogger = (line: string) => void;
-
-export type CancellationSignal = {
-  cancelled: boolean;
-};
-
-export const NEVER_CANCELLED: CancellationSignal = Object.freeze({ cancelled: false });
-
-export class EnrichmentCancelledError extends Error {
-  constructor() {
-    super('Cancelled');
-    this.name = 'EnrichmentCancelledError';
-  }
-}
+import { EnrichmentCancelledError, NEVER_CANCELLED } from './types.js';
 
 export type EnrichmentOptions = {
   enrichmentId: string;
@@ -236,7 +229,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (signal.cancelled) {
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'running');
@@ -246,6 +239,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     let result: ClusteringResult | undefined;
     let domainAgeRecords: Map<string, DomainAgeRecord> | undefined;
+    let queryResult: QuerySuggestionResult | undefined;
     if (modules.includes('clusters')) {
       const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
         (item) => item.itemId === 'clusters' && item.module === 'clusters',
@@ -314,13 +308,64 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       // Omitted domains are logged inside runDomainAgeModule; no duplicate here.
     }
 
-    if (!result && !domainAgeRecords) {
+    if (modules.includes('query_suggestions')) {
+      const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
+        (item) => item.itemId === 'query_suggestions' && item.module === 'query_suggestions',
+      );
+      if (existingItem?.status === 'completed') {
+        logger('Skipping completed query_suggestions module');
+        const runConfig = sourceConn.store.loadRun(sourceRunId);
+        if (!runConfig) {
+          throw new Error(`Source run not found for query suggestions resume: ${sourceRunId}`);
+        }
+        queryResult = buildQueryResultFromStore(
+          enrichmentId,
+          enrichmentStore,
+          config.query_suggestions ?? defaultQuerySuggestionsConfig(),
+          runConfig.configSnapshot,
+        );
+      } else {
+        const runConfig = sourceConn.store.loadRun(sourceRunId);
+        if (!runConfig) {
+          throw new Error(`Source run not found for query suggestions: ${sourceRunId}`);
+        }
+        const researchConfig = runConfig.configSnapshot;
+        const cacheStore = CacheStore.open(researchConfig.cache.path);
+        let collector: SuggestionCollector | undefined;
+        try {
+          collector = await createBrowserSuggestionCollector(
+            researchConfig,
+            join(enrichmentDirectory, 'debug'),
+            signal,
+          );
+          queryResult = await runQuerySuggestionsModule({
+            enrichmentId,
+            sourceStore: sourceConn.store,
+            enrichmentStore,
+            sourceRunId,
+            config: config.query_suggestions ?? defaultQuerySuggestionsConfig(),
+            shortlist,
+            logger,
+            signal,
+            collector,
+            cache: cacheStore,
+            researchConfig,
+            debugRoot: join(enrichmentDirectory, 'debug'),
+          });
+        } finally {
+          await collector?.close().catch(() => undefined);
+          cacheStore.close();
+        }
+      }
+    }
+
+    if (!result && !domainAgeRecords && !queryResult) {
       throw new Error('No modules executed');
     }
 
     if (signal.cancelled) {
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
 
     const csvPath = join(enrichmentDirectory, 'keyword-clusters.csv');
@@ -331,6 +376,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     const statusPath = join(enrichmentDirectory, 'status.json');
 
     await mkdir(enrichmentDirectory, { recursive: true });
+
+    const summary: Record<string, unknown> = {};
+    const artifacts: string[] = ['manifest.json', 'status.json'];
 
     if (result) {
       await writeKeywordClustersCsv(csvPath, result.clusters);
@@ -347,45 +395,66 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         algorithmVersion: result.algorithmVersion,
         config: result.config,
       });
+      summary.inputCount = result.inputCount;
+      summary.excludedCount = result.excludedCount;
+      summary.clusterCount = result.clusters.length;
+      summary.pairCount = result.pairs.length;
+      summary.edgeCount = result.edgeCount;
+      artifacts.push('keyword-clusters.csv', 'keyword-clusters.json');
     }
+
+    if (queryResult) {
+      const qCsvPath = join(enrichmentDirectory, 'query-suggestions.csv');
+      const qJsonPath = join(enrichmentDirectory, 'query-suggestions.json');
+      const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
+      await writeQuerySuggestionsCsv(qCsvPath, queryResult);
+      await writeQuerySuggestionsJson(qJsonPath, {
+        enrichmentId,
+        sourceRunId,
+        outputDirectory: enrichmentDirectory,
+        suggestions: queryResult.suggestions,
+        perSourceStatus: queryResult.perSourceStatus,
+        sourceStats: queryResult.sourceStats,
+        sourceRecords: sourceRecords.map((r) => ({
+          normalizedParent: r.normalizedParent,
+          source: r.source,
+          status: r.status,
+          error: r.error,
+          fetchedAt: r.fetchedAt,
+          cacheStatus: r.cacheStatus,
+          requestCount: r.requestCount,
+          market: r.market,
+          hl: r.hl,
+          gl: r.gl,
+          parserVersion: r.parserVersion,
+        })),
+        inputCount: queryResult.inputCount,
+        emptyCount: queryResult.emptyCount,
+        errorCount: queryResult.errorCount,
+        algorithmVersion: queryResult.algorithmVersion,
+        config: queryResult.config,
+      });
+      summary.queryInputCount = queryResult.inputCount;
+      summary.querySuggestionCount = queryResult.suggestions.length;
+      summary.queryEmptyCount = queryResult.emptyCount;
+      summary.queryErrorCount = queryResult.errorCount;
+      summary.querySourceStats = queryResult.sourceStats;
+      artifacts.push('query-suggestions.csv', 'query-suggestions.json');
+    }
+
 
     if (domainAgeRecords) {
       const records = [...domainAgeRecords.values()].sort((a, b) => a.domain.localeCompare(b.domain));
       await writeTextAtomic(domainAgeCsvPath, renderDomainAgeCsv(records), 'domain age CSV');
-      await writeTextAtomic(
-        domainAgeJsonPath,
-        renderDomainAgeJson(records) + '\n',
-        'domain age JSON',
-      );
+      await writeTextAtomic(domainAgeJsonPath, renderDomainAgeJson(records) + '\\n', 'domain age JSON');
+      summary.domainCount = records.filter((r) => !r.omitted).length;
+      summary.domainOmitted = records.filter((r) => r.omitted).length;
+      summary.domainsDiscovered = records.length;
+      summary.domainsWithRegistration = records.filter((r) => r.registrationDate !== null && !r.omitted).length;
+      summary.domainsWithFirstSeen = records.filter((r) => r.firstSeenDate !== null && !r.omitted).length;
+      summary.domainErrors = records.filter((r) => r.error !== null && !r.omitted).length;
+      artifacts.push('domain-age.csv', 'domain-age.json');
     }
-
-    const summary = {
-      ...(result
-        ? {
-            inputCount: result.inputCount,
-            excludedCount: result.excludedCount,
-            clusterCount: result.clusters.length,
-            pairCount: result.pairs.length,
-            edgeCount: result.edgeCount,
-          }
-        : {}),
-      ...(domainAgeRecords
-        ? {
-            domainCount: [...domainAgeRecords.values()].filter((r) => !r.omitted).length,
-            domainOmitted: [...domainAgeRecords.values()].filter((r) => r.omitted).length,
-            domainsDiscovered: domainAgeRecords.size,
-            domainsWithRegistration: [...domainAgeRecords.values()].filter((r) => r.registrationDate !== null && !r.omitted).length,
-            domainsWithFirstSeen: [...domainAgeRecords.values()].filter((r) => r.firstSeenDate !== null && !r.omitted).length,
-            domainErrors: [...domainAgeRecords.values()].filter((r) => r.error !== null && !r.omitted).length,
-          }
-        : {}),
-    };
-    const artifacts = [
-      ...(result ? ['keyword-clusters.csv', 'keyword-clusters.json'] : []),
-      ...(domainAgeRecords ? ['domain-age.csv', 'domain-age.json'] : []),
-      'manifest.json',
-      'status.json',
-    ];
     await writeTextAtomic(
       manifestPath,
       JSON.stringify({
@@ -414,16 +483,15 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     );
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
-    if (result) {
-      logger(
-        `Enrichment completed: ${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`,
-      );
-    }
+    const parts: string[] = [];
+    if (result) parts.push(`${result.clusters.length} clusters from ${result.inputCount} keywords (${result.excludedCount} excluded)`);
+    if (queryResult) parts.push(`${queryResult.suggestions.length} query suggestions from ${queryResult.inputCount} keywords (${queryResult.emptyCount} empty, ${queryResult.errorCount} errors)`);
     if (domainAgeRecords) {
       const resolvedCount = [...domainAgeRecords.values()].filter((r) => r.error === null).length;
       const errorCount = [...domainAgeRecords.values()].filter((r) => r.error !== null).length;
-      logger(`Domain-age: ${resolvedCount} resolved, ${errorCount} error(s) of ${domainAgeRecords.size} domains.`);
+      parts.push(`${resolvedCount} domain ages resolved (${errorCount} errors)`);
     }
+    logger(`Enrichment completed: ${parts.join('; ')}`);
     return {
       kind: 'completed',
       enrichmentId,
@@ -436,7 +504,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
       logger('Enrichment paused by user');
-      return { kind: 'paused', enrichmentId, state: 'paused' };
+      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
     }
     const message = error instanceof Error ? error.message : String(error);
     enrichmentStore.setEnrichmentState(enrichmentId, 'failed', message);
@@ -445,6 +513,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       kind: 'failed',
       enrichmentId,
       state: 'failed',
+      result: undefined,
       error: message,
     };
   } finally {

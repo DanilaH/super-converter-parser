@@ -189,6 +189,9 @@ test('failed entries keep their error and short TTL mapping', () => {
       firstSeenErrorMs: 60 * 60 * 1000,
       firstSeenUnavailableMs: 24 * 60 * 60 * 1000,
     },
+    suggestionOkMs: 7 * 24 * 60 * 60 * 1000,
+    suggestionEmptyMs: 7 * 24 * 60 * 60 * 1000,
+    suggestionErrorMs: 60 * 60 * 1000,
   };
   assert.equal(ttlMsForKeywordStatus('completed', ttl), 7 * 24 * 60 * 60 * 1000);
   assert.equal(ttlMsForKeywordStatus('partial', ttl), 6 * 60 * 60 * 1000);
