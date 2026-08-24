@@ -13,6 +13,45 @@ test('loadConfig returns defaults', () => {
   assert.equal(config.browser.surferWaitTimeoutMs, 60000);
   assert.equal(config.browser.surferPreflightTimeoutMs, 60000);
   assert.equal(config.browser.surferWidgetSelector, '.surfer-main-keyword-widget');
+  // rdap + firstSeen defaults.
+  assert.equal(config.rdap.bootstrapBase, 'https://data.iana.org/rdap/');
+  assert.equal(config.rdap.perHostMinDelayMs, 500);
+  assert.equal(config.firstSeen.provider, '');
+  assert.equal(config.firstSeen.endpoint, '');
+  assert.equal(config.cache.ttl.domainAge.rdapOkMs, 180 * 24 * 60 * 60 * 1000);
+  assert.equal(config.cache.ttl.domainAge.firstSeenUnavailableMs, 24 * 60 * 60 * 1000);
+});
+
+test('loadConfig applies RDAP and first-seen overrides', () => {
+  const config = loadConfig({
+    RDAP_BOOTSTRAP_BASE: 'https://rdap.example.test/',
+    RDAP_PER_HOST_MIN_DELAY_MS: '250',
+    FIRST_SEEN_PROVIDER: 'wayback',
+    FIRST_SEEN_ENDPOINT: 'https://archive.example.test/cdx',
+    CACHE_TTL_RDAP_ERROR_MS: '7200000',
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(config.rdap.bootstrapBase, 'https://rdap.example.test/');
+  assert.equal(config.rdap.perHostMinDelayMs, 250);
+  assert.equal(config.firstSeen.provider, 'wayback');
+  assert.equal(config.firstSeen.endpoint, 'https://archive.example.test/cdx');
+  assert.equal(config.cache.ttl.domainAge.rdapErrorMs, 7200000);
+});
+
+test('loadConfig rejects unknown first-seen provider', () => {
+  assert.throws(
+    () => loadConfig({ FIRST_SEEN_PROVIDER: 'securitytrails' } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+  );
+});
+
+test('loadConfig rejects bogus first-seen endpoint', () => {
+  assert.throws(
+    () => loadConfig({ FIRST_SEEN_PROVIDER: 'wayback', FIRST_SEEN_ENDPOINT: 'not-a-url' } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+  );
 });
 
 test('loadConfig applies environment overrides', () => {

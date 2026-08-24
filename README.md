@@ -92,6 +92,12 @@ npm run research -- --seeds input/seeds.csv --refresh-keyword "json diff"
 
 # Continue a paused or interrupted run (original input file not required)
 npm run research -- --resume <run-id>
+
+# Enrich a completed discovery run (clustering, query-language suggestions, or both)
+npm run enrich -- --run <source-run-id> --modules clusters
+npm run enrich -- --run <source-run-id> --modules query_suggestions
+npm run enrich -- --run <source-run-id> --modules query_suggestions --sources google_autocomplete,google_related_search,google_paa --max-suggestions-per-source 20
+npm run enrich -- --resume <enrichment-id>
 ```
 
 Configuration via environment variables (all optional):
@@ -405,14 +411,23 @@ Do not spend another project phase re-proving the same single-query spike.
 
 After a discovery run completes, enrichment modules derive additional signals from the persisted data without opening Chrome or calling external APIs.
 
-```bash
-npm run enrich -- --run <source-run-id> --modules clusters
+ ```bash
+ npm run enrich -- --run <source-run-id> --modules clusters
 
-# Resume the same enrichment ID after Ctrl+C
-npm run enrich -- --resume <enrichment-id>
-```
+ # Collect factual Google query-language suggestions (does NOT expand the discovery queue)
+ npm run enrich -- --run <source-run-id> --modules query_suggestions
+ npm run enrich -- --run <source-run-id> --modules clusters,query_suggestions
 
-### SERP-overlap clustering
+ # Limit sources or cap suggestions per source
+ npm run enrich -- --run <source-run-id> --modules query_suggestions \
+   --sources google_autocomplete,google_related_search,google_paa,surfer_related \
+   --max-suggestions-per-source 20
+
+ # Resume the same enrichment ID after Ctrl+C
+ npm run enrich -- --resume <enrichment-id>
+ ```
+
+ ### SERP-overlap clustering
 
 Clusters keywords by comparing normalized registrable-domain sets from their organic SERPs (top N, default 10).
 
@@ -435,4 +450,35 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 - `manifest.json` — persisted modules/config/shortlist, artifact list, and summary counts
 - `status.json` — machine-readable terminal status and the same summary counts
 
-The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. Enrichment checkpoints are stored in `enrichments/<enrichment-id>/enrichment.sqlite`; Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
+ The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. Enrichment checkpoints are stored in `enrichments/<enrichment-id>/enrichment.sqlite`; Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
+
+ ### Query-language collection
+
+ Collects factual query-language suggestions for shortlisted keywords from four sources, strictly separate from the discovery expansion queue. Collected rows **never** enter the Google lookup/expansion queue merely because this module ran.
+
+ **Sources (each keeps its own raw text and normalized identity; dedup is on the normalized identity while every parent/source occurrence is retained):**
+
+ - `surfer_related` — Keyword Surfer related-keyword sidebar (carries volume where available)
+ - `google_autocomplete` — Google autocomplete XHR
+ - `google_related_search` — "Searches related to …" block
+ - `google_paa` — People Also Ask question text only (answers are never clicked or collected)
+
+ **Constraints enforced:**
+
+ - Google-sourced suggestions retain `volume`/`cpc` as `null`; this module never invents demand.
+ - An absent sidebar/source is recorded truthfully as `unavailable`/`empty`/`error` — never as a fabricated successful row.
+ - Reuses the TASK-009 research Chrome profile; never the user's daily profile. No proxy/anti-bot, no CAPTCHA bypass.
+ - Cached per (source + parent keyword + market/hl/gl + parser version) with source-appropriate TTL, so resume and repeat runs avoid re-hitting the browser.
+ - Checkpointed per (parent, source) and Ctrl+C-pausable like every enrichment module.
+
+ **Configurable flags (query_suggestions only):**
+
+ - `--sources <csv>` — subset of the four sources above (default: all four)
+ - `--max-suggestions-per-source <n>` — cap per source (default 20)
+
+ **Outputs:**
+
+ - `query-suggestions.csv` — normalized_suggestion, raw_text, parent_keywords, sources, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences
+ - `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
+ - `manifest.json` / `status.json` — include the same artifacts and summary counts
+ - SQLite state in `enrichments/<enrichment-id>/enrichment.sqlite`

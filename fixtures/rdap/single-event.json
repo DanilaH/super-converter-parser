@@ -1,0 +1,7 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "example.net",
+  "events": [
+    { "eventAction": "registration", "eventDate": "2015-08-17T09:31:42Z" }
+  ]
+}
