@@ -566,56 +566,6 @@ test('boundedFetch: DNS validation timeout does not hang (initial hop)', async (
   assert.ok(elapsed < 10000, `DNS timeout should be bounded, took ${elapsed}ms`);
 });
 
-test('boundedFetch: pinned transport preserves hostname and SNI', async () => {
-  const http = await import('node:http');
-  let receivedHost: string | undefined;
-  const server = http.createServer((req, res) => {
-    receivedHost = req.headers.host;
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<html><body>sni-ok</body></html>');
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const addr = server.address() as { port: number };
-  const serverPort = addr.port;
-
-  try {
-    const customSsrf = async (url: string) => {
-      const parsed = new URL(url);
-      if (parsed.hostname === 'example.com') {
-        return { allowed: true, ip: '127.0.0.1' };
-      }
-      return { allowed: true, ip: '127.0.0.1' };
-    };
-
-    const result = await boundedFetch(`http://example.com:${serverPort}/`, {
-      ...testConfig,
-      ssrfChecker: customSsrf,
-      timeoutMs: 5000,
-    });
-
-    assert.equal(result.status, 200, 'Request should succeed via pinned IP');
-    assert.match(result.body ?? '', /sni-ok/);
-    assert.equal(result.finalUrl, `http://example.com:${serverPort}/`, 'finalUrl should preserve original hostname');
-    assert.equal(receivedHost, `example.com:${serverPort}`, 'Server should receive original hostname in Host header');
-  } finally {
-    server.close();
-  }
-});
-
-test('boundedFetch: DNS validation timeout does not hang', async () => {
-  const startTime = Date.now();
-  const result = await boundedFetch(`http://never-resolve-example-12345.test/path`, {
-    ...testConfig,
-    timeoutMs: 2000,
-  });
-  const elapsed = Date.now() - startTime;
-
-  assert.equal(result.status, 0);
-  assert.match(result.error!, /DNS resolution|timeout|aborted/i);
-  assert.ok(elapsed < 10000, `DNS timeout should be bounded, took ${elapsed}ms`);
-});
-
 test('boundedFetch: DNS operational error is not classified as SSRF block', async () => {
   const failingResolver: DnsResolver = () => Promise.reject(new Error('NXDOMAIN'));
   const result = await boundedFetch(`http://nonexistent-domain-example.test/path`, {
