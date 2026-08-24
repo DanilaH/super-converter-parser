@@ -3,11 +3,21 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative as relativePath, resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
+import { CacheStore } from '../cache/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
 import { runEnrichment } from '../enrichment/engine.js';
 import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
+import { createRdapClient } from '../rdap/client.js';
+import { createFirstSeenClient } from '../firstseen/client.js';
+import {
+  buildDomainAgeConfigSnapshot,
+  snapshotToFirstSeenClientConfig,
+  snapshotToRdapClientConfig,
+  type DomainAgeConfigSnapshot,
+} from '../runs/domainAge.js';
+import type { ResearchConfig } from '../config/config.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   KNOWN_ENRICHMENT_MODULES,
@@ -260,6 +270,7 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
+  let cacheStore: CacheStore | undefined;
   let enrichmentId: string | undefined;
   const signal: CancellationSignal = { cancelled: false };
 
@@ -297,7 +308,7 @@ async function main(): Promise<void> {
       }
     }
 
-    loadConfig(process.env);
+    const config: ResearchConfig = loadConfig(process.env);
 
     enrichmentId = '';
     let enrichmentDirectory: string;
@@ -307,6 +318,7 @@ async function main(): Promise<void> {
     let shortlist: string[] = [];
     let modules: EnrichmentModuleId[];
     let isResume = false;
+    let domainAgeSnapshot: DomainAgeConfigSnapshot | undefined;
 
     if (args.resumeEnrichmentId) {
       isResume = true;
@@ -340,6 +352,9 @@ async function main(): Promise<void> {
         );
       }
       modules = existingRun.modules;
+      // Restore the domain_age config snapshot so resume reproduces the original
+      // provider/endpoints/TTL semantics instead of the current environment.
+      domainAgeSnapshot = existingRun.config.domain_age as DomainAgeConfigSnapshot | undefined;
     } else {
       sourceRunId = args.sourceRunId;
       const sourceDir = findSourceRunDirectory(sourceRunId);
@@ -355,13 +370,33 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-      shortlist = args.modules.includes('query_suggestions')
+      modules = args.modules;
+      shortlist = modules.includes('query_suggestions') || modules.includes('domain_age')
         ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
         : (args.shortlist && args.shortlist.length > 0 ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist) : []);
-      modules = args.modules;
+      if (modules.includes('domain_age')) {
+        domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
+      }
     }
 
     store ??= RunStore.open(resolve(enrichmentDirectory, 'enrichment.sqlite'));
+
+    const needsDomainAge = modules.includes('domain_age');
+    if (needsDomainAge && !domainAgeSnapshot) {
+      throw new ResearchError(
+        'RESUME_CONFIG_MISMATCH',
+        'The "domain_age" module requires a domain_age config snapshot; it was not found on the stored run.',
+      );
+    }
+    if (needsDomainAge) {
+      cacheStore = CacheStore.open(resolve(config.cache.path));
+    }
+    const rdapClient = needsDomainAge && domainAgeSnapshot
+      ? createRdapClient(snapshotToRdapClientConfig(domainAgeSnapshot, { random: Math.random }))
+      : null;
+    const firstSeenClient = needsDomainAge && domainAgeSnapshot
+      ? createFirstSeenClient(snapshotToFirstSeenClientConfig(domainAgeSnapshot, {}))
+      : null;
 
     console.log('Utility Research Runner — Enrichment');
     console.log('');
@@ -389,7 +424,14 @@ async function main(): Promise<void> {
       enrichmentDirectory,
       modules,
       shortlist,
-      config: enrichmentConfig,
+      config: {
+        ...enrichmentConfig,
+        ...(domainAgeSnapshot ? { domain_age: domainAgeSnapshot } : {}),
+      },
+      ...(domainAgeSnapshot ? { domainAgeConfig: domainAgeSnapshot } : {}),
+      ...(cacheStore ? { cacheStore } : {}),
+      ...(rdapClient ? { rdapClient } : {}),
+      ...(firstSeenClient ? { firstSeenClient } : {}),
       logger,
       signal,
       resume: isResume,
@@ -407,10 +449,36 @@ async function main(): Promise<void> {
         console.log('  keyword-clusters.csv');
         console.log('  keyword-clusters.json');
       }
+      if (outcome.domainAgeRecords) {
+        console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+        console.log('  domain-age.csv');
+        console.log('  domain-age.json');
+      }
       if (modules.includes('query_suggestions')) {
         console.log('  query-suggestions.csv');
         console.log('  query-suggestions.json');
       }
+      console.log('  manifest.json');
+      console.log('  status.json');
+      console.log('');
+      console.log(`Artifacts: ${enrichmentDirectory}/`);
+      if (outcome.result) {
+        console.log(`Clusters: ${outcome.result.clusters.length}`);
+        console.log('  keyword-clusters.csv');
+        console.log('  keyword-clusters.json');
+      }
+      if (modules.includes('query_suggestions')) {
+        console.log('  query-suggestions.csv');
+        console.log('  query-suggestions.json');
+      }
+      console.log('  manifest.json');
+      console.log('  status.json');
+    } else if (outcome.kind === 'completed' && outcome.domainAgeRecords) {
+      console.log('');
+      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+      console.log(`Artifacts: ${enrichmentDirectory}/`);
+      console.log('  domain-age.csv');
+      console.log('  domain-age.json');
       console.log('  manifest.json');
       console.log('  status.json');
     } else if (outcome.kind === 'failed') {
@@ -431,6 +499,7 @@ async function main(): Promise<void> {
     }
   } finally {
     store?.close();
+    cacheStore?.close();
     process.off('SIGINT', sigintHandler);
     process.off('SIGTERM', sigtermHandler);
   }

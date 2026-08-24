@@ -10,7 +10,7 @@ export const KNOWN_ENRICHMENT_MODULES = [
 
 export type EnrichmentModuleId = (typeof KNOWN_ENRICHMENT_MODULES)[number];
 
-export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters', 'query_suggestions'] as const satisfies readonly EnrichmentModuleId[];
+export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters', 'query_suggestions', 'domain_age'] as const satisfies readonly EnrichmentModuleId[];
 
 // Factual Google query-language sources for the query_suggestions module. Each
 // keeps its own raw text and provenance; volume/CPC are intentionally null for
@@ -53,13 +53,16 @@ export type EnrichmentItemSource =
   | 'surfer'
   | 'rdap'
   | 'first_seen'
-  | 'ahrefs';
+  | 'ahrefs'
+  | 'cache'
+  | 'checkpoint';
 
 export type EnrichmentCacheStatus =
   | 'hit'
   | 'miss'
   | 'expired'
   | 'refreshed'
+  | 'partial'
   | 'none';
 
 export type ClusterEdgeRule = {

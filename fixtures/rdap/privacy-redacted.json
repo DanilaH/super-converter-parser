@@ -1,0 +1,12 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "privacyparticipant.example",
+  "events": [],
+  "notices": [
+    {
+      "title": "Terms of Service",
+      "type": "terms",
+      "description": ["This registry is REDACTED FOR PRIVACY under GDPR."]
+    }
+  ]
+}
