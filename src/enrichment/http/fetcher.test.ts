@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { boundedFetch, parseRetryAfter, type DnsResolver, type SsrfChecker, type IpPolicy } from './fetcher.js';
@@ -619,4 +620,45 @@ test('boundedFetch: DNS operational error is not classified as SSRF block', asyn
   assert.equal(result.status, 0);
   assert.equal(result.failureReason, 'network');
   assert.ok(!result.error!.includes('SSRF blocked'), 'Error should not claim SSRF block');
+});
+
+
+test('boundedFetch: HTTPS pinned transport preserves and changes SNI/Host across redirect', async () => {
+  const https = await import('node:https');
+  const fixturesUrl = new URL('../../../test/fixtures/', import.meta.url);
+  const ca = readFileSync(new URL('ca.pem', fixturesUrl), 'utf8');
+  const cert = readFileSync(new URL('leaf-cert.pem', fixturesUrl), 'utf8');
+  const key = readFileSync(new URL('leaf-key.pem', fixturesUrl), 'utf8');
+  const observed: Array<{ servername: string | false | undefined; host: string | undefined }> = [];
+  const server = https.createServer({ cert, key }, (req, res) => {
+    observed.push({ servername: (req.socket as { servername?: string | false }).servername, host: req.headers.host });
+    if (req.url === '/redirect') {
+      const currentAddress = server.address() as { port: number };
+      res.writeHead(302, { Location: 'https://test2.example.com:' + currentAddress.port + '/destination' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>https-sni-ok</body></html>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address() as { port: number };
+  const initialUrl = 'https://test1.example.com:' + address.port + '/redirect';
+  const destinationUrl = 'https://test2.example.com:' + address.port + '/destination';
+  const resolver: DnsResolver = async (hostname) => {
+    assert.ok(hostname === 'test1.example.com' || hostname === 'test2.example.com', 'Unexpected hostname: ' + hostname);
+    return [{ address: '127.0.0.1', family: 4 }];
+  };
+  const allowLoopbackPolicy: IpPolicy = () => false;
+  try {
+    const result = await boundedFetch(initialUrl, { dnsResolver: resolver, ipPolicy: allowLoopbackPolicy, ca, timeoutMs: 5000, minDomainDelayMs: 0, maxDomainDelayMs: 0 });
+    assert.equal(result.status, 200);
+    assert.match(result.body ?? '', /https-sni-ok/);
+    assert.equal(result.finalUrl, destinationUrl);
+    assert.deepEqual(result.redirectChain, [destinationUrl]);
+    assert.deepEqual(observed.map((entry) => entry.servername), ['test1.example.com', 'test2.example.com']);
+    assert.deepEqual(observed.map((entry) => entry.host), ['test1.example.com:' + address.port, 'test2.example.com:' + address.port]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });

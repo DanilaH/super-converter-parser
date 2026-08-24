@@ -119,7 +119,8 @@ function createPinnedAgent(ctx: PinnedConnectContext): Agent {
           cb(null, ctx.validatedIp, family || 4);
         }
       },
-      ...(ctx.ca ? { tls: { ca: ctx.ca, rejectUnauthorized: true } } : {}),
+      ...(ctx.ca ? { ca: ctx.ca, rejectUnauthorized: true } : {}),
+      servername: ctx.servername,
     },
   });
 }
