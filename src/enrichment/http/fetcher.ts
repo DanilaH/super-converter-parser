@@ -244,14 +244,19 @@ export async function boundedFetch(
 
   const ssrfResult = await ssrfCheck(url);
   if (!ssrfResult.allowed) {
-    const failureReason = ssrfResult.kind === 'timeout' ? 'timeout' : 'blocked';
+    const failureReason: FetchFailureReason =
+      ssrfResult.kind === 'timeout' ? 'timeout' :
+      ssrfResult.kind === 'error' ? 'network' : 'blocked';
+    const errorPrefix =
+      ssrfResult.kind === 'error' ? 'Network error' :
+      ssrfResult.kind === 'timeout' ? 'SSRF timeout' : 'SSRF blocked';
     return {
       status: 0,
       contentType: null,
       finalUrl: url,
       redirectChain: [],
       body: null,
-      error: `SSRF ${ssrfResult.kind === 'timeout' ? 'timeout' : 'blocked'}: ${ssrfResult.reason}`,
+      error: `${errorPrefix}: ${ssrfResult.reason}`,
       aborted: false,
       retryAfter: null,
       bodyError: false,
@@ -408,14 +413,19 @@ export async function boundedFetch(
         const targetSsrf = await ssrfCheck(nextUrl);
         if (!targetSsrf.allowed) {
           await cleanupTerminalResponse(response, attemptController!, attemptTimer);
-          const failureReason = targetSsrf.kind === 'timeout' ? 'timeout' : 'blocked';
+          const failureReason: FetchFailureReason =
+            targetSsrf.kind === 'timeout' ? 'timeout' :
+            targetSsrf.kind === 'error' ? 'network' : 'blocked';
+          const errorPrefix =
+            targetSsrf.kind === 'error' ? 'Network error' :
+            targetSsrf.kind === 'timeout' ? 'SSRF timeout' : 'SSRF blocked';
           return {
             status,
             contentType,
             finalUrl: logicalUrl,
             redirectChain,
             body: null,
-            error: `SSRF ${targetSsrf.kind === 'timeout' ? 'timeout' : 'blocked'} redirect: ${targetSsrf.reason}`,
+            error: `${errorPrefix} redirect: ${targetSsrf.reason}`,
             aborted: false,
             retryAfter,
             bodyError: false,
