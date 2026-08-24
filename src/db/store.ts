@@ -469,6 +469,10 @@ export class RunStore {
     this.db.close();
   }
 
+  getDb(): Database.Database {
+    return this.db;
+  }
+
   createRun(input: {
     runId: string;
     configSnapshot: ResearchConfig;
@@ -1346,16 +1350,7 @@ export class RunStore {
     gl: string;
     parserVersion: string;
     collectionStatus: string;
-    occurrences: Array<{
-      parentKeyword: string;
-      normalizedParent: string;
-      source: string;
-      market: string;
-      hl: string;
-      gl: string;
-      parserVersion: string;
-      collectionStatus: string;
-    }>;
+    occurrences: Array<Record<string, unknown>>;
   }> {
     const rows = this.db
       .prepare('SELECT * FROM enrichment_query_suggestions WHERE enrichment_id = ? ORDER BY normalized_suggestion')
@@ -1372,19 +1367,31 @@ export class RunStore {
       collection_status: string;
       occurrences_json: string;
     }>;
-    return rows.map((row) => ({
-      normalizedSuggestion: row.normalized_suggestion,
-      rawText: row.raw_text,
-      volume: row.volume,
-      cpc: row.cpc,
-      ordinal: row.ordinal,
-      market: row.market,
-      hl: row.hl,
-      gl: row.gl,
-      parserVersion: row.parser_version,
-      collectionStatus: row.collection_status,
-      occurrences: JSON.parse(row.occurrences_json),
-    }));
+    return rows.map((row) => {
+      let occurrences: Array<Record<string, unknown>>;
+      try {
+        occurrences = JSON.parse(row.occurrences_json) as Array<Record<string, unknown>>;
+        if (!Array.isArray(occurrences)) {
+          throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${row.normalized_suggestion}"`);
+        }
+      } catch (error) {
+        if (error instanceof ResearchError) throw error;
+        throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${row.normalized_suggestion}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return {
+        normalizedSuggestion: row.normalized_suggestion,
+        rawText: row.raw_text,
+        volume: row.volume,
+        cpc: row.cpc,
+        ordinal: row.ordinal,
+        market: row.market,
+        hl: row.hl,
+        gl: row.gl,
+        parserVersion: row.parser_version,
+        collectionStatus: row.collection_status,
+        occurrences,
+      };
+    });
   }
 
   saveQuerySuggestionSource(
@@ -1507,7 +1514,7 @@ export class RunStore {
          error = excluded.error`,
     );
     const suggestionReadStmt = this.db.prepare(
-      'SELECT occurrences_json FROM enrichment_query_suggestions WHERE enrichment_id = ? AND normalized_suggestion = ?',
+      'SELECT raw_text, volume, cpc, ordinal, parser_version, occurrences_json FROM enrichment_query_suggestions WHERE enrichment_id = ? AND normalized_suggestion = ?',
     );
     const suggestionWriteStmt = this.db.prepare(
       `INSERT OR REPLACE INTO enrichment_query_suggestions
@@ -1549,38 +1556,47 @@ export class RunStore {
       }
       for (const s of suggestions) {
         const existing = suggestionReadStmt.get(enrichmentId, s.normalizedSuggestion) as
-          | { occurrences_json: string }
+          | { raw_text: string; volume: number | null; cpc: number | null; ordinal: number | null; parser_version: string; occurrences_json: string }
           | undefined;
         let mergedOccurrences: Array<Record<string, unknown>> = [...s.occurrences];
         if (existing) {
+          let existingOccurrences: Array<Record<string, unknown>>;
           try {
-            const existingOccurrences = JSON.parse(existing.occurrences_json) as Array<Record<string, unknown>>;
-            const seen = new Set(s.occurrences.map((o) => `${o.normalizedParent}:${o.source}`));
-            for (const eo of existingOccurrences) {
-              const key = `${String(eo.normalizedParent)}:${String(eo.source)}`;
-              if (!seen.has(key)) {
-                mergedOccurrences = [...mergedOccurrences, eo];
-                seen.add(key);
-              }
-            }
+            existingOccurrences = JSON.parse(existing.occurrences_json) as Array<Record<string, unknown>>;
           } catch {
-            // keep new occurrences only
+            throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${s.normalizedSuggestion}" in enrichment "${enrichmentId}"`);
+          }
+          if (!Array.isArray(existingOccurrences)) {
+            throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${s.normalizedSuggestion}" in enrichment "${enrichmentId}": expected array`);
+          }
+          const seen = new Set(s.occurrences.map((o) => `${o.normalizedParent}:${o.source}`));
+          for (const eo of existingOccurrences) {
+            const key = `${String(eo.normalizedParent)}:${String(eo.source)}`;
+            if (!seen.has(key)) {
+              mergedOccurrences = [...mergedOccurrences, eo];
+              seen.add(key);
+            }
           }
         }
         const parserVersion = s.occurrences[0]?.source
           ? parserVersionBySource.get(s.occurrences[0].source as QuerySuggestionSource) ?? defaultParserVersion
           : defaultParserVersion;
+        const mergedRawText = existing?.raw_text ?? s.rawText;
+        const mergedVolume = s.volume ?? existing?.volume ?? null;
+        const mergedCpc = s.cpc ?? existing?.cpc ?? null;
+        const mergedOrdinal = s.ordinal ?? existing?.ordinal ?? null;
+        const mergedParserVersion = existing?.parser_version || parserVersion;
         suggestionWriteStmt.run(
           enrichmentId,
           s.normalizedSuggestion,
-          s.rawText,
-          s.volume,
-          s.cpc,
-          s.ordinal,
+          mergedRawText,
+          mergedVolume,
+          mergedCpc,
+          mergedOrdinal,
           s.occurrences[0]?.market ?? market,
           s.occurrences[0]?.hl ?? hl,
           s.occurrences[0]?.gl ?? gl,
-          parserVersion,
+          mergedParserVersion,
           s.collectionStatus,
           JSON.stringify(mergedOccurrences),
         );

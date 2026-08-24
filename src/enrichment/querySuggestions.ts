@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, Page } from 'playwright-core';
-import { ResearchError } from '../shared/errors.js';
+import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
 import { readSurferRelated } from '../surfer/parser.js';
@@ -133,8 +133,8 @@ export function dedupSuggestions(
     const existing = bySuggestion.get(occ.normalizedSuggestion);
     if (existing) {
       existing.occurrences.push({
-        parentKeyword: occ.parentKeyword,
-        normalizedParent: occ.normalizedParent,
+        parentKeyword: String(occ.parentKeyword),
+        normalizedParent: String(occ.normalizedParent),
         source: occ.source,
         market,
         hl,
@@ -223,6 +223,29 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     await this.browser.close().catch(() => undefined);
   }
 
+  private async saveFailureArtifacts(
+    page: Page,
+    parentKeyword: string,
+    errorCode: ResearchErrorCode,
+    errorMessage: string,
+  ): Promise<void> {
+    if (!this.debugRoot) return;
+    const context = buildParserFailureContext(
+      parentKeyword,
+      page.url(),
+      this.config,
+      errorCode,
+      errorMessage,
+    );
+    await saveParserFailureArtifacts(
+      page,
+      this.config,
+      this.debugRoot,
+      keywordSlug(parentKeyword),
+      context,
+    ).catch(() => undefined);
+  }
+
   async collect(
     parentKeyword: string,
     normalizedParent: string,
@@ -295,22 +318,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       this.config.browser.surferRelatedMissingWidgetTimeoutMs,
     );
     if (rows === null) {
-      if (this.debugRoot) {
-        const context = buildParserFailureContext(
-          parentKeyword,
-          page.url(),
-          this.config,
-          'SURFER_RELATED_WIDGET_MISSING',
-          'Surfer related widget not found on page',
-        );
-        await saveParserFailureArtifacts(
-          page,
-          this.config,
-          this.debugRoot,
-          keywordSlug(parentKeyword),
-          context,
-        ).catch(() => undefined);
-      }
+      await this.saveFailureArtifacts(page, parentKeyword, 'SURFER_RELATED_WIDGET_MISSING', 'Surfer related widget not found on page');
       return {
         source: 'surfer_related',
         status: 'unavailable',
@@ -343,33 +351,45 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     script: string,
     parse: (raw: string[]) => string[],
   ): Promise<RawSourceCollection> {
-    const raw = (await page.evaluate(script)) as string[];
-    const texts = parse((raw ?? []).map((r) => String(r)));
-    const occurrences = makeOccurrences(parentKeyword, normalizedParent, source, texts, []);
-    return {
-      source,
-      status: occurrences.length > 0 ? 'ok' : 'empty',
-      occurrences,
-      error: null,
-      cacheStatus: 'none',
-    };
+    try {
+      const raw = (await page.evaluate(script)) as string[];
+      const texts = parse((raw ?? []).map((r) => String(r)));
+      const occurrences = makeOccurrences(parentKeyword, normalizedParent, source, texts, []);
+      return {
+        source,
+        status: occurrences.length > 0 ? 'ok' : 'empty',
+        occurrences,
+        error: null,
+        cacheStatus: 'none',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.saveFailureArtifacts(page, parentKeyword, 'GOOGLE_SERP_PARSE_ERROR', `Script evaluate/parse failed for ${source}: ${message}`);
+      throw error;
+    }
   }
 
   private async collectAutocomplete(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
-    const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
-    const payload = (await page.evaluate(async (target: string) => {
-      const response = await fetch(target, { headers: { Accept: 'application/json' } });
-      return response.text();
-    }, url)) as string;
-    const texts = parseGoogleAutocomplete(payload ?? '');
-    const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
-    return {
-      source: 'google_autocomplete',
-      status: occurrences.length > 0 ? 'ok' : 'empty',
-      occurrences,
-      error: null,
-      cacheStatus: 'none',
-    };
+    try {
+      const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
+      const payload = (await page.evaluate(async (target: string) => {
+        const response = await fetch(target, { headers: { Accept: 'application/json' } });
+        return response.text();
+      }, url)) as string;
+      const texts = parseGoogleAutocomplete(payload ?? '');
+      const occurrences = makeOccurrences(parentKeyword, normalizedParent, 'google_autocomplete', texts, []);
+      return {
+        source: 'google_autocomplete',
+        status: occurrences.length > 0 ? 'ok' : 'empty',
+        occurrences,
+        error: null,
+        cacheStatus: 'none',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.saveFailureArtifacts(page, parentKeyword, 'GOOGLE_SERP_PARSE_ERROR', `Autocomplete fetch/parse failed: ${message}`);
+      throw error;
+    }
   }
 }
 
@@ -520,8 +540,8 @@ export async function runQuerySuggestionsModule(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
-        parentKeyword: occ.parentKeyword,
-        normalizedParent: occ.normalizedParent,
+        parentKeyword: String(occ.parentKeyword),
+        normalizedParent: String(occ.normalizedParent),
         source: occ.source as QuerySuggestionSource,
         rawText: saved.rawText,
         normalizedSuggestion: saved.normalizedSuggestion,
@@ -866,8 +886,8 @@ export function buildQueryResultFromStore(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
-        parentKeyword: occ.parentKeyword,
-        normalizedParent: occ.normalizedParent,
+        parentKeyword: String(occ.parentKeyword),
+        normalizedParent: String(occ.normalizedParent),
         source: occ.source as QuerySuggestionSource,
         rawText: saved.rawText,
         normalizedSuggestion: saved.normalizedSuggestion,

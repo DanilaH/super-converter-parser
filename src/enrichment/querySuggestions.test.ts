@@ -246,6 +246,134 @@ test('one normalized suggestion retains every (parent, source) occurrence', asyn
   assert.equal(rebuiltShared?.occurrences.length, 3);
 });
 
+test('DB merge preserves non-null volume/CPC from earlier source', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-vol',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-vol',
+    shortlistKeywords: testShortlist(),
+  });
+
+  // Surfer provides volume/CPC first, then Google provides same suggestion without volume/CPC
+  const volumePlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('surfer_related', [occ('json diff', 'surfer_related', 'keyword with volume', { volume: 49500, cpc: 7.9, ordinal: 0 })]),
+    ],
+    [normalizeKeyword('compare lists')]: [
+      collection('google_autocomplete', [occ('compare lists', 'google_autocomplete', 'keyword with volume')]),
+    ],
+  };
+  const collector = new FakeCollector(volumePlan);
+  const result = await runQuerySuggestionsModule({
+    enrichmentId: 'enr-vol',
+    sourceStore,
+    enrichmentStore,
+    sourceRunId,
+    config: defaultQuerySuggestionsConfig(),
+    shortlist: testShortlist(),
+    logger: () => {},
+    signal: { cancelled: false },
+    collector,
+    cache: CacheStore.openInMemory(),
+    researchConfig: config,
+    debugRoot: '/tmp/enr-vol/debug',
+  });
+
+  // Cold result should have volume/CPC from Surfer
+  const coldSuggestion = result.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('keyword with volume'));
+  assert.ok(coldSuggestion);
+  assert.equal(coldSuggestion?.volume, 49500);
+  assert.equal(coldSuggestion?.cpc, 7.9);
+  assert.equal(coldSuggestion?.occurrences.length, 2);
+
+  // Perserved result should also have volume/CPC from Surfer (not overwritten by null)
+  const saved = enrichmentStore.loadQuerySuggestions('enr-vol');
+  const savedSuggestion = saved.find((s) => s.normalizedSuggestion === normalizeKeyword('keyword with volume'));
+  assert.ok(savedSuggestion);
+  assert.equal(savedSuggestion?.volume, 49500);
+  assert.equal(savedSuggestion?.cpc, 7.9);
+  assert.equal(savedSuggestion?.occurrences.length, 2);
+
+  // Rebuild should also have volume/CPC from Surfer
+  const rebuilt = buildQueryResultFromStore('enr-vol', enrichmentStore, defaultQuerySuggestionsConfig(), config);
+  const rebuiltSuggestion = rebuilt.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('keyword with volume'));
+  assert.ok(rebuiltSuggestion);
+  assert.equal(rebuiltSuggestion?.volume, 49500);
+  assert.equal(rebuiltSuggestion?.cpc, 7.9);
+  assert.equal(rebuiltSuggestion?.occurrences.length, 2);
+});
+
+test('corrupt provenance in DB fails explicitly instead of silent recovery', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-corrupt',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-corrupt',
+    shortlistKeywords: testShortlist(),
+  });
+
+  // Insert a valid row first, then corrupt it using a direct SQL statement
+  enrichmentStore.saveQuerySuggestions('enr-corrupt', [{
+    normalizedSuggestion: 'corrupt suggestion',
+    rawText: 'corrupt suggestion',
+    volume: null,
+    cpc: null,
+    ordinal: null,
+    market: '',
+    hl: '',
+    gl: '',
+    parserVersion: '1.0.0',
+    collectionStatus: 'ok',
+    occurrences: [],
+  }]);
+
+  // Corrupt the row by updating occurrences_json with invalid JSON
+  const updateStmt = enrichmentStore.getDb().prepare(
+    'UPDATE enrichment_query_suggestions SET occurrences_json = ? WHERE enrichment_id = ? AND normalized_suggestion = ?',
+  );
+  updateStmt.run('{invalid json', 'enr-corrupt', 'corrupt suggestion');
+
+  // Use a plan that includes the corrupt suggestion so persistParentAtomic reads it
+  const corruptPlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'corrupt suggestion')]),
+    ],
+  };
+  const collector = new FakeCollector(corruptPlan);
+  const cache = CacheStore.openInMemory();
+
+  await assert.rejects(
+    () => runQuerySuggestionsModule({
+      enrichmentId: 'enr-corrupt',
+      sourceStore,
+      enrichmentStore,
+      sourceRunId,
+      config: defaultQuerySuggestionsConfig(),
+      shortlist: testShortlist(),
+      logger: () => {},
+      signal: { cancelled: false },
+      collector,
+      cache,
+      researchConfig: config,
+      debugRoot: '/tmp/enr-corrupt/debug',
+    }),
+    (error: Error) => error.message.includes('Corrupt occurrences_json'),
+  );
+});
+
 test('resume does not re-hit the browser for completed (parent, source) items', async () => {
   const config = loadConfig(process.env);
   const sourceStore = RunStore.openInMemory();
