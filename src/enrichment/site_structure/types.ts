@@ -1,0 +1,20 @@
+export type SiteStructureRecord = {
+  domain: string;
+  homepageStatus: 'ok' | 'error' | 'timeout' | 'skipped';
+  homepageHttpStatus: number | null;
+  robotsStatus: 'ok' | 'not_found' | 'error' | 'timeout';
+  robotsHttpStatus: number | null;
+  robotsUrl: string | null;
+  sitemapUrlsFromRobots: string[];
+  sitemapFallbackUrl: string | null;
+  sitemapType: 'index' | 'urlset' | 'unknown' | 'none';
+  declaredSitemapCount: number;
+  discoveredUrlCount: number;
+  sampledUrls: string[];
+  sampledUtilityUrls: string[];
+  errors: Array<{ url: string; error: string }>;
+  fetchedAt: string;
+  cacheStatus: 'hit' | 'miss' | 'expired' | 'refreshed' | 'none';
+  sourceKeywords: string[];
+  sourceBestPosition: number | null;
+};

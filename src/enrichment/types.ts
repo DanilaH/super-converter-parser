@@ -10,7 +10,7 @@ export const KNOWN_ENRICHMENT_MODULES = [
 
 export type EnrichmentModuleId = (typeof KNOWN_ENRICHMENT_MODULES)[number];
 
-export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters', 'query_suggestions', 'domain_age'] as const satisfies readonly EnrichmentModuleId[];
+export const IMPLEMENTED_ENRICHMENT_MODULES = ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'] as const satisfies readonly EnrichmentModuleId[];
 
 // Factual Google query-language sources for the query_suggestions module. Each
 // keeps its own raw text and provenance; volume/CPC are intentionally null for
@@ -119,6 +119,9 @@ export type EnrichmentModuleConfig = {
   domain_age?: ReservedModuleConfig;
   page_backlinks?: ReservedModuleConfig;
   organic_snapshot?: ReservedModuleConfig;
+  http?: ReservedModuleConfig;
+  cache?: ReservedModuleConfig;
+  shortlist?: string[];
 };
 
 // One collected suggestion row. Dedup is on normalizedSuggestion only; every

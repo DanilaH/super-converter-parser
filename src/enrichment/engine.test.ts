@@ -7,7 +7,7 @@ import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
 import { createRunDirectory } from '../runs/run.js';
 import { loadConfig } from '../config/config.js';
-import { runEnrichment, type EnrichmentOptions } from './engine.js';
+import { runEnrichment, type EnrichmentOptions, type EnrichmentHttpConfig, type EnrichmentPagesConfig, type EnrichmentSiteStructureConfig } from './engine.js';
 import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from './clustering.js';
 import { buildDomainAgeConfigSnapshot } from '../runs/domainAge.js';
 import type { RdapClient, RdapRegistrationResult } from '../rdap/types.js';
@@ -17,6 +17,35 @@ const CLUSTERING_CONFIG: ClusteringConfig = {
   topN: 10,
   edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
   algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+};
+
+const HTTP_CONFIG: EnrichmentHttpConfig = {
+  enabled: true,
+  maxRedirects: 5,
+  timeoutMs: 15_000,
+  maxBytes: 2_000_000,
+  maxTextBytes: 500_000,
+  userAgent: 'Test/1.0',
+  respectRetryAfter: true,
+  minDelayMs: 0,
+  maxDelayMs: 0,
+  maxRetries: 2,
+  baseRetryDelayMs: 1000,
+};
+
+const PAGES_CONFIG: EnrichmentPagesConfig = {
+  enabled: true,
+  topUrlsPerKeyword: 3,
+  includeMainText: false,
+  mainTextMaxChars: 5000,
+};
+
+const SITE_STRUCTURE_CONFIG: EnrichmentSiteStructureConfig = {
+  enabled: true,
+  maxSitemapFiles: 10,
+  maxUrlsPerSitemap: 100,
+  maxSampleUrls: 50,
+  maxDomains: 30,
 };
 
 const BASE_CONFIG = loadConfig({});
@@ -162,14 +191,18 @@ test('runEnrichment: clusters keywords from source run', async () => {
     enrichmentDirectory: enrichmentDir,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: (line) => logs.push(line),
   });
 
   assert.equal(outcome.kind, 'completed');
   assert.equal(outcome.state, 'completed');
   assert.ok(outcome.result);
-  assert.equal(outcome.result!.clusters.length, 1);
-  assert.equal(outcome.result!.clusters[0]!.memberCount, 2);
+  assert.ok(outcome.result!.clusters);
+  assert.equal(outcome.result!.clusters!.clusters.length, 1);
+  assert.equal(outcome.result!.clusters!.clusters[0]!.memberCount, 2);
 
   const savedRun = enrichmentStore.loadEnrichmentRun('test-enrichment');
   assert.ok(savedRun);
@@ -261,12 +294,16 @@ test('runEnrichment: persists exclusions for keywords without SERP', async () =>
     enrichmentDirectory: enrichmentDir,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   });
 
   assert.equal(outcome.kind, 'completed');
   assert.ok(outcome.result);
-  assert.equal(outcome.result!.excludedCount, 1);
+  assert.ok(outcome.result!.clusters);
+  assert.equal(outcome.result!.clusters!.excludedCount, 1);
 
   const exclusions = enrichmentStore.loadEnrichmentExclusions('test-excl');
   assert.equal(exclusions.length, 1);
@@ -300,10 +337,13 @@ test('runEnrichment: fails when no completed keywords in source', async () => {
     enrichmentId: 'test-empty',
     sourceStoreOrPath: sourceStore,
     sourceRunId: runId,
-        enrichmentStore,
+    enrichmentStore,
     enrichmentDirectory: enrichmentDir,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   });
 
@@ -329,6 +369,9 @@ test('runEnrichment: resume reuses the same run and completed module without dup
     enrichmentDirectory: enrichmentDir,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   };
 
@@ -391,6 +434,9 @@ test('runEnrichment: resume resets stale running items before pausing', async ()
     enrichmentDirectory: enrichmentDir,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     shortlist: [],
     logger: () => {},
     signal: { cancelled: true },
@@ -423,6 +469,9 @@ test('runEnrichment: artifact publication failure leaves the run failed, not com
     enrichmentDirectory: blockedOutputPath,
     modules: ['clusters'],
     config: { clusters: CLUSTERING_CONFIG },
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   });
 
