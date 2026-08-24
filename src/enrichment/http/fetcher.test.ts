@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { boundedFetch, parseRetryAfter, type DnsResolver, type SsrfChecker } from './fetcher.js';
+import { boundedFetch, parseRetryAfter, type DnsResolver, type SsrfChecker, type IpPolicy } from './fetcher.js';
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -564,6 +564,46 @@ test('boundedFetch: DNS validation timeout does not hang (initial hop)', async (
   assert.equal(result.status, 0);
   assert.match(result.error!, /DNS resolution|timeout/i);
   assert.ok(elapsed < 10000, `DNS timeout should be bounded, took ${elapsed}ms`);
+});
+
+test('boundedFetch: DNS validation timeout does not hang (redirect hop)', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') {
+      res.writeHead(302, { Location: 'http://never-resolve-redirect.test/destination' });
+      res.end();
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>ok</body></html>');
+    }
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address() as { port: number };
+  const serverPort = addr.port;
+
+  try {
+    const startTime = Date.now();
+    const allowLoopbackPolicy: IpPolicy = () => false;
+    const statefulResolver: DnsResolver = (hostname) => {
+      if (hostname === `initial.test`) {
+        return Promise.resolve([{ address: '127.0.0.1', family: 4 }]);
+      }
+      return new Promise(() => {});
+    };
+    const result = await boundedFetch(`http://initial.test:${serverPort}/redirect`, {
+      timeoutMs: 10000,
+      dnsResolver: statefulResolver,
+      ipPolicy: allowLoopbackPolicy,
+    });
+    const elapsed = Date.now() - startTime;
+
+    assert.equal(result.status, 0);
+    assert.equal(result.failureReason, 'timeout');
+    assert.ok(elapsed < 15000, `Redirect DNS timeout should be bounded, took ${elapsed}ms`);
+  } finally {
+    server.close();
+  }
 });
 
 test('boundedFetch: DNS operational error is not classified as SSRF block', async () => {

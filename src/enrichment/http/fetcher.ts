@@ -26,6 +26,7 @@ export type FetcherConfig = {
   maxDomainDelayMs: number;
   ssrfChecker?: SsrfChecker;
   dnsResolver?: DnsResolver;
+  ipPolicy?: IpPolicy;
   maxRetries: number;
   baseRetryDelayMs: number;
 };
@@ -237,7 +238,7 @@ export async function boundedFetch(
   config: Partial<FetcherConfig> = {},
 ): Promise<FetchResult> {
   const cfg = { ...DEFAULT_FETCHER_CONFIG, ...config };
-  const defaultChecker = (u: string) => checkUrlAllowed(u, cfg.dnsResolver);
+  const defaultChecker = (u: string) => checkUrlAllowed(u, cfg.dnsResolver, cfg.ipPolicy);
   const ssrfCheck = cfg.ssrfChecker ?? defaultChecker;
   const redirectChain: string[] = [];
   let logicalUrl = url;
@@ -483,9 +484,14 @@ export async function boundedFetch(
   }
 }
 
+export type IpPolicy = (ip: string) => boolean;
+
+export const defaultIpPolicy: IpPolicy = isPrivateIp;
+
 export async function checkUrlAllowed(
   url: string,
   dnsResolver?: DnsResolver,
+  ipPolicy: IpPolicy = defaultIpPolicy,
 ): Promise<SsrfCheckResult> {
   let parsed: URL;
   try {
@@ -512,7 +518,7 @@ export async function checkUrlAllowed(
   const ipMatch = hostname.match(ipRegex);
   if (ipMatch && netIsIP(ipMatch[1]!) !== 0) {
     const ip = ipMatch[1]!;
-    return isPrivateIp(ip)
+    return ipPolicy(ip)
       ? { allowed: false, reason: `Blocked IP: ${ip}`, ip, kind: 'blocked' }
       : { allowed: true, ip, kind: 'ok' };
   }
@@ -520,7 +526,7 @@ export async function checkUrlAllowed(
   try {
     const resolver = dnsResolver ?? ((h: string) => lookupWithTimeout(h, DNS_TIMEOUT_MS));
     const addresses = await withTimeout(resolver(hostname), DNS_TIMEOUT_MS, `DNS resolution timeout after ${DNS_TIMEOUT_MS}ms`);
-    const blocked = addresses.find((a) => isPrivateIp(a.address));
+    const blocked = addresses.find((a) => ipPolicy(a.address));
     if (blocked) {
       return { allowed: false, reason: `Blocked IP: ${blocked.address}`, ip: blocked.address, kind: 'blocked' };
     }
