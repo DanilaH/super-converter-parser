@@ -621,7 +621,7 @@ export async function runQuerySuggestionsModule(
   let collectorOpened = false;
   try {
     for (const keyword of selectedKeywords) {
-      await Promise.resolve();
+      await new Promise(resolve => setImmediate(resolve));
       checkCancellation(signal, EnrichmentCancelledError);
 
       const missingSources = config.sources.filter(
@@ -682,7 +682,7 @@ export async function runQuerySuggestionsModule(
          const { result, totalNavigations, totalXhrs } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
          transportRequests = totalNavigations + totalXhrs;
          for (const col of result.collections) {
-           await Promise.resolve();
+           await new Promise(resolve => setImmediate(resolve));
            const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
           const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
@@ -811,7 +811,7 @@ export async function runQuerySuggestionsModule(
       let countedRequestForParent = false;
       const fetchedAt = new Date().toISOString();
       for (const collection of fetched) {
-        await Promise.resolve();
+        await new Promise(resolve => setImmediate(resolve));
         const isBrowserSource = collection.cacheStatus !== 'hit';
         const requestCount = isBrowserSource && !countedRequestForParent ? transportRequests : 0;
         if (isBrowserSource) {

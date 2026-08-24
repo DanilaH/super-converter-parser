@@ -270,13 +270,6 @@ async function main(): Promise<void> {
     (signal as { cancelled: boolean }).cancelled = true;
     console.log('');
     console.log('Stopping gracefully...');
-    if (store && enrichmentId) {
-      try {
-        store.setEnrichmentState(enrichmentId, 'paused');
-      } catch {
-        // ignore errors during shutdown
-      }
-    }
   };
   const sigtermHandler = (): void => {
     (signal as { cancelled: boolean }).cancelled = true;
@@ -306,7 +299,7 @@ async function main(): Promise<void> {
 
     loadConfig(process.env);
 
-    let enrichmentId: string;
+    enrichmentId = '';
     let enrichmentDirectory: string;
     let sourceRunId: string;
     let sourceStorePath: string;
