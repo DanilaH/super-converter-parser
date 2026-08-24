@@ -1,6 +1,59 @@
 import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
-import type { ClusteringConfig, EnrichmentCacheStatus, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionSource } from '../enrichment/types.js';
+import type { ClusteringConfig, EnrichmentCacheStatus, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionCollectionStatus, QuerySuggestionSource } from '../enrichment/types.js';
+
+const VALID_SOURCES: readonly string[] = ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'];
+const VALID_STATUSES: readonly string[] = ['ok', 'empty', 'unavailable', 'error'];
+
+function validateOccurrence(
+  occurrence: Record<string, unknown>,
+  normalizedSuggestion: string,
+): { parentKeyword: string; normalizedParent: string; source: QuerySuggestionSource; market: string; hl: string; gl: string; parserVersion: string; collectionStatus: QuerySuggestionCollectionStatus } {
+  const parentKeyword = occurrence.parentKeyword;
+  const normalizedParent = occurrence.normalizedParent;
+  const source = occurrence.source;
+  const market = occurrence.market;
+  const hl = occurrence.hl;
+  const gl = occurrence.gl;
+  const parserVersion = occurrence.parserVersion;
+  const collectionStatus = occurrence.collectionStatus;
+
+  if (typeof parentKeyword !== 'string' || parentKeyword.length === 0) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": missing or empty parentKeyword`);
+  }
+  if (typeof normalizedParent !== 'string' || normalizedParent.length === 0) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": missing or empty normalizedParent`);
+  }
+  if (typeof source !== 'string' || !VALID_SOURCES.includes(source)) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid source "${String(source)}"`);
+  }
+  if (typeof market !== 'string') {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid market`);
+  }
+  if (typeof hl !== 'string') {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid hl`);
+  }
+  if (typeof gl !== 'string') {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid gl`);
+  }
+  if (typeof parserVersion !== 'string' || parserVersion.length === 0) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": missing or empty parserVersion`);
+  }
+  if (typeof collectionStatus !== 'string' || !VALID_STATUSES.includes(collectionStatus)) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid collectionStatus "${String(collectionStatus)}"`);
+  }
+
+  return {
+    parentKeyword,
+    normalizedParent,
+    source: source as QuerySuggestionSource,
+    market,
+    hl,
+    gl,
+    parserVersion,
+    collectionStatus: collectionStatus as QuerySuggestionCollectionStatus,
+  };
+}
 
 // Helper: add a column to a table only if it does not already exist.
 // SQLite's ALTER TABLE ADD COLUMN does not support IF NOT EXISTS in the
@@ -469,8 +522,10 @@ export class RunStore {
     this.db.close();
   }
 
-  getDb(): Database.Database {
-    return this.db;
+  corruptSuggestionRow(enrichmentId: string, normalizedSuggestion: string, corruptJson: string): void {
+    this.db
+      .prepare('UPDATE enrichment_query_suggestions SET occurrences_json = ? WHERE enrichment_id = ? AND normalized_suggestion = ?')
+      .run(corruptJson, enrichmentId, normalizedSuggestion);
   }
 
   createRun(input: {
@@ -1350,7 +1405,16 @@ export class RunStore {
     gl: string;
     parserVersion: string;
     collectionStatus: string;
-    occurrences: Array<Record<string, unknown>>;
+    occurrences: Array<{
+      parentKeyword: string;
+      normalizedParent: string;
+      source: QuerySuggestionSource;
+      market: string;
+      hl: string;
+      gl: string;
+      parserVersion: string;
+      collectionStatus: QuerySuggestionCollectionStatus;
+    }>;
   }> {
     const rows = this.db
       .prepare('SELECT * FROM enrichment_query_suggestions WHERE enrichment_id = ? ORDER BY normalized_suggestion')
@@ -1368,16 +1432,17 @@ export class RunStore {
       occurrences_json: string;
     }>;
     return rows.map((row) => {
-      let occurrences: Array<Record<string, unknown>>;
+      let rawOccurrences: Array<Record<string, unknown>>;
       try {
-        occurrences = JSON.parse(row.occurrences_json) as Array<Record<string, unknown>>;
-        if (!Array.isArray(occurrences)) {
+        rawOccurrences = JSON.parse(row.occurrences_json) as Array<Record<string, unknown>>;
+        if (!Array.isArray(rawOccurrences)) {
           throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${row.normalized_suggestion}"`);
         }
       } catch (error) {
         if (error instanceof ResearchError) throw error;
         throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${row.normalized_suggestion}": ${error instanceof Error ? error.message : String(error)}`);
       }
+      const occurrences = rawOccurrences.map((raw) => validateOccurrence(raw, row.normalized_suggestion));
       return {
         normalizedSuggestion: row.normalized_suggestion,
         rawText: row.raw_text,
@@ -1582,9 +1647,9 @@ export class RunStore {
           ? parserVersionBySource.get(s.occurrences[0].source as QuerySuggestionSource) ?? defaultParserVersion
           : defaultParserVersion;
         const mergedRawText = existing?.raw_text ?? s.rawText;
-        const mergedVolume = s.volume ?? existing?.volume ?? null;
-        const mergedCpc = s.cpc ?? existing?.cpc ?? null;
-        const mergedOrdinal = s.ordinal ?? existing?.ordinal ?? null;
+        const mergedVolume = existing?.volume ?? s.volume ?? null;
+        const mergedCpc = existing?.cpc ?? s.cpc ?? null;
+        const mergedOrdinal = existing?.ordinal ?? s.ordinal ?? null;
         const mergedParserVersion = existing?.parser_version || parserVersion;
         suggestionWriteStmt.run(
           enrichmentId,

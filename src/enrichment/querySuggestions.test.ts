@@ -307,7 +307,140 @@ test('DB merge preserves non-null volume/CPC from earlier source', async () => {
   assert.ok(rebuiltSuggestion);
   assert.equal(rebuiltSuggestion?.volume, 49500);
   assert.equal(rebuiltSuggestion?.cpc, 7.9);
+  assert.equal(rebuiltSuggestion?.volume, 49500);
+  assert.equal(rebuiltSuggestion?.cpc, 7.9);
   assert.equal(rebuiltSuggestion?.occurrences.length, 2);
+});
+
+test('DB merge keeps FIRST non-null volume/CPC when sources conflict', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-conflict',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-conflict',
+    shortlistKeywords: testShortlist(),
+  });
+
+  // Google first (no volume), then Surfer (with volume) for same suggestion
+  // The first non-null value should be preserved
+  const conflictPlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'conflicting keyword')]),
+    ],
+    [normalizeKeyword('compare lists')]: [
+      collection('surfer_related', [occ('compare lists', 'surfer_related', 'conflicting keyword', { volume: 1200, cpc: 5.5, ordinal: 0 })]),
+    ],
+  };
+  const collector = new FakeCollector(conflictPlan);
+  const result = await runQuerySuggestionsModule({
+    enrichmentId: 'enr-conflict',
+    sourceStore,
+    enrichmentStore,
+    sourceRunId,
+    config: defaultQuerySuggestionsConfig(),
+    shortlist: testShortlist(),
+    logger: () => {},
+    signal: { cancelled: false },
+    collector,
+    cache: CacheStore.openInMemory(),
+    researchConfig: config,
+    debugRoot: '/tmp/enr-conflict/debug',
+  });
+
+  // Cold result should have volume/CPC from Surfer (first non-null)
+  const coldSuggestion = result.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
+  assert.ok(coldSuggestion);
+  assert.equal(coldSuggestion?.volume, 1200);
+  assert.equal(coldSuggestion?.cpc, 5.5);
+  assert.equal(coldSuggestion?.occurrences.length, 2);
+
+  // Perserved result should also have volume/CPC from Surfer
+  const saved = enrichmentStore.loadQuerySuggestions('enr-conflict');
+  const savedSuggestion = saved.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
+  assert.ok(savedSuggestion);
+  assert.equal(savedSuggestion?.volume, 1200);
+  assert.equal(savedSuggestion?.cpc, 5.5);
+
+  // Rebuild should also have volume/CPC from Surfer
+  const rebuilt = buildQueryResultFromStore('enr-conflict', enrichmentStore, defaultQuerySuggestionsConfig(), config);
+  const rebuiltSuggestion = rebuilt.suggestions.find((s) => s.normalizedSuggestion === normalizeKeyword('conflicting keyword'));
+  assert.ok(rebuiltSuggestion);
+  assert.equal(rebuiltSuggestion?.volume, 1200);
+  assert.equal(rebuiltSuggestion?.cpc, 5.5);
+});
+
+test('invalid occurrence in DB fails with DB_ERROR', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId: 'enr-invalid',
+    sourceRunId,
+    modules: ['query_suggestions'],
+    config: JSON.stringify({ query_suggestions: defaultQuerySuggestionsConfig() }),
+    sourceRunDirectory: `runs/${sourceRunId}`,
+    enrichmentDirectory: '/tmp/enr-invalid',
+    shortlistKeywords: testShortlist(),
+  });
+
+  // Insert a row with an invalid occurrence (missing parentKeyword)
+  enrichmentStore.saveQuerySuggestions('enr-invalid', [{
+    normalizedSuggestion: 'invalid occurrence',
+    rawText: 'invalid occurrence',
+    volume: null,
+    cpc: null,
+    ordinal: null,
+    market: '',
+    hl: '',
+    gl: '',
+    parserVersion: '1.0.0',
+    collectionStatus: 'ok',
+    occurrences: [],
+  }]);
+
+  // Corrupt the row with an occurrence that has missing parentKeyword
+  enrichmentStore.corruptSuggestionRow('enr-invalid', 'invalid occurrence', JSON.stringify([{
+    normalizedParent: 'some parent',
+    source: 'google_autocomplete',
+    market: '',
+    hl: '',
+    gl: '',
+    parserVersion: '1.0.0',
+    collectionStatus: 'ok',
+  }]));
+
+  const invalidPlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('google_autocomplete', [occ('json diff', 'google_autocomplete', 'invalid occurrence')]),
+    ],
+  };
+  const collector = new FakeCollector(invalidPlan);
+  const cache = CacheStore.openInMemory();
+
+  await assert.rejects(
+    () => runQuerySuggestionsModule({
+      enrichmentId: 'enr-invalid',
+      sourceStore,
+      enrichmentStore,
+      sourceRunId,
+      config: defaultQuerySuggestionsConfig(),
+      shortlist: testShortlist(),
+      logger: () => {},
+      signal: { cancelled: false },
+      collector,
+      cache,
+      researchConfig: config,
+      debugRoot: '/tmp/enr-invalid/debug',
+    }),
+    (error: Error) => error.message.includes('Invalid occurrence'),
+  );
 });
 
 test('corrupt provenance in DB fails explicitly instead of silent recovery', async () => {
@@ -341,10 +474,7 @@ test('corrupt provenance in DB fails explicitly instead of silent recovery', asy
   }]);
 
   // Corrupt the row by updating occurrences_json with invalid JSON
-  const updateStmt = enrichmentStore.getDb().prepare(
-    'UPDATE enrichment_query_suggestions SET occurrences_json = ? WHERE enrichment_id = ? AND normalized_suggestion = ?',
-  );
-  updateStmt.run('{invalid json', 'enr-corrupt', 'corrupt suggestion');
+  enrichmentStore.corruptSuggestionRow('enr-corrupt', 'corrupt suggestion', '{invalid json');
 
   // Use a plan that includes the corrupt suggestion so persistParentAtomic reads it
   const corruptPlan: Record<string, RawSourceCollection[]> = {

@@ -133,8 +133,8 @@ export function dedupSuggestions(
     const existing = bySuggestion.get(occ.normalizedSuggestion);
     if (existing) {
       existing.occurrences.push({
-        parentKeyword: String(occ.parentKeyword),
-        normalizedParent: String(occ.normalizedParent),
+        parentKeyword: occ.parentKeyword,
+        normalizedParent: occ.normalizedParent,
         source: occ.source,
         market,
         hl,
@@ -274,6 +274,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
       await waitForManualCaptcha(page);
     } catch (error) {
       if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
+        await this.saveFailureArtifacts(page, parentKeyword, 'CAPTCHA_REQUIRED', 'Google is asking for manual verification');
         const captchaSignal = { isCancelled: () => this.signal.cancelled };
         const solved = await pauseForManualCaptcha(page, captchaSignal);
         if (!solved) throw new EnrichmentCancelledError();
@@ -365,7 +366,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.saveFailureArtifacts(page, parentKeyword, 'GOOGLE_SERP_PARSE_ERROR', `Script evaluate/parse failed for ${source}: ${message}`);
-      throw error;
+      throw new ResearchError('GOOGLE_SERP_PARSE_ERROR', `Script evaluate/parse failed for ${source}: ${message}`);
     }
   }
 
@@ -388,7 +389,7 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.saveFailureArtifacts(page, parentKeyword, 'GOOGLE_SERP_PARSE_ERROR', `Autocomplete fetch/parse failed: ${message}`);
-      throw error;
+      throw new ResearchError('GOOGLE_SERP_PARSE_ERROR', `Autocomplete fetch/parse failed: ${message}`);
     }
   }
 }
@@ -540,8 +541,8 @@ export async function runQuerySuggestionsModule(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
-        parentKeyword: String(occ.parentKeyword),
-        normalizedParent: String(occ.normalizedParent),
+        parentKeyword: occ.parentKeyword,
+        normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
         rawText: saved.rawText,
         normalizedSuggestion: saved.normalizedSuggestion,
@@ -886,8 +887,8 @@ export function buildQueryResultFromStore(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
-        parentKeyword: String(occ.parentKeyword),
-        normalizedParent: String(occ.normalizedParent),
+        parentKeyword: occ.parentKeyword,
+        normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
         rawText: saved.rawText,
         normalizedSuggestion: saved.normalizedSuggestion,
