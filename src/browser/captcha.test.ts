@@ -5,12 +5,15 @@ import type { Page } from 'playwright-core';
 import { waitForManualCaptcha, pauseForManualCaptcha, NEVER_CANCELLED } from './captcha.js';
 import { ResearchError } from '../shared/errors.js';
 
+const CAPTCHA_SELECTOR_FOR_TEST = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
+
 function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
   return {
     locator: (_sel: string) => ({
       count: async () => (opts.captchaVisible ? 1 : 0),
       innerText: async () => opts.bodyText,
     }),
+    isClosed: () => false,
     waitForLoadState: async () => undefined,
   } as unknown as Page;
 }
@@ -89,4 +92,44 @@ test('pauseForManualCaptcha does not register its own SIGINT listener', async ()
   );
   assert.equal(solved, false);
   assert.equal(process.listenerCount('SIGINT'), before);
+});
+
+test('pauseForManualCaptcha retries a transient page-inspection failure instead of resuming', async () => {
+  let selectorChecks = 0;
+  const page = {
+    isClosed: () => false,
+    locator: (selector: string) => ({
+      count: async () => {
+        selectorChecks += 1;
+        if (selectorChecks === 1) return 1;
+        if (selectorChecks === 2) throw new Error('Execution context was destroyed');
+        if (selector === CAPTCHA_SELECTOR_FOR_TEST) return selectorChecks === 3 ? 1 : 0;
+        return 0;
+      },
+      innerText: async () => 'normal search results',
+    }),
+    waitForLoadState: async () => undefined,
+  } as unknown as Page;
+
+  const solved = await pauseForManualCaptcha(page, NEVER_CANCELLED, {
+    pollIntervalMs: 1,
+    timeoutMs: 1000,
+  });
+
+  assert.equal(solved, true);
+  assert.ok(selectorChecks >= 4, 'must retry after the transient failure before resuming');
+});
+
+test('pauseForManualCaptcha reports a closed page instead of pretending CAPTCHA was solved', async () => {
+  const page = {
+    isClosed: () => true,
+    locator: () => {
+      throw new Error('must not inspect a closed page');
+    },
+  } as unknown as Page;
+
+  await assert.rejects(
+    () => pauseForManualCaptcha(page, NEVER_CANCELLED, { pollIntervalMs: 1, timeoutMs: 100 }),
+    (error: unknown) => error instanceof ResearchError && error.code === 'GOOGLE_UNAVAILABLE',
+  );
 });
