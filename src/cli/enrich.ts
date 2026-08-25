@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { loadDotEnv } from '../config/env.js';
@@ -31,7 +31,7 @@ import {
   type QuerySuggestionSource,
 } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
-import { allocateEnrichmentDirectory, archiveResearchDirectory, resolveEnrichmentLocation, resolveOutputRoot, resolveRunLocation, writeEnrichmentIndex } from '../outputs/researchLayout.js';
+import { allocateEnrichmentDirectory, archiveResearchDirectory, resolveEnrichmentLocation, resolveOutputRoot, resolvePersistentPath, resolveRunLocation, writeEnrichmentIndex } from '../outputs/researchLayout.js';
 
 loadDotEnv();
 
@@ -387,7 +387,7 @@ async function main(): Promise<void> {
     let activeHttpConfig: EnrichmentHttpConfig = DEFAULT_HTTP_CONFIG;
     let activePagesConfig: EnrichmentPagesConfig = DEFAULT_PAGES_CONFIG;
     let activeSiteStructureConfig: EnrichmentSiteStructureConfig = DEFAULT_SITE_STRUCTURE_CONFIG;
-    let activeCacheConfig = { dbPath: DEFAULT_CACHE_DB_PATH, ttl: DEFAULT_CACHE_TTL };
+    let activeCacheConfig = { dbPath: resolvePersistentPath(outputRoot, DEFAULT_CACHE_DB_PATH), ttl: DEFAULT_CACHE_TTL };
 
     if (args.resumeEnrichmentId) {
       isResume = true;
@@ -438,10 +438,13 @@ async function main(): Promise<void> {
         : DEFAULT_SITE_STRUCTURE_CONFIG;
       activeCacheConfig = existingRun.config.cache
         ? {
-            dbPath: ((existingRun.config.cache as Record<string, unknown>).dbPath as string) ?? DEFAULT_CACHE_DB_PATH,
+            dbPath: resolvePersistentPath(
+              outputRoot,
+              ((existingRun.config.cache as Record<string, unknown>).dbPath as string) ?? DEFAULT_CACHE_DB_PATH,
+            ),
             ttl: ((existingRun.config.cache as Record<string, unknown>).ttl as CacheTtlConfig) ?? DEFAULT_CACHE_TTL,
           }
-        : { dbPath: DEFAULT_CACHE_DB_PATH, ttl: DEFAULT_CACHE_TTL };
+        : { dbPath: resolvePersistentPath(outputRoot, DEFAULT_CACHE_DB_PATH), ttl: DEFAULT_CACHE_TTL };
     } else {
       sourceRunId = args.sourceRunId;
       const sourceLocation = await resolveRunLocation(outputRoot, sourceRunId);
