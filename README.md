@@ -484,7 +484,7 @@ npm run research -- --seeds input/seeds.csv --json-status
 
 #### 3. Shortlist selection
 
-After discovery, inspect `runs/<run-id>/candidates.csv` and choose 5-30 keywords for deep enrichment. The shortlist is passed verbatim to `--shortlist` (comma-separated, must be discovery keywords).
+After discovery, inspect `runs/<run-id>/candidates.csv` and choose 5-200 keywords for deep enrichment. The shortlist is passed verbatim to `--shortlist` (comma-separated, must be discovery keywords). Modules retain their own bounded work: for example, domain-age and site-structure use fair domain caps and report excess domains as `omitted` instead of silently dropping shortlist keywords.
 
 #### 4. Running individual deep modules
 
@@ -653,7 +653,7 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 Resolves domain registration date (via RDAP) and first-seen date (via Wayback Machine CDX) for registrable domains observed in the shortlisted keywords' SERPs.
 
 **Configurable flags (domain_age only):**
-- `--max-parents <n>` — cap shortlisted keywords processed (default 30, range 5-30)
+- `--max-parents <n>` — cap shortlisted keywords processed by query suggestions (default 200, range 5-200)
 
 **Outputs:**
 - `domain-age.csv` — domain, registration_date, registration_status, registration_source, first_seen_date, source_keywords, cache_status
