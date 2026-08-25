@@ -5,7 +5,7 @@ import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { writeTextAtomic } from '../runs/run.js';
 import type { SerpResult } from '../google/serp.js';
-import type { CacheStore } from '../cache/store.js';
+import { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
@@ -17,7 +17,6 @@ import {
   type DomainAgeConfigSnapshot,
   type DomainAgeRecord,
 } from '../runs/domainAge.js';
-import { CacheStore } from '../cache/store.js';
 import { runQuerySuggestionsModule, createBrowserSuggestionCollector, buildQueryResultFromStore, defaultQuerySuggestionsConfig, type SuggestionCollector } from './querySuggestions.js';
 import { writeQuerySuggestionsCsv, writeQuerySuggestionsJson } from './querySuggestionsOutputs.js';
 import type {
@@ -122,6 +121,8 @@ export type EnrichmentOutcome = {
   domainAgeRecords?: Map<string, DomainAgeRecord>;
   error?: string;
 };
+
+const NO_RESULT: EnrichmentModuleResult = {};
 
 type SourceConnection = {
   store: RunStore;
@@ -305,7 +306,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (signal.cancelled) {
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
+      return { kind: 'paused', enrichmentId, state: 'paused' };
     }
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'running');
@@ -723,12 +724,12 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
     if (signal.cancelled) {
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
-      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
+      return { kind: 'paused', enrichmentId, state: 'paused' };
     }
 
     await mkdir(enrichmentDirectory, { recursive: true });
     const artifacts: string[] = [];
-    const summary: Record<string, number> = {};
+    const summary: Record<string, number | Record<string, { ok: number; empty: number; unavailable: number; error: number }>> = {};
 
     if (result.clusters) {
       const csvPath = join(enrichmentDirectory, 'keyword-clusters.csv');
@@ -838,9 +839,11 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
 
 
     if (domainAgeRecords) {
+      const domainAgeCsvPath = join(enrichmentDirectory, 'domain-age.csv');
+      const domainAgeJsonPath = join(enrichmentDirectory, 'domain-age.json');
       const records = [...domainAgeRecords.values()].sort((a, b) => a.domain.localeCompare(b.domain));
       await writeTextAtomic(domainAgeCsvPath, renderDomainAgeCsv(records), 'domain age CSV');
-      await writeTextAtomic(domainAgeJsonPath, renderDomainAgeJson(records) + '\\n', 'domain age JSON');
+      await writeTextAtomic(domainAgeJsonPath, renderDomainAgeJson(records) + '\n', 'domain age JSON');
       summary.domainCount = records.filter((r) => !r.omitted).length;
       summary.domainOmitted = records.filter((r) => r.omitted).length;
       summary.domainsDiscovered = records.length;
@@ -900,7 +903,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       enrichmentStore.resetRunningEnrichmentItems(enrichmentId);
       enrichmentStore.setEnrichmentState(enrichmentId, 'paused');
       logger('Enrichment paused by user');
-      return { kind: 'paused', enrichmentId, state: 'paused', result: undefined };
+      return { kind: 'paused', enrichmentId, state: 'paused' };
     }
     const message = error instanceof Error ? error.message : String(error);
     enrichmentStore.setEnrichmentState(enrichmentId, 'failed', message);
@@ -909,7 +912,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       kind: 'failed',
       enrichmentId,
       state: 'failed',
-      result: undefined,
       error: message,
     };
   } finally {

@@ -273,7 +273,7 @@ export async function boundedFetch(
   let servername = new URL(url).hostname;
   let dispatcher: Agent | undefined;
   if (validatedIp) {
-    dispatcher = createPinnedAgent({ validatedIp, servername, ca: cfg.ca });
+    dispatcher = createPinnedAgent({ validatedIp, servername, ...(cfg.ca ? { ca: cfg.ca } : {}) });
   }
 
   const cleanupAgents: Agent[] = [];
@@ -445,7 +445,7 @@ export async function boundedFetch(
         if (targetSsrf.ip && (targetSsrf.ip !== validatedIp || nextServername !== servername)) {
           validatedIp = targetSsrf.ip;
           servername = nextServername;
-          dispatcher = createPinnedAgent({ validatedIp, servername, ca: cfg.ca });
+          dispatcher = createPinnedAgent({ validatedIp, servername, ...(cfg.ca ? { ca: cfg.ca } : {}) });
           cleanupAgents.push(dispatcher);
         }
 
