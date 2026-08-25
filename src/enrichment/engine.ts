@@ -165,7 +165,7 @@ function buildClusteringInputs(
 
 // Collects the bounded, deduplicated set of registrable domains from a source run's
 // organic SERP rows, restricted to the shortlist (TASK-014 is shortlist-only deep
-// enrichment, 5-30 targets). Every keyword a domain was observed in is recorded in
+// enrichment). Every keyword a domain was observed in is recorded in
 // the returned provenance map so outputs stay traceable back to the ranking rows.
 const DOMAIN_AGE_MIN_SHORTLIST = 5;
 const DOMAIN_AGE_MAX_DOMAINS = 30;
@@ -187,7 +187,7 @@ function collectSourceDomains(
     shortlist && shortlist.length > 0 ? new Set(shortlist.map(normalizeKeyword)) : null;
   if (!shortlistSet) {
     throw new Error(
-      `The 'domain_age' module requires a shortlist of ${DOMAIN_AGE_MIN_SHORTLIST}-${DOMAIN_AGE_MAX_DOMAINS} keywords to bound enrichment targets. Use --shortlist to specify targets.`,
+      `The 'domain_age' module requires a shortlist of at least ${DOMAIN_AGE_MIN_SHORTLIST} keywords. Use --shortlist to specify targets.`,
     );
   }
   if (shortlistSet.size < DOMAIN_AGE_MIN_SHORTLIST) {
@@ -195,12 +195,6 @@ function collectSourceDomains(
       `The 'domain_age' module requires at least ${DOMAIN_AGE_MIN_SHORTLIST} shortlisted keywords (got ${shortlistSet.size}). Add more keywords to the shortlist.`,
     );
   }
-  if (shortlistSet.size > DOMAIN_AGE_MAX_DOMAINS) {
-    throw new Error(
-      `The 'domain_age' module accepts at most ${DOMAIN_AGE_MAX_DOMAINS} shortlisted keywords (got ${shortlistSet.size}). Reduce the shortlist.`,
-    );
-  }
-
   const keywords = sourceStore.loadKeywords(sourceRunId);
   const idxToKeyword = new Map<number, string>();
   for (const k of keywords) {
@@ -317,13 +311,13 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     const networkModules = modules.filter((m) => m === 'pages' || m === 'site_structure');
     if (networkModules.length > 0 && !resume) {
       if (!shortlist || shortlist.length === 0) {
-        throw new Error(`Modules ${networkModules.join(', ')} require a --shortlist of 5–30 keywords (deep selection). Got no shortlist.`);
+        throw new Error(`Modules ${networkModules.join(', ')} require a --shortlist of 5–200 keywords (deep selection). Got no shortlist.`);
       }
       if (shortlist.length < 5) {
         throw new Error(`Modules ${networkModules.join(', ')} require at least 5 shortlist keywords. Got ${shortlist.length}.`);
       }
-      if (shortlist.length > 30) {
-        throw new Error(`Modules ${networkModules.join(', ')} allow at most 30 shortlist keywords. Got ${shortlist.length}.`);
+      if (shortlist.length > 200) {
+        throw new Error(`Modules ${networkModules.join(', ')} allow at most 200 shortlist keywords. Got ${shortlist.length}.`);
       }
     }
     if (modules.includes('clusters')) {

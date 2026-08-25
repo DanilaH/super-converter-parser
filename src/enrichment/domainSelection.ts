@@ -11,8 +11,9 @@ export type FairDomainSelection = {
 
 /**
  * Selects unique domains in rank-by-rank, keyword-by-keyword order. A shared
- * domain consumes one slot only, while every keyword gets a turn before a
- * keyword can contribute its next-ranked domain.
+ * domain consumes one slot only. When the domain cap is smaller than the
+ * shortlist, the first pass is spread across the full keyword order instead of
+ * being biased toward its first maxDomains entries.
  */
 export function selectDomainsFairly(
   keywordOrder: readonly string[],
@@ -49,11 +50,12 @@ export function selectDomainsFairly(
 
   const selected: string[] = [];
   const selectedSet = new Set<string>();
-  const cursors = new Map(keywordOrder.map((keyword) => [keyword, 0]));
+  const fairKeywordOrder = spreadAcrossKeywordOrder(keywordOrder, maxDomains);
+  const cursors = new Map(fairKeywordOrder.map((keyword) => [keyword, 0]));
 
   while (selected.length < maxDomains) {
     let advanced = false;
-    for (const keyword of keywordOrder) {
+    for (const keyword of fairKeywordOrder) {
       const rows = keywordDomains.get(keyword) ?? [];
       let cursor = cursors.get(keyword) ?? 0;
       while (cursor < rows.length && selectedSet.has(rows[cursor]!.domain)) cursor += 1;
@@ -72,4 +74,18 @@ export function selectDomainsFairly(
     selected,
     omitted: allDomains.filter((domain) => !selectedSet.has(domain)),
   };
+}
+
+function spreadAcrossKeywordOrder(keywordOrder: readonly string[], maxDomains: number): string[] {
+  if (maxDomains === 0 || keywordOrder.length <= maxDomains) return [...keywordOrder];
+
+  const sampledIndices = new Set<number>();
+  for (let slot = 0; slot < maxDomains; slot += 1) {
+    sampledIndices.add(Math.floor((slot * keywordOrder.length) / maxDomains));
+  }
+
+  return [
+    ...[...sampledIndices].map((index) => keywordOrder[index]!),
+    ...keywordOrder.filter((_, index) => !sampledIndices.has(index)),
+  ];
 }
