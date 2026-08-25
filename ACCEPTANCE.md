@@ -100,12 +100,20 @@ must name a real run keyword.
 Run states: `running`, `paused`, `completed`, `completed_with_errors`. A terminal
 run (`completed` / `completed_with_errors`) is immutable; `--resume` refuses it.
 
-## 5. Expected artifacts (under `runs/<run-id>/`)
+## 5. Expected artifacts
 
-`manifest.json`, `keywords.json`, `serp.json`, `keywords.csv`,
-`related-keywords.csv`, `serp.csv`, `domains.csv`, `candidates.csv`,
-`report.md`, `status.json`. `manifest.json` is the final publication marker;
-a `status.json` is never left without its matching `manifest.json`.
+New work is stored under
+`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/discovery`; enrichments use sibling
+`enrichment`, `enrichment-02`, and later directories. UUIDs stay inside
+SQLite/manifest and remain valid resume identifiers. The research directory also
+contains `debug/` and an atomically refreshed `results.zip`.
+
+Discovery publishes `manifest.json`, `keywords.json`, `serp.json`,
+`keywords.csv`, `related-keywords.csv`, `serp.csv`, `domains.csv`,
+`candidates.csv`, `report.md`, and `status.json`. `manifest.json` is the
+final publication marker; a `status.json` is never left without its matching
+`manifest.json`. Legacy `runs/<uuid>` directories remain resumable but are not
+created for new work.
 
 ## 6. Pause / resume (Ctrl+C)
 
