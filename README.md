@@ -581,7 +581,7 @@ debug/<run-id>/                       # Parser-failure evidence (page.html/page.
 
 - **Related-keywords widget**: in a copied/free Surfer profile the `keyword-surfer-sidebar` often does not render. This produces a structured `related.status = 'error'` (or `unavailable` in enrichment) and is non-fatal: main volume/CPC/organic data is still collected. Debug evidence is retained.
 - **Geo mismatch**: `gl=us` does not guarantee a truly US-localized SERP. The detected physical Google location is recorded separately and a `geo_warning` is surfaced when it differs from the target market.
-- **CAPTCHA**: the run pauses for manual intervention. In a background (non-TTY) run it polls for the marker file `CAPTCHA_DONE_MARKER` (default `C:\tmp\captcha-done.txt`); create the file after solving CAPTCHA in Research Chrome.
+- **CAPTCHA**: the run pauses for manual intervention and polls the Research Chrome page directly. Solve the CAPTCHA in that window; the runner detects when it disappears and continues automatically. No Enter press or marker file is required. Ctrl+C leaves the run safely resumable, and an unresolved CAPTCHA times out after 10 minutes.
 - **Resume display bug**: on resume, `summary.querySourceStats` in `manifest.json` may show zeros while the actual data in `query-suggestions.csv` / `.json` is correct.
 
 #### 11. TASK-015: paid SEO metrics (BLOCKED_BY_PROVIDER)
