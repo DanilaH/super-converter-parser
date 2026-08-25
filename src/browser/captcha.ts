@@ -1,80 +1,80 @@
-import { createInterface } from 'node:readline/promises';
-import { existsSync, rmSync } from 'node:fs';
 import type { Page } from 'playwright-core';
 import { ResearchError } from '../shared/errors.js';
 
 // Unified cancellation signal owned by the CLI. The CAPTCHA helper must never
-// register its own SIGINT listener (that would interfere with the CLI's
-// first-Ctrl+C pause / second-Ctrl+C force-quit handling); instead it polls
-// `isCancelled()` which the CLI flips when SIGINT arrives.
+// register its own SIGINT listener; it polls the signal owned by the CLI.
 export type CancellationSignal = { isCancelled: () => boolean };
 
 export const NEVER_CANCELLED: CancellationSignal = { isCancelled: () => false };
 
-export async function waitForManualCaptcha(page: Page): Promise<void> {
-  const captchaVisible = await page
-    .locator('form[action*="sorry"], iframe[src*="recaptcha"], #captcha')
-    .count();
+const CAPTCHA_SELECTOR = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
+const CAPTCHA_TEXT = /unusual traffic|not a robot|captcha/i;
 
-  const blockedByText = await page
-    .locator('body')
-    .innerText()
-    .then((text) => /unusual traffic|not a robot|captcha/i.test(text))
+async function captchaIsPresent(page: Page): Promise<boolean> {
+  const captchaVisible = await page
+    .locator(CAPTCHA_SELECTOR)
+    .count()
+    .then((count) => count > 0)
     .catch(() => false);
 
-  if (!captchaVisible && !blockedByText) return;
+  if (captchaVisible) return true;
+
+  return page
+    .locator('body')
+    .innerText()
+    .then((text) => CAPTCHA_TEXT.test(text))
+    .catch(() => false);
+}
+
+export async function waitForManualCaptcha(page: Page): Promise<void> {
+  if (!(await captchaIsPresent(page))) return;
 
   throw new ResearchError(
     'CAPTCHA_REQUIRED',
-    'Google is asking for manual verification. Solve the CAPTCHA in Research Chrome, then press Enter here.',
+    'Google is asking for manual verification. Solve the CAPTCHA in Research Chrome; the runner will continue automatically.',
   );
 }
 
-// Waits for the operator to clear the CAPTCHA. Returns `true` once it is solved
-// (Enter in a TTY, or the marker file created in a background run) and `false`
-// if the run was cancelled via the shared signal before the CAPTCHA cleared.
-// On cancel it does NOT consume the marker and does NOT assume the page reloaded;
-// the caller must treat `false` as "collection aborted, keyword left resumable".
+export type CaptchaWaitOptions = {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+};
+
+async function cancellableDelay(ms: number, signal: CancellationSignal): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (signal.isCancelled()) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(200, deadline - Date.now())));
+  }
+  return !signal.isCancelled();
+}
+
+// Waits for the operator to clear the CAPTCHA in Research Chrome. The page is
+// polled directly, so neither Enter nor a marker file is required. Returns
+// `false` only when the shared cancellation signal is set; callers then leave
+// the active item resumable.
 export async function pauseForManualCaptcha(
   page: Page,
   signal: CancellationSignal = NEVER_CANCELLED,
+  options: CaptchaWaitOptions = {},
 ): Promise<boolean> {
+  const pollIntervalMs = options.pollIntervalMs ?? 2000;
+  const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+
   console.log('\nGoogle просит ручную проверку.');
   console.log('Реши CAPTCHA в окне Research Chrome.');
+  console.log('После решения runner продолжит автоматически (Ctrl+C — поставить run на паузу).');
 
-  const marker = process.env.CAPTCHA_DONE_MARKER ?? 'C:\\tmp\\captcha-done.txt';
-
-  if (process.stdin.isTTY) {
-    console.log('Затем нажми Enter здесь (Ctrl+C — поставить run на паузу).');
-    const input = createInterface({ input: process.stdin, output: process.stdout });
-    const solved = await new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (value: boolean) => {
-        if (settled) return;
-        settled = true;
-        clearInterval(poll);
-        input.close();
-        resolve(value);
-      };
-      input.on('line', () => finish(true));
-      const poll = setInterval(() => {
-        if (signal.isCancelled()) finish(false);
-      }, 200);
-    });
-    if (solved) await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-    return solved;
-  }
-
-  console.log(`Затем создай файл-маркер: ${marker} (Ctrl+C — поставить run на паузу).`);
   const start = Date.now();
-  while (!existsSync(marker)) {
+  while (await captchaIsPresent(page)) {
     if (signal.isCancelled()) return false;
-    if (Date.now() - start > 10 * 60 * 1000) {
-      throw new ResearchError('CAPTCHA_REQUIRED', 'CAPTCHA wait timeout (marker not created).');
+    if (Date.now() - start >= timeoutMs) {
+      throw new ResearchError('CAPTCHA_REQUIRED', 'CAPTCHA wait timeout; run remains resumable.');
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    if (!(await cancellableDelay(pollIntervalMs, signal))) return false;
   }
-  rmSync(marker, { force: true });
+
   await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+  console.log('CAPTCHA решена — продолжаю.');
   return true;
 }
