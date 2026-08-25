@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { writeTextAtomic } from '../runs/run.js';
@@ -297,7 +297,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         sourceRunId,
         modules,
         config: JSON.stringify(persistedConfig),
-        sourceRunDirectory: `runs/${sourceRunId}`,
+        sourceRunDirectory: typeof sourceStoreOrPath === 'string' ? dirname(sourceStoreOrPath) : `runs/${sourceRunId}`,
         enrichmentDirectory,
         shortlistKeywords: shortlist ?? [],
       });

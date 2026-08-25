@@ -67,6 +67,48 @@ npm run research -- --microsoft input/microsoft.csv --json-status
 
 Exact flag names may be adjusted during implementation if consistency improves, but the capabilities are required.
 
+## Output location and names
+
+Research outputs are durable and independent from the active git/Kilo worktree.
+
+Configure the root once in `.env`:
+
+```env
+RESEARCH_OUTPUT_ROOT=C:\\1Projects\\super-converter-parser-output
+```
+
+Resolution priority is `--output-root`, then `RESEARCH_OUTPUT_ROOT`, then
+`<home>/super-converter-parser-output`.
+
+Use `--name` for a short human label:
+
+```bash
+npm run research -- --seeds input/seeds.csv --name converters
+```
+
+Example layout:
+
+```text
+C:\\1Projects\\super-converter-parser-output\\
+  2026-08-25-converters\\
+    discovery\\
+    enrichment\\
+    results.zip
+```
+
+A second enrichment under the same research becomes `enrichment-02`. UUIDs remain
+inside SQLite/manifest and are still accepted by `--resume`, but are not used as
+the operator-facing folder name. The root contains an `index/` that lets both CLIs
+resolve run/enrichment IDs from any cwd or worktree.
+
+`results.zip` is atomically refreshed after a completed discovery or enrichment
+and contains the final discovery/enrichment artifacts. Debug files, caches, browser
+profiles, secrets, temporary files, and SQLite WAL/SHM files are excluded.
+
+Legacy `runs/<uuid>` and `enrichments/<uuid>` directories remain resumable when
+the CLI is launched from the checkout that contains them; they are not migrated
+automatically.
+
 ## Implemented CLI
 
 Currently implemented commands:
@@ -76,7 +118,7 @@ Currently implemented commands:
 npm run probe -- "compare lists"
 
 # Batch research from a seeds CSV (keyword column required)
-npm run research -- --seeds input/seeds.csv
+npm run research -- --seeds input/seeds.csv --name my-research
 
 # Expand direct seeds with Keyword Surfer related ideas (depth 1)
 npm run research -- --seeds input/seeds.csv --expand

@@ -1,10 +1,10 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, relative as relativePath, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
-import { createRunDirectory, createRunId } from '../runs/run.js';
+import { createRunId } from '../runs/run.js';
 import { runEnrichment, type EnrichmentHttpConfig, type EnrichmentPagesConfig, type EnrichmentSiteStructureConfig } from '../enrichment/engine.js';
 import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from '../enrichment/cache.js';
@@ -29,6 +29,7 @@ import {
   type QuerySuggestionSource,
 } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
+import { allocateEnrichmentDirectory, archiveResearchDirectory, resolveEnrichmentLocation, resolveOutputRoot, resolveRunLocation, writeEnrichmentIndex } from '../outputs/researchLayout.js';
 
 function loadDotEnv(): void {
   const envPath = resolve(process.cwd(), '.env');
@@ -106,6 +107,7 @@ interface ParsedArgs {
   sources: QuerySuggestionSource[];
   maxSuggestions: number;
   maxParents: number;
+  outputRoot: string | null;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -120,6 +122,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
   let maxSuggestions = 20;
   let maxParents = 30;
+  let outputRoot: string | null = null;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -196,6 +199,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-suggestions-per-source must be a positive integer, got ${value}`);
       }
       maxSuggestions = parsed;
+    } else if (arg === '--output-root') {
+      outputRoot = args.shift() ?? null;
+      if (!outputRoot) throw new ResearchError('INPUT_SCHEMA_ERROR', '--output-root requires an absolute path');
     } else if (arg === '--max-parents') {
       const value = args.shift();
       if (!value || Number.isNaN(Number(value))) {
@@ -224,7 +230,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions, maxParents };
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions, maxParents, outputRoot };
 }
 
 function buildEnrichmentConfig(
@@ -246,30 +252,6 @@ function buildEnrichmentConfig(
     };
   }
   return config;
-}
-
-function findSourceRunDirectory(sourceRunId: string): string {
-  const runsDir = resolve(process.cwd(), 'runs');
-  const runDir = resolve(runsDir, sourceRunId);
-  const relative = relativePath(runsDir, runDir);
-  if (relative.startsWith('..') || isAbsolute(relative)) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `Invalid source run ID: ${sourceRunId}`);
-  }
-  const storePath = resolve(runDir, 'run.sqlite');
-  if (!existsSync(storePath)) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `Source run not found: ${sourceRunId} (missing ${storePath})`);
-  }
-  return runDir;
-}
-
-function findEnrichmentDirectory(enrichmentId: string): string {
-  const enrichmentsDir = resolve(process.cwd(), 'enrichments');
-  const enrichmentDir = resolve(enrichmentsDir, enrichmentId);
-  const relative = relativePath(enrichmentsDir, enrichmentDir);
-  if (relative.startsWith('..') || isAbsolute(relative)) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `Invalid enrichment ID: ${enrichmentId}`);
-  }
-  return enrichmentDir;
 }
 
 function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShortlist: string[]): string[] {
@@ -341,9 +323,12 @@ async function main(): Promise<void> {
     }
 
     const config: ResearchConfig = loadConfig(process.env);
+    const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
 
     enrichmentId = '';
     let enrichmentDirectory: string;
+    let researchDirectory: string;
+    let archivePath: string;
     let sourceRunId: string;
     let sourceStorePath: string;
     let clusteringConfig: ClusteringConfig;
@@ -359,7 +344,10 @@ async function main(): Promise<void> {
     if (args.resumeEnrichmentId) {
       isResume = true;
       enrichmentId = args.resumeEnrichmentId;
-      enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
+      const enrichmentLocation = await resolveEnrichmentLocation(outputRoot, enrichmentId);
+      enrichmentDirectory = enrichmentLocation.enrichmentDirectory;
+      researchDirectory = enrichmentLocation.researchDirectory;
+      archivePath = enrichmentLocation.archivePath;
       const existingStorePath = resolve(enrichmentDirectory, 'enrichment.sqlite');
       if (!existsSync(existingStorePath)) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${enrichmentId}`);
@@ -373,8 +361,8 @@ async function main(): Promise<void> {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment already completed: ${enrichmentId}`);
       }
       sourceRunId = existingRun.sourceRunId;
-      const sourceDir = findSourceRunDirectory(sourceRunId);
-      sourceStorePath = resolve(sourceDir, 'run.sqlite');
+      const sourceLocation = await resolveRunLocation(outputRoot, sourceRunId);
+      sourceStorePath = resolve(sourceLocation.discoveryDirectory, 'run.sqlite');
       clusteringConfig = existingRun.config.clusters ?? {
         topN: 10,
         edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
@@ -408,11 +396,19 @@ async function main(): Promise<void> {
         : { dbPath: DEFAULT_CACHE_DB_PATH, ttl: DEFAULT_CACHE_TTL };
     } else {
       sourceRunId = args.sourceRunId;
-      const sourceDir = findSourceRunDirectory(sourceRunId);
-      sourceStorePath = resolve(sourceDir, 'run.sqlite');
+      const sourceLocation = await resolveRunLocation(outputRoot, sourceRunId);
+      sourceStorePath = resolve(sourceLocation.discoveryDirectory, 'run.sqlite');
+      researchDirectory = sourceLocation.researchDirectory;
+      archivePath = sourceLocation.archivePath;
       enrichmentId = createRunId();
-      enrichmentDirectory = findEnrichmentDirectory(enrichmentId);
-      await createRunDirectory(enrichmentDirectory);
+      enrichmentDirectory = await allocateEnrichmentDirectory(researchDirectory);
+      await writeEnrichmentIndex(outputRoot, {
+        version: 1,
+        enrichmentId,
+        runId: sourceRunId,
+        researchDirectory,
+        enrichmentDirectory,
+      });
       clusteringConfig = {
         topN: args.topN,
         edgeRule: {
@@ -451,6 +447,8 @@ async function main(): Promise<void> {
 
     console.log('Utility Research Runner — Enrichment');
     console.log('');
+    console.log(`Research directory: ${researchDirectory}`);
+    console.log(`Enrichment directory: ${enrichmentDirectory}`);
     const logger: EnrichmentLogger = (line: string) => console.log(line);
 
     let enrichmentConfig: EnrichmentModuleConfig;
@@ -533,6 +531,17 @@ async function main(): Promise<void> {
       }
       console.log('  manifest.json');
       console.log('  status.json');
+      store.close();
+      store = undefined;
+      cacheStore?.close();
+      cacheStore = undefined;
+      try {
+        archivePath = await archiveResearchDirectory(researchDirectory);
+        console.log(`Archive: ${archivePath}`);
+      } catch (archiveError) {
+        const message = archiveError instanceof Error ? archiveError.message : String(archiveError);
+        console.error(`Archive warning: ${message}`);
+      }
     } else if (outcome.kind === 'failed') {
       console.error(`Enrichment failed: ${outcome.error}`);
       exitCode = EXIT_INTERNAL;
