@@ -316,7 +316,3 @@ function crc32(data: Buffer): number {
   for (const byte of data) crc = (CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8)) >>> 0;
   return (crc ^ 0xffffffff) >>> 0;
 }
-
-export function resolvePersistentPath(outputRoot: string, configuredPath: string): string {
-  return isAbsolute(configuredPath) ? resolve(configuredPath) : resolve(outputRoot, configuredPath);
-}
