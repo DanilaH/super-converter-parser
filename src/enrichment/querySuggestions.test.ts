@@ -704,8 +704,11 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     researchConfig: config,
     debugRoot: '/tmp/enr-3/debug',
   });
+  assert.equal(collector2.openCalls, 0, 'fully completed resume must not open the browser');
   assert.equal(collector2.collectCalls, 0, 'resume must not re-collect completed items');
   assert.equal(second.suggestions.length, 19);
+  assert.deepEqual(second.sourceStats, first.sourceStats, 'resume must rebuild complete source stats from SQLite');
+  assert.ok(Object.values(second.sourceStats).some((stats) => stats.ok > 0 || stats.empty > 0));
   assert.ok(collectCallsAfterFirst > 0);
 });
 

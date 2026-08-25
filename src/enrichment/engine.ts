@@ -399,56 +399,42 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     }
 
     if (modules.includes('query_suggestions')) {
-      const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
-        (item) => item.itemId === 'query_suggestions' && item.module === 'query_suggestions',
-      );
-      if (existingItem?.status === 'completed') {
-        logger('Skipping completed query_suggestions module');
-        const runConfig = sourceConn.store.loadRun(sourceRunId);
-        if (!runConfig) {
-          throw new Error(`Source run not found for query suggestions resume: ${sourceRunId}`);
-        }
-        queryResult = buildQueryResultFromStore(
-          enrichmentId,
-          enrichmentStore,
-          config.query_suggestions ?? defaultQuerySuggestionsConfig(),
-          runConfig.configSnapshot,
+      const runConfig = sourceConn.store.loadRun(sourceRunId);
+      if (!runConfig) {
+        throw new Error(`Source run not found for query suggestions: ${sourceRunId}`);
+      }
+      const researchConfig = runConfig.configSnapshot;
+      const cacheStore = CacheStore.open(researchConfig.cache.path);
+      let collector: SuggestionCollector | undefined;
+      try {
+        // The authoritative checkpoints are per-(parent, source). The collector
+        // is lazy and opens Chrome only when runQuerySuggestionsModule finds a
+        // missing/expired source, so a fully completed resume performs no
+        // browser work and rebuilds its result from SQLite.
+        collector = await createBrowserSuggestionCollector(
+          researchConfig,
+          join(enrichmentDirectory, 'debug'),
+          signal,
         );
-      } else {
-        const runConfig = sourceConn.store.loadRun(sourceRunId);
-        if (!runConfig) {
-          throw new Error(`Source run not found for query suggestions: ${sourceRunId}`);
-        }
-        const researchConfig = runConfig.configSnapshot;
-        const cacheStore = CacheStore.open(researchConfig.cache.path);
-        let collector: SuggestionCollector | undefined;
-        try {
-          collector = await createBrowserSuggestionCollector(
-            researchConfig,
-            join(enrichmentDirectory, 'debug'),
-            signal,
-          );
-          queryResult = await runQuerySuggestionsModule({
-            enrichmentId,
-            sourceStore: sourceConn.store,
-            enrichmentStore,
-            sourceRunId,
-            config: config.query_suggestions ?? defaultQuerySuggestionsConfig(),
-            shortlist,
-            logger,
-            signal,
-            collector,
-            cache: cacheStore,
-            researchConfig,
-            debugRoot: join(enrichmentDirectory, 'debug'),
-          });
-        } finally {
-          await collector?.close().catch(() => undefined);
-          cacheStore.close();
-        }
+        queryResult = await runQuerySuggestionsModule({
+          enrichmentId,
+          sourceStore: sourceConn.store,
+          enrichmentStore,
+          sourceRunId,
+          config: config.query_suggestions ?? defaultQuerySuggestionsConfig(),
+          shortlist,
+          logger,
+          signal,
+          collector,
+          cache: cacheStore,
+          researchConfig,
+          debugRoot: join(enrichmentDirectory, 'debug'),
+        });
+      } finally {
+        await collector?.close().catch(() => undefined);
+        cacheStore.close();
       }
     }
-
 
     if (modules.includes('pages')) {
       const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(

@@ -868,23 +868,15 @@ export async function runQuerySuggestionsModule(
     }
   }
 
-  const suggestions = dedupSuggestions(occurrences, market, hl, gl);
-
-  const sourceRecords = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
-  const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
-  const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
-
-  return {
+  // SQLite is the source of truth for both cold runs and resumes. Local
+  // counters only describe work performed in this process and would otherwise
+  // zero out sourceStats for checkpoints completed before resume.
+  return buildQueryResultFromStore(
     enrichmentId,
-    suggestions,
-    perSourceStatus: [...perSourceStatus.values()],
-    inputCount: selectedKeywords.length,
-    emptyCount,
-    errorCount,
-    sourceStats,
-    algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,
+    enrichmentStore,
     config,
-  };
+    researchConfig,
+  );
 }
 
 function sleep(ms: number): Promise<void> {
