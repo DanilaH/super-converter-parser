@@ -849,6 +849,13 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         artifacts,
         summary,
         state: 'completed',
+        capabilities: {
+          implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
+          blocked: [
+            { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+            { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+          ],
+        },
       }, null, 2) + '\n',
       'enrichment manifest',
     );
@@ -861,6 +868,13 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         modules,
         summary,
         artifacts,
+        capabilities: {
+          implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
+          blocked: [
+            { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+            { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+          ],
+        },
       }, null, 2) + '\n',
       'enrichment status',
     );
