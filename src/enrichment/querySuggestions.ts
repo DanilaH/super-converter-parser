@@ -571,7 +571,7 @@ export async function runQuerySuggestionsModule(
   } else {
     throw new ResearchError(
       'ENRICHMENT_ERROR',
-      'query_suggestions requires an explicit --shortlist of 5-30 parent keywords. Full-source-run mode is not supported for deep enrichment.',
+      'query_suggestions requires an explicit --shortlist of 5-200 parent keywords. Full-source-run mode is not supported for deep enrichment.',
     );
   }
 
@@ -1028,7 +1028,7 @@ export function defaultQuerySuggestionsConfig(): QuerySuggestionsConfig {
   return {
     sources: ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'],
     maxSuggestionsPerSource: 20,
-    maxParents: 30,
+    maxParents: 200,
     rateLimitMinDelayMs: 1000,
     rateLimitMaxDelayMs: 10000,
     algorithmVersion: QUERY_SUGGESTION_PARSER_VERSION,
