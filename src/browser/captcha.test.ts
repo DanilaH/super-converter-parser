@@ -1,13 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import process from 'node:process';
 import type { Page } from 'playwright-core';
 import { waitForManualCaptcha, pauseForManualCaptcha, NEVER_CANCELLED } from './captcha.js';
 import { ResearchError } from '../shared/errors.js';
+
+const CAPTCHA_SELECTOR_FOR_TEST = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
 
 function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
   return {
@@ -15,6 +13,7 @@ function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
       count: async () => (opts.captchaVisible ? 1 : 0),
       innerText: async () => opts.bodyText,
     }),
+    isClosed: () => false,
     waitForLoadState: async () => undefined,
   } as unknown as Page;
 }
@@ -28,8 +27,7 @@ test('waitForManualCaptcha throws CAPTCHA_REQUIRED when a captcha widget is pres
 });
 
 test('waitForManualCaptcha returns silently when no captcha is detected', async () => {
-  const page = fakePage({ captchaVisible: false, bodyText: 'normal search results' });
-  await waitForManualCaptcha(page); // must not throw
+  await waitForManualCaptcha(fakePage({ captchaVisible: false, bodyText: 'normal search results' }));
 });
 
 test('waitForManualCaptcha detects captcha by body text', async () => {
@@ -40,75 +38,98 @@ test('waitForManualCaptcha detects captcha by body text', async () => {
   );
 });
 
-test('pauseForManualCaptcha (non-TTY) waits for the marker file, removes it, and returns solved=true', async () => {
-  const marker = join(await mkdtemp(join(tmpdir(), 'captcha-marker-')), 'done.txt');
-  rmSync(marker, { force: true });
-
-  const originalTty = (process.stdin as { isTTY?: boolean }).isTTY;
-  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
-  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
-  process.env.CAPTCHA_DONE_MARKER = marker;
-
-  const page = { waitForLoadState: async () => undefined } as unknown as Page;
+test('pauseForManualCaptcha polls the page and resumes automatically when CAPTCHA disappears', async () => {
+  const state = { captchaVisible: true, bodyText: 'unusual traffic' };
   const timer = setTimeout(() => {
-    void writeFile(marker, 'done');
-  }, 300);
+    state.captchaVisible = false;
+    state.bodyText = 'normal search results';
+  }, 20);
 
-  const start = Date.now();
-  let solved: boolean;
   try {
-    solved = await pauseForManualCaptcha(page, NEVER_CANCELLED);
+    const solved = await pauseForManualCaptcha(fakePage(state), NEVER_CANCELLED, {
+      pollIntervalMs: 5,
+      timeoutMs: 1000,
+    });
+    assert.equal(solved, true);
   } finally {
     clearTimeout(timer);
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalTty, configurable: true });
-    if (originalMarker === undefined) delete process.env.CAPTCHA_DONE_MARKER;
-    else process.env.CAPTCHA_DONE_MARKER = originalMarker;
   }
-
-  assert.equal(solved, true, 'returning after the marker must report solved=true');
-  assert.ok(Date.now() - start >= 150, 'should have waited for the marker before resuming');
-  assert.equal(existsSync(marker), false, 'marker must be consumed/removed after resume');
 });
 
-test('pauseForManualCaptcha (non-TTY) returns solved=false when the shared signal is cancelled', async () => {
-  const marker = join(await mkdtemp(join(tmpdir(), 'captcha-marker-int-')), 'done.txt');
-  rmSync(marker, { force: true });
-
-  const originalTty = (process.stdin as { isTTY?: boolean }).isTTY;
-  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
-  const originalMarker = process.env.CAPTCHA_DONE_MARKER;
-  process.env.CAPTCHA_DONE_MARKER = marker;
-
+test('pauseForManualCaptcha returns solved=false when the shared signal is cancelled', async () => {
   const signal = { isCancelled: () => false };
-  const page = { waitForLoadState: async () => undefined } as unknown as Page;
   const timer = setTimeout(() => {
     signal.isCancelled = () => true;
-  }, 300);
+  }, 20);
 
   const start = Date.now();
-  let solved: boolean;
   try {
-    solved = await pauseForManualCaptcha(page, signal);
+    const solved = await pauseForManualCaptcha(
+      fakePage({ captchaVisible: true, bodyText: 'unusual traffic' }),
+      signal,
+      { pollIntervalMs: 5, timeoutMs: 1000 },
+    );
+    assert.equal(solved, false);
   } finally {
     clearTimeout(timer);
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalTty, configurable: true });
-    if (originalMarker === undefined) delete process.env.CAPTCHA_DONE_MARKER;
-    else process.env.CAPTCHA_DONE_MARKER = originalMarker;
   }
-
-  assert.equal(solved, false, 'a cancelled wait must report solved=false (never pretend the CAPTCHA was solved)');
-  assert.ok(Date.now() - start < 5000, 'must not wait for the (absent) marker or the timeout');
-  assert.equal(existsSync(marker), false, 'no marker was created, so nothing to remove');
+  assert.ok(Date.now() - start < 5000, 'must not wait for the timeout');
 });
 
-test('pauseForManualCaptcha does not register its own SIGINT listener (force-quit stays with the CLI)', async () => {
+test('pauseForManualCaptcha times out without pretending CAPTCHA was solved', async () => {
+  const page = fakePage({ captchaVisible: true, bodyText: 'unusual traffic' });
+  await assert.rejects(
+    () => pauseForManualCaptcha(page, NEVER_CANCELLED, { pollIntervalMs: 5, timeoutMs: 20 }),
+    (error: unknown) => error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED',
+  );
+});
+
+test('pauseForManualCaptcha does not register its own SIGINT listener', async () => {
   const before = process.listenerCount('SIGINT');
-  const page = { waitForLoadState: async () => undefined } as unknown as Page;
-  // The CLI owns SIGINT handling; the helper must poll the shared signal rather
-  // than adding its own listener. With an already-cancelled signal it returns at
-  // once, so the listener count must be unchanged afterwards.
-  const solved = await pauseForManualCaptcha(page, { isCancelled: () => true });
-  const after = process.listenerCount('SIGINT');
-  assert.equal(solved, false, 'cancelled signal returns solved=false');
-  assert.equal(after, before, 'the helper must not add or leak a SIGINT listener');
+  const solved = await pauseForManualCaptcha(
+    fakePage({ captchaVisible: true, bodyText: 'unusual traffic' }),
+    { isCancelled: () => true },
+  );
+  assert.equal(solved, false);
+  assert.equal(process.listenerCount('SIGINT'), before);
+});
+
+test('pauseForManualCaptcha retries a transient page-inspection failure instead of resuming', async () => {
+  let selectorChecks = 0;
+  const page = {
+    isClosed: () => false,
+    locator: (selector: string) => ({
+      count: async () => {
+        selectorChecks += 1;
+        if (selectorChecks === 1) return 1;
+        if (selectorChecks === 2) throw new Error('Execution context was destroyed');
+        if (selector === CAPTCHA_SELECTOR_FOR_TEST) return selectorChecks === 3 ? 1 : 0;
+        return 0;
+      },
+      innerText: async () => 'normal search results',
+    }),
+    waitForLoadState: async () => undefined,
+  } as unknown as Page;
+
+  const solved = await pauseForManualCaptcha(page, NEVER_CANCELLED, {
+    pollIntervalMs: 1,
+    timeoutMs: 1000,
+  });
+
+  assert.equal(solved, true);
+  assert.ok(selectorChecks >= 4, 'must retry after the transient failure before resuming');
+});
+
+test('pauseForManualCaptcha reports a closed page instead of pretending CAPTCHA was solved', async () => {
+  const page = {
+    isClosed: () => true,
+    locator: () => {
+      throw new Error('must not inspect a closed page');
+    },
+  } as unknown as Page;
+
+  await assert.rejects(
+    () => pauseForManualCaptcha(page, NEVER_CANCELLED, { pollIntervalMs: 1, timeoutMs: 100 }),
+    (error: unknown) => error instanceof ResearchError && error.code === 'GOOGLE_UNAVAILABLE',
+  );
 });
