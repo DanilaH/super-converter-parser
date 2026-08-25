@@ -10,24 +10,42 @@ export const NEVER_CANCELLED: CancellationSignal = { isCancelled: () => false };
 const CAPTCHA_SELECTOR = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
 const CAPTCHA_TEXT = /unusual traffic|not a robot|captcha/i;
 
-async function captchaIsPresent(page: Page): Promise<boolean> {
-  const captchaVisible = await page
-    .locator(CAPTCHA_SELECTOR)
-    .count()
-    .then((count) => count > 0)
-    .catch(() => false);
+type CaptchaPresence = 'present' | 'absent' | 'unknown';
 
-  if (captchaVisible) return true;
+async function detectCaptcha(page: Page): Promise<CaptchaPresence> {
+  if (page.isClosed()) {
+    throw new ResearchError('GOOGLE_UNAVAILABLE', 'Research Chrome page closed while checking CAPTCHA.');
+  }
 
-  return page
-    .locator('body')
-    .innerText()
-    .then((text) => CAPTCHA_TEXT.test(text))
-    .catch(() => false);
+  try {
+    if ((await page.locator(CAPTCHA_SELECTOR).count()) > 0) return 'present';
+    const bodyText = await page.locator('body').innerText();
+    return CAPTCHA_TEXT.test(bodyText) ? 'present' : 'absent';
+  } catch (error) {
+    if (page.isClosed()) {
+      throw new ResearchError(
+        'GOOGLE_UNAVAILABLE',
+        'Research Chrome page closed while checking CAPTCHA.',
+        { cause: error },
+      );
+    }
+
+    // Google commonly replaces the execution context while CAPTCHA verification
+    // redirects back to the SERP. A failed probe is not proof that CAPTCHA has
+    // disappeared; the polling loop must retry instead of resuming collection.
+    return 'unknown';
+  }
 }
 
 export async function waitForManualCaptcha(page: Page): Promise<void> {
-  if (!(await captchaIsPresent(page))) return;
+  const presence = await detectCaptcha(page);
+  if (presence === 'absent') return;
+  if (presence === 'unknown') {
+    throw new ResearchError(
+      'GOOGLE_UNAVAILABLE',
+      'Could not inspect the Google page while checking for CAPTCHA.',
+    );
+  }
 
   throw new ResearchError(
     'CAPTCHA_REQUIRED',
@@ -66,7 +84,9 @@ export async function pauseForManualCaptcha(
   console.log('После решения runner продолжит автоматически (Ctrl+C — поставить run на паузу).');
 
   const start = Date.now();
-  while (await captchaIsPresent(page)) {
+  while (true) {
+    const presence = await detectCaptcha(page);
+    if (presence === 'absent') break;
     if (signal.isCancelled()) return false;
     if (Date.now() - start >= timeoutMs) {
       throw new ResearchError('CAPTCHA_REQUIRED', 'CAPTCHA wait timeout; run remains resumable.');
