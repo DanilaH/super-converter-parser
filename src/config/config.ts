@@ -106,7 +106,7 @@ const DEFAULTS: ResearchConfig = {
     topN: 10,
   },
   browser: {
-    cdpUrl: 'http://127.0.0.1:9222',
+    cdpUrl: 'http://127.0.0.1:9333',
     navigationTimeoutMs: 60_000,
     surferWaitTimeoutMs: 60_000,
     surferPreflightTimeoutMs: 60_000,
