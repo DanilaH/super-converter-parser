@@ -229,6 +229,10 @@ test('pages module: extracts page data from HTML', async () => {
   assert.equal(outcome.kind, 'completed');
   assert.ok(outcome.result!.pages);
   assert.equal(outcome.result!.pages!.length, 2);
+  assert.equal(outcome.result!.networkRequestsThisRun, 2);
+  assert.equal(outcome.result!.networkErrorsThisRun, 0);
+  assert.equal(outcome.result!.cachedSuccesses, 0);
+  assert.equal(outcome.result!.cachedErrors, 0);
 
   const page1 = outcome.result!.pages!.find((p) => p.url === `${baseUrl}/page1`);
   assert.ok(page1);
@@ -283,6 +287,9 @@ test('pages module: handles non-HTML content', async () => {
   assert.equal(outcome.result!.pages!.length, 1);
   assert.equal(outcome.result!.pages![0]!.fetchStatus, 'non_html');
   assert.equal(outcome.result!.pages![0]!.title, null);
+  assert.equal(outcome.result!.networkRequestsThisRun, 1);
+  assert.equal(outcome.result!.networkErrorsThisRun, 1);
+  assert.equal(outcome.result!.cachedErrors, 0);
 
   sourceStore.close();
   enrichmentStore.close();

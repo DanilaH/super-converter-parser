@@ -167,17 +167,33 @@ export function extractAll(html: string): {
   canonical: string | null;
   language: string | null;
   wordCount: number | null;
+  possiblyJsRendered: boolean;
   forms: FormCounts;
   structuredDataTypes: string[];
 } {
+  const wordCount = extractWordCount(html);
+  const forms = extractForms(html);
+  const scriptCount = (html.match(/<script\b/gi) ?? []).length;
+  const hasAppRoot = /<(?:div|main)\b[^>]*\bid=["'](?:root|app|__next|__nuxt)["']/i.test(html);
+  const hasModuleBootstrap = /<script\b[^>]*(?:type=["']module["']|src=["'][^"']*(?:bundle|chunk|main|app)[^"']*\.js)/i.test(html);
+  const hasNoControls = forms.formCount === 0
+    && forms.textareaCount === 0
+    && forms.inputCount === 0
+    && forms.buttonCount === 0;
+  const possiblyJsRendered = wordCount !== null
+    && wordCount <= 25
+    && hasNoControls
+    && ((hasAppRoot && scriptCount > 0) || scriptCount >= 3 || hasModuleBootstrap);
+
   return {
     title: extractTitle(html),
     metaDescription: extractMetaDescription(html),
     h1: extractH1(html),
     canonical: extractCanonical(html),
     language: extractLanguage(html),
-    wordCount: extractWordCount(html),
-    forms: extractForms(html),
+    wordCount,
+    possiblyJsRendered,
+    forms,
     structuredDataTypes: extractStructuredData(html),
   };
 }

@@ -30,7 +30,7 @@ import type { ResearchConfig } from '../config/config.js';
 import type { SuggestionCache } from '../cache/store.js';
 import { ttlMsForSuggestionStatus } from '../cache/store.js';
 import { buildSuggestionCacheKey, keywordCacheIdentity, type CacheIdentity } from '../cache/keys.js';
-import type { RunStore } from '../db/store.js';
+import type { RunStore, StoredRelatedKeyword } from '../db/store.js';
 import {
   QUERY_SUGGESTION_PARSER_VERSION,
   EnrichmentCancelledError,
@@ -60,7 +60,7 @@ export type RawSourceCollection = {
   status: QuerySuggestionCollectionStatus;
   occurrences: RawSuggestionOccurrence[];
   error: string | null;
-  cacheStatus: 'hit' | 'miss' | 'expired' | 'refreshed' | 'none';
+  cacheStatus: 'hit' | 'source_run' | 'miss' | 'expired' | 'refreshed' | 'none';
 };
 
 export interface CollectResult {
@@ -189,6 +189,54 @@ function emptySourceStats(): QuerySuggestionResult['sourceStats'] {
     google_related_search: { ok: 0, empty: 0, unavailable: 0, error: 0 },
     google_paa: { ok: 0, empty: 0, unavailable: 0, error: 0 },
   };
+}
+
+export function buildDiscoverySurferCollections(
+  rows: readonly StoredRelatedKeyword[],
+): Map<string, RawSourceCollection> {
+  const grouped = new Map<string, StoredRelatedKeyword[]>();
+  for (const row of rows) {
+    const key = normalizeKeyword(row.parentKeyword);
+    const group = grouped.get(key) ?? [];
+    group.push(row);
+    grouped.set(key, group);
+  }
+
+  const collections = new Map<string, RawSourceCollection>();
+  for (const [normalizedParent, group] of grouped) {
+    const successful = group.filter((row) => row.status === 'ok' && row.relatedKeyword.trim() !== '');
+    if (successful.length > 0) {
+      const parentKeyword = successful[0]!.parentKeyword;
+      collections.set(normalizedParent, {
+        source: 'surfer_related',
+        status: 'ok',
+        occurrences: successful.map((row, ordinal) => ({
+          parentKeyword,
+          normalizedParent,
+          source: 'surfer_related',
+          rawText: row.relatedKeyword,
+          normalizedSuggestion: normalizeKeyword(row.relatedKeyword),
+          ordinal,
+          volume: row.volume,
+          cpc: null,
+        })),
+        error: null,
+        cacheStatus: 'source_run',
+      });
+      continue;
+    }
+
+    if (group.some((row) => row.status === 'empty')) {
+      collections.set(normalizedParent, {
+        source: 'surfer_related',
+        status: 'empty',
+        occurrences: [],
+        error: null,
+        cacheStatus: 'source_run',
+      });
+    }
+  }
+  return collections;
 }
 
 function checkCancellation(signal: CancellationSignal, error: typeof EnrichmentCancelledError): void {
@@ -570,6 +618,9 @@ export async function runQuerySuggestionsModule(
   }
   const sourceStats = emptySourceStats();
   const seenSuggestionKeys = new Set(occurrences.map((o) => `${o.source}:${o.normalizedParent}:${o.normalizedSuggestion}`));
+  const discoverySurferCollections = buildDiscoverySurferCollections(
+    sourceStore.loadRelatedKeywords(sourceRunId),
+  );
 
   const collectWithRetry = async (
     parentKeyword: string,
@@ -636,6 +687,13 @@ export async function runQuerySuggestionsModule(
       const expiredSources: QuerySuggestionSource[] = [];
       const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
+        if (source === 'surfer_related') {
+          const sourceRunCollection = discoverySurferCollections.get(keyword.normalizedKeyword);
+          if (sourceRunCollection) {
+            fetched.push(sourceRunCollection);
+            continue;
+          }
+        }
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
         if (cached) {
@@ -812,7 +870,9 @@ export async function runQuerySuggestionsModule(
       const fetchedAt = new Date().toISOString();
       for (const collection of fetched) {
         await new Promise(resolve => setImmediate(resolve));
-        const isBrowserSource = collection.cacheStatus !== 'hit';
+        const isBrowserSource = collection.cacheStatus === 'miss'
+          || collection.cacheStatus === 'expired'
+          || collection.cacheStatus === 'refreshed';
         const requestCount = isBrowserSource && !countedRequestForParent ? transportRequests : 0;
         if (isBrowserSource) {
           countedRequestForParent = true;

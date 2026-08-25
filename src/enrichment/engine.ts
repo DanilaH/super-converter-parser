@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 import { writeTextAtomic } from '../runs/run.js';
@@ -42,6 +42,7 @@ import { parseRobotsTxt, getRobotsUrl } from './site_structure/robots.js';
 import { parseSitemap, sampleUrls } from './site_structure/sitemap.js';
 import type { SiteStructureRecord } from './site_structure/types.js';
 import { EnrichmentCache, makeCacheKey, type CacheTtlConfig } from './cache.js';
+import { selectDomainsFairly, type DomainObservation } from './domainSelection.js';
 
 export type EnrichmentHttpConfig = {
   enabled: boolean;
@@ -107,10 +108,10 @@ export type EnrichmentModuleResult = {
   clusters?: ClusteringResult;
   pages?: PageRecord[];
   siteStructure?: SiteStructureRecord[];
-  networkRequestCount?: number;
-  networkErrorCount?: number;
-  cacheHitCount?: number;
-  cacheFreshCount?: number;
+  networkRequestsThisRun?: number;
+  networkErrorsThisRun?: number;
+  cachedSuccesses?: number;
+  cachedErrors?: number;
 };
 
 export type EnrichmentOutcome = {
@@ -207,43 +208,38 @@ function collectSourceDomains(
   }
 
   const serpRows = sourceStore.loadSerpRows(sourceRunId);
-  const domains: string[] = [];
   const provenance = new Map<string, string[]>();
   const ranks = new Map<string, Array<{ keyword: string; position: number }>>();
-  const omittedMap = new Map<string, string[]>();
-  const omittedRanks = new Map<string, Array<{ keyword: string; position: number }>>();
+  const observations: DomainObservation[] = [];
   for (const row of serpRows) {
     if (row.resultType !== 'organic') continue;
     const keyword = idxToKeyword.get(row.keywordIdx ?? -1);
     if (keyword === undefined || !shortlistSet.has(keyword)) continue;
     const domain = row.registrableDomain ?? '';
     if (!domain) continue;
-    if (!provenance.has(domain) && !omittedMap.has(domain)) {
-      if (domains.length >= DOMAIN_AGE_MAX_DOMAINS) {
-        omittedMap.set(domain, [keyword]);
-        omittedRanks.set(domain, [{ keyword, position: row.position }]);
-        continue;
-      }
+    if (!provenance.has(domain)) {
       provenance.set(domain, []);
       ranks.set(domain, []);
-      domains.push(domain);
     }
-    const kws = (provenance.get(domain) ?? omittedMap.get(domain)) as string[];
+    const kws = provenance.get(domain)!;
     if (!kws.includes(keyword)) kws.push(keyword);
-    const domainRanks = ranks.get(domain) ?? omittedRanks.get(domain);
+    const domainRanks = ranks.get(domain);
     if (domainRanks && !domainRanks.some((r) => r.keyword === keyword && r.position === row.position)) {
       domainRanks.push({ keyword, position: row.position });
     }
+    observations.push({ keyword, domain, position: row.position });
   }
 
-  const omitted = [...omittedMap.entries()].map(([domain, kws]) => ({
+  const keywordOrder = [...shortlistSet];
+  const selection = selectDomainsFairly(keywordOrder, observations, DOMAIN_AGE_MAX_DOMAINS);
+  const omitted = selection.omitted.map((domain) => ({
     domain,
-    sourceKeywords: kws,
-    sourceRanks: omittedRanks.get(domain) ?? [],
+    sourceKeywords: provenance.get(domain) ?? [],
+    sourceRanks: ranks.get(domain) ?? [],
   }));
 
-  logger(`Domain-age: ${domains.length} bounded domains across ${shortlistSet.size} selected keywords${omitted.length > 0 ? ` (${omitted.length} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
-  return { domains, provenance, ranks, omitted };
+  logger(`Domain-age: ${selection.selected.length} fairly distributed domains across ${shortlistSet.size} selected keywords${omitted.length > 0 ? ` (${omitted.length} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
+  return { domains: selection.selected, provenance, ranks, omitted };
 }
 
 export async function runEnrichment(options: EnrichmentOptions): Promise<EnrichmentOutcome> {
@@ -297,7 +293,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         sourceRunId,
         modules,
         config: JSON.stringify(persistedConfig),
-        sourceRunDirectory: `runs/${sourceRunId}`,
+        sourceRunDirectory: typeof sourceStoreOrPath === 'string' ? dirname(sourceStoreOrPath) : `runs/${sourceRunId}`,
         enrichmentDirectory,
         shortlistKeywords: shortlist ?? [],
       });
@@ -463,6 +459,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
               canonical: p.canonical,
               language: p.language,
               wordCount: p.wordCount,
+              possiblyJsRendered: p.possiblyJsRendered ?? false,
               forms: JSON.parse(p.forms) as FormCounts,
               structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
               sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
@@ -491,6 +488,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
               canonical: p.canonical,
               language: p.language,
               wordCount: p.wordCount,
+              possiblyJsRendered: p.possiblyJsRendered ?? false,
               forms: JSON.stringify(p.forms),
               structuredDataTypes: JSON.stringify(p.structuredDataTypes),
               sourceKeywords: JSON.stringify(p.sourceKeywords),
@@ -523,6 +521,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                 canonical: p.canonical,
                 language: p.language,
                 wordCount: p.wordCount,
+                possiblyJsRendered: p.possiblyJsRendered ?? false,
                 forms: JSON.parse(p.forms) as FormCounts,
                 structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
                 sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
@@ -559,6 +558,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                   canonical: null,
                   language: null,
                   wordCount: null,
+                  possiblyJsRendered: false,
                   forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
                   structuredDataTypes: [],
                   sourceKeywords: JSON.parse(t.sourceKeywords),
@@ -586,6 +586,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                 canonical: p.canonical,
                 language: p.language,
                 wordCount: p.wordCount,
+                possiblyJsRendered: p.possiblyJsRendered ?? false,
                 forms: JSON.stringify(p.forms),
                 structuredDataTypes: JSON.stringify(p.structuredDataTypes),
                 sourceKeywords: JSON.stringify(p.sourceKeywords),
@@ -608,10 +609,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
             signal,
           );
           result.pages = pagesResult.pages;
-          result.networkRequestCount = (result.networkRequestCount ?? 0) + pagesResult.fetchCount;
-          result.networkErrorCount = (result.networkErrorCount ?? 0) + pagesResult.errorCount;
-          result.cacheHitCount = (result.cacheHitCount ?? 0) + pagesResult.cacheHits;
-          result.cacheFreshCount = (result.cacheFreshCount ?? 0) + pagesResult.pages.filter((p) => p.cacheStatus === 'refreshed').length;
+          result.networkRequestsThisRun = (result.networkRequestsThisRun ?? 0) + pagesResult.fetchCount;
+          result.networkErrorsThisRun = (result.networkErrorsThisRun ?? 0) + pagesResult.networkErrors;
+          result.cachedSuccesses = (result.cachedSuccesses ?? 0) + pagesResult.cachedSuccesses;
+          result.cachedErrors = (result.cachedErrors ?? 0) + pagesResult.cachedErrors;
         }
       }
     }
@@ -696,10 +697,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           signal,
         );
         result.siteStructure = ssResult.records;
-        result.networkRequestCount = (result.networkRequestCount ?? 0) + ssResult.fetchCount;
-        result.networkErrorCount = (result.networkErrorCount ?? 0) + ssResult.errorCount;
-        result.cacheHitCount = (result.cacheHitCount ?? 0) + ssResult.cacheHits;
-        result.cacheFreshCount = (result.cacheFreshCount ?? 0) + ssResult.records.filter((r) => r.cacheStatus === 'refreshed').length;
+        result.networkRequestsThisRun = (result.networkRequestsThisRun ?? 0) + ssResult.fetchCount;
+        result.networkErrorsThisRun = (result.networkErrorsThisRun ?? 0) + ssResult.networkErrors;
+        result.cachedSuccesses = (result.cachedSuccesses ?? 0) + ssResult.cachedSuccesses;
+        result.cachedErrors = (result.cachedErrors ?? 0) + ssResult.cachedErrors;
       }
     }
 
@@ -773,11 +774,11 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       artifacts.push('site-structure.csv', 'site-structure.json');
     }
 
-    if (result.networkRequestCount !== undefined) {
-      summary.networkRequestCount = result.networkRequestCount ?? 0;
-      summary.networkErrorCount = result.networkErrorCount ?? 0;
-      summary.cacheHitCount = result.cacheHitCount ?? 0;
-      summary.cacheFreshCount = result.cacheFreshCount ?? 0;
+    if (result.networkRequestsThisRun !== undefined) {
+      summary.networkRequestsThisRun = result.networkRequestsThisRun ?? 0;
+      summary.networkErrorsThisRun = result.networkErrorsThisRun ?? 0;
+      summary.cachedSuccesses = result.cachedSuccesses ?? 0;
+      summary.cachedErrors = result.cachedErrors ?? 0;
     }
 
     const manifestPath = join(enrichmentDirectory, 'manifest.json');
@@ -1059,7 +1060,7 @@ async function runPagesModule(
   ssrfChecker: SsrfChecker | undefined,
   logger: EnrichmentLogger,
   signal: CancellationSignal,
-): Promise<{ pages: PageRecord[]; fetchCount: number; errorCount: number; cacheHits: number }> {
+): Promise<{ pages: PageRecord[]; fetchCount: number; networkErrors: number; cachedSuccesses: number; cachedErrors: number }> {
   const source = 'http' as EnrichmentItemSource;
 
   enrichmentStore.upsertEnrichmentItem({
@@ -1139,11 +1140,12 @@ async function runPagesModule(
   };
   if (ssrfChecker) fetcherCfg.ssrfChecker = ssrfChecker;
 
-  const PAGE_EXTRACTOR_VERSION = '1.0.0';
+  const PAGE_EXTRACTOR_VERSION = '1.1.0';
   const pages: PageRecord[] = [];
-  let cacheHits = 0;
   let fetchCount = 0;
-  let errorCount = 0;
+  let networkErrors = 0;
+  let cachedSuccesses = 0;
+  let cachedErrors = 0;
 
   for (const url of uniqueUrls) {
     if (signal.cancelled) break;
@@ -1172,7 +1174,8 @@ async function runPagesModule(
         try {
           const parsed = JSON.parse(cached.data) as PageRecord;
           page = { ...parsed, cacheStatus: 'hit', sourceKeywords: provenance.keywords, sourcePositions: provenance.positions };
-          cacheHits++;
+          if (page.fetchStatus === 'ok') cachedSuccesses += 1;
+          else cachedErrors += 1;
         } catch {
           // fall through to fetch
         }
@@ -1183,6 +1186,7 @@ async function runPagesModule(
       fetchCount++;
       const fetchResult = await boundedFetch(url, fetcherCfg);
       page = buildPageRecord(url, fetchResult, httpConfig, pagesConfig, provenance.keywords, provenance.positions);
+      if (page.fetchStatus !== 'ok') networkErrors += 1;
 
       if (cache && cacheKey) {
         const cacheStatus = page.fetchStatus === 'ok' ? 'ok' : 'error';
@@ -1192,7 +1196,6 @@ async function runPagesModule(
     }
 
     if (page) {
-      if (page.fetchStatus !== 'ok') errorCount++;
       pages.push(page);
       enrichmentStore.upsertPageTarget(enrichmentId, {
         url,
@@ -1214,7 +1217,7 @@ async function runPagesModule(
     checkCancellation(signal);
   }
 
-  logger(`Pages: ${pages.length} inspected, ${cacheHits} cache hits, ${fetchCount} fetches, ${errorCount} errors`);
+  logger(`Pages: ${pages.length} inspected, ${fetchCount} network requests / ${networkErrors} network errors, ${cachedSuccesses} cached successes / ${cachedErrors} cached errors`);
 
   const targetStatus = enrichmentStore.getPageTargetStatus(enrichmentId);
   const allDone = targetStatus.pending === 0 && targetStatus.total > 0;
@@ -1238,6 +1241,7 @@ async function runPagesModule(
       canonical: p.canonical,
       language: p.language,
       wordCount: p.wordCount,
+      possiblyJsRendered: p.possiblyJsRendered ?? false,
       forms: JSON.stringify(p.forms),
       structuredDataTypes: JSON.stringify(p.structuredDataTypes),
       sourceKeywords: JSON.stringify(p.sourceKeywords),
@@ -1257,7 +1261,7 @@ async function runPagesModule(
     error: allDone ? null : `${targetStatus.pending} targets incomplete`,
   });
 
-  return { pages, fetchCount, errorCount, cacheHits };
+  return { pages, fetchCount, networkErrors, cachedSuccesses, cachedErrors };
 }
 
 function buildPageRecord(
@@ -1289,6 +1293,7 @@ function buildPageRecord(
       canonical: null,
       language: null,
       wordCount: null,
+      possiblyJsRendered: false,
       forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
       structuredDataTypes: [],
       sourceKeywords,
@@ -1315,6 +1320,7 @@ function buildPageRecord(
       canonical: null,
       language: null,
       wordCount: null,
+      possiblyJsRendered: false,
       forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
       structuredDataTypes: [],
       sourceKeywords,
@@ -1340,6 +1346,7 @@ function buildPageRecord(
       canonical: null,
       language: null,
       wordCount: null,
+      possiblyJsRendered: false,
       forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
       structuredDataTypes: [],
       sourceKeywords,
@@ -1366,6 +1373,7 @@ function buildPageRecord(
       canonical: null,
       language: null,
       wordCount: null,
+      possiblyJsRendered: false,
       forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
       structuredDataTypes: [],
       sourceKeywords,
@@ -1405,7 +1413,7 @@ async function runSiteStructureModule(
   ssrfChecker: SsrfChecker | undefined,
   logger: EnrichmentLogger,
   signal: CancellationSignal,
-): Promise<{ records: SiteStructureRecord[]; fetchCount: number; errorCount: number; cacheHits: number }> {
+): Promise<{ records: SiteStructureRecord[]; fetchCount: number; networkErrors: number; cachedSuccesses: number; cachedErrors: number }> {
   const source = 'http' as EnrichmentItemSource;
 
   enrichmentStore.upsertEnrichmentItem({
@@ -1442,13 +1450,14 @@ async function runSiteStructureModule(
   }
 
   const domainProvenance = new Map<string, { keywords: string[]; bestPosition: number }>();
+  const domainObservations: DomainObservation[] = [];
   for (const kw of selectedKeywords) {
     const rows = serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [];
     for (const row of rows) {
       if (row.registrableDomain) {
         const existing = domainProvenance.get(row.registrableDomain);
         if (existing) {
-          existing.keywords.push(kw.keyword);
+          if (!existing.keywords.includes(kw.keyword)) existing.keywords.push(kw.keyword);
           if (row.position < existing.bestPosition) {
             existing.bestPosition = row.position;
           }
@@ -1458,13 +1467,18 @@ async function runSiteStructureModule(
             bestPosition: row.position,
           });
         }
+        domainObservations.push({ keyword: kw.keyword, domain: row.registrableDomain, position: row.position });
       }
     }
   }
 
-  const allDomains = [...domainProvenance.keys()];
-  const domains = allDomains.slice(0, siteStructureConfig.maxDomains);
-  const omittedDomains = allDomains.slice(siteStructureConfig.maxDomains);
+  const selection = selectDomainsFairly(
+    selectedKeywords.map((keyword) => keyword.keyword),
+    domainObservations,
+    siteStructureConfig.maxDomains,
+  );
+  const domains = selection.selected;
+  const omittedDomains = selection.omitted;
 
   logger(`Inspecting site structure for ${domains.length} domains (${omittedDomains.length} omitted due to maxDomains=${siteStructureConfig.maxDomains})`);
 
@@ -1498,8 +1512,9 @@ async function runSiteStructureModule(
   const SITE_STRUCTURE_VERSION = '1.0.0';
   const records: SiteStructureRecord[] = [];
   let fetchCount = 0;
-  let errorCount = 0;
-  let cacheHits = 0;
+  let networkErrors = 0;
+  let cachedSuccesses = 0;
+  let cachedErrors = 0;
 
   for (const domain of domains) {
     if (signal.cancelled) break;
@@ -1527,7 +1542,8 @@ async function runSiteStructureModule(
         try {
           record = JSON.parse(cached.data) as SiteStructureRecord;
           record.cacheStatus = 'hit';
-          cacheHits++;
+          if (record.homepageStatus === 'error' || record.homepageStatus === 'timeout') cachedErrors += 1;
+          else cachedSuccesses += 1;
         } catch {
           // fall through to fetch
         }
@@ -1544,16 +1560,13 @@ async function runSiteStructureModule(
         provenance?.bestPosition ?? null,
       );
       fetchCount++;
+      if (record.homepageStatus === 'error' || record.homepageStatus === 'timeout') networkErrors += 1;
 
       if (cache && cacheKey) {
         const status = record.robotsStatus === 'error' ? 'error' : 'ok';
         cache.set(cacheKey, `site://${domain}`, SITE_STRUCTURE_VERSION, JSON.stringify({ ...record, cacheStatus: 'none' }), status);
         record.cacheStatus = 'refreshed';
       }
-    }
-
-    if (record.homepageStatus === 'error' || record.homepageStatus === 'timeout') {
-      errorCount++;
     }
 
     records.push(record);
@@ -1608,7 +1621,7 @@ async function runSiteStructureModule(
     error: allDone ? null : `${targetStatus.pending} targets incomplete`,
   });
 
-  return { records, fetchCount, errorCount, cacheHits };
+  return { records, fetchCount, networkErrors, cachedSuccesses, cachedErrors };
 }
 
 async function inspectDomain(
@@ -1774,6 +1787,7 @@ function rebuildPagesFromTargets(enrichmentStore: RunStore, enrichmentId: string
           canonical: null,
           language: null,
           wordCount: null,
+          possiblyJsRendered: false,
           forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
           structuredDataTypes: [],
           sourceKeywords: JSON.parse(t.sourceKeywords),
@@ -1798,6 +1812,7 @@ function rebuildPagesFromTargets(enrichmentStore: RunStore, enrichmentId: string
         canonical: null,
         language: null,
         wordCount: null,
+        possiblyJsRendered: false,
         forms: { formCount: 0, textareaCount: 0, inputCount: 0, fileInputCount: 0, buttonCount: 0 },
         structuredDataTypes: [],
         sourceKeywords: JSON.parse(t.sourceKeywords),

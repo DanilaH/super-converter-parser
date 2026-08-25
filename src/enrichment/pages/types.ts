@@ -23,6 +23,7 @@ export type PageRecord = {
   canonical: string | null;
   language: string | null;
   wordCount: number | null;
+  possiblyJsRendered: boolean;
   forms: FormCounts;
   structuredDataTypes: string[];
   sourceKeywords: string[];

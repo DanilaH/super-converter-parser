@@ -67,6 +67,48 @@ npm run research -- --microsoft input/microsoft.csv --json-status
 
 Exact flag names may be adjusted during implementation if consistency improves, but the capabilities are required.
 
+## Output location and names
+
+Research outputs are durable and independent from the active git/Kilo worktree.
+
+Configure the root once in `.env`:
+
+```env
+RESEARCH_OUTPUT_ROOT=C:\\1Projects\\super-converter-parser-output
+```
+
+Resolution priority is `--output-root`, then `RESEARCH_OUTPUT_ROOT`, then
+`<home>/super-converter-parser-output`.
+
+Use `--name` for a short human label:
+
+```bash
+npm run research -- --seeds input/seeds.csv --name converters
+```
+
+Example layout:
+
+```text
+C:\\1Projects\\super-converter-parser-output\\
+  2026-08-25-converters\\
+    discovery\\
+    enrichment\\
+    results.zip
+```
+
+A second enrichment under the same research becomes `enrichment-02`. UUIDs remain
+inside SQLite/manifest and are still accepted by `--resume`, but are not used as
+the operator-facing folder name. The root contains an `index/` that lets both CLIs
+resolve run/enrichment IDs from any cwd or worktree.
+
+`results.zip` is atomically refreshed after a completed discovery or enrichment
+and contains the final discovery/enrichment artifacts. Debug files, caches, browser
+profiles, secrets, temporary files, and SQLite WAL/SHM files are excluded.
+
+Legacy `runs/<uuid>` and `enrichments/<uuid>` directories remain resumable when
+the CLI is launched from the checkout that contains them; they are not migrated
+automatically.
+
 ## Implemented CLI
 
 Currently implemented commands:
@@ -76,7 +118,7 @@ Currently implemented commands:
 npm run probe -- "compare lists"
 
 # Batch research from a seeds CSV (keyword column required)
-npm run research -- --seeds input/seeds.csv
+npm run research -- --seeds input/seeds.csv --name my-research
 
 # Expand direct seeds with Keyword Surfer related ideas (depth 1)
 npm run research -- --seeds input/seeds.csv --expand
@@ -498,7 +540,7 @@ Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `co
 
 ```
 runs/<run-id>/                        # Discovery outputs (immutable after completion)
-  run.sqlite                          # Durable source of truth (WAL, schema v14)
+  run.sqlite                          # Durable source of truth (WAL, schema v15)
   manifest.json                       # Config snapshot, parser versions, progress
   keywords.json                       # Per-keyword record (status, Surfer, geo, cache)
   serp.json                           # Organic SERP rows with provenance
@@ -587,6 +629,10 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
  - Google-sourced suggestions retain `volume`/`cpc` as `null`; this module never invents demand.
  - An absent sidebar/source is recorded truthfully as `unavailable`/`empty`/`error` — never as a fabricated successful row.
  - Reuses the TASK-009 research Chrome profile; never the user's daily profile. No proxy/anti-bot, no CAPTCHA bypass.
+ - When the source discovery run already contains a successful or truthful-empty
+   Surfer related result, enrichment reuses it with `cache_status=source_run`.
+   It does not repeat the browser lookup or replace valid discovery evidence with
+   a later `empty`/`unavailable` result.
  - Cached per (source + parent keyword + market/hl/gl + parser version) with source-appropriate TTL, so resume and repeat runs avoid re-hitting the browser.
  - Checkpointed per (parent, source) and Ctrl+C-pausable like every enrichment module.
 
@@ -613,7 +659,12 @@ Resolves domain registration date (via RDAP) and first-seen date (via Wayback Ma
 - `domain-age.csv` — domain, registration_date, registration_status, registration_source, first_seen_date, source_keywords, cache_status
 - `domain-age.json` — full per-domain records with provenance
 
-Domains are bounded to the shortlisted keywords. A configurable cap (`maxDomains` in code, currently 30) limits how many domains are resolved; the rest are recorded as `omitted`. RDAP/first-seen results are cached per TTL so repeated domains across keywords resolve once.
+Domains are bounded to the shortlisted keywords. A configurable cap (`maxDomains`
+in code, currently 30) limits how many domains are resolved; the rest are recorded
+as `omitted`. The cap is allocated round-robin by keyword and SERP position, so
+early keywords cannot consume the entire budget. A domain shared by multiple
+keywords consumes one slot while retaining every source keyword/rank. RDAP/first-seen
+results are cached per TTL so repeated domains across keywords resolve once.
 
 ### Ranking-page inspection
 
@@ -623,7 +674,15 @@ Fetches the top organic URLs for each shortlisted keyword and extracts page-leve
 - `pages.csv` — keyword, url, position, fetch_status, http_status, redirect_chain, canonical, title, is_canonical, form_counts, source_keywords
 - `pages.json` — full per-page records with provenance
 
-Pages are fetched through the shared HTTP client with SSRF protection. Failures are recorded per-page with `fetch_status` (`ok`/`error`/`redirect_loop`/`fetch_timeout`) and do not abort the run.
+Pages are fetched through the shared HTTP client with SSRF protection. Failures are recorded per-page with `fetch_status` (`ok`/`error`/`redirect_loop`/`fetch_timeout`) and do not abort the run. A successful static response that looks like a thin JavaScript app shell is marked `possibly_js_rendered=true`; this is a confidence warning, not a claim that the page is empty or is not a tool.
+
+Enrichment summaries separate current-run transport activity from cached outcomes:
+`networkRequestsThisRun`, `networkErrorsThisRun`, `cachedSuccesses`, and
+`cachedErrors`. Therefore a cached provider failure never appears as a new network
+error in a run that performed zero network requests.
+
+For a reproducible live check of the existing SERP-overlap clustering behavior,
+follow [`CLUSTERING_ACCEPTANCE.md`](./CLUSTERING_ACCEPTANCE.md).
 
 ### Site structure inspection
 

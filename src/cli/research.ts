@@ -1,7 +1,7 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
@@ -46,7 +46,8 @@ import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
-import { createRunDirectory, createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
+import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
+import { allocateResearchLocation, archiveResearchDirectory, resolveOutputRoot, resolveRunLocation, writeRunIndex } from '../outputs/researchLayout.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { ResearchError } from '../shared/errors.js';
@@ -71,6 +72,8 @@ type CliOptions = {
   expand: boolean;
   jsonStatus: boolean;
   requireAhrefs: boolean;
+  outputRoot: string | null;
+  name: string | null;
 };
 
 // Browser-side pieces are injected so the CLI flow can be integration-tested
@@ -115,6 +118,8 @@ function parseArgs(argv: string[]): CliOptions {
     expand: false,
     jsonStatus: false,
     requireAhrefs: false,
+    outputRoot: null,
+    name: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -135,6 +140,14 @@ function parseArgs(argv: string[]): CliOptions {
       options.jsonStatus = true;
     } else if (arg === '--require-ahrefs') {
       options.requireAhrefs = true;
+    } else if (arg === '--output-root') {
+      options.outputRoot = argv[index + 1] ?? null;
+      if (!options.outputRoot) throw new ResearchError('INPUT_SCHEMA_ERROR', '--output-root requires an absolute path.');
+      index += 1;
+    } else if (arg === '--name') {
+      options.name = argv[index + 1] ?? null;
+      if (!options.name) throw new ResearchError('INPUT_SCHEMA_ERROR', '--name requires a label.');
+      index += 1;
     } else if (arg === '--refresh-keyword') {
       const value = argv[index + 1];
       if (value === undefined) {
@@ -168,10 +181,13 @@ function printUsage(): void {
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --expand-surfer      Alias for --expand (clarity flag).');
   console.log('  --require-ahrefs     Require Ahrefs DR: fail if AHREFS_API_KEY is missing/blank.');
+  console.log('  --output-root <path> Absolute durable output root (overrides RESEARCH_OUTPUT_ROOT).');
+  console.log('  --name <label>       Human-readable research folder label.');
   console.log('  --json-status       Print a single compact JSON status line as the final stdout line.');
   console.log('  --refresh-keyword <q> Re-collect this keyword even if cached (repeatable; it must be one of the run keywords).');
   console.log('');
   console.log('Environment:');
+  console.log('  RESEARCH_OUTPUT_ROOT         Durable output root (default <home>/super-converter-parser-output)');
   console.log('  CDP_URL                      Research Chrome debugging endpoint (default http://127.0.0.1:9222)');
   console.log('  SURFER_WAIT_MS               Max wait for Keyword Surfer data in ms (default 60000)');
   console.log('  SURFER_PREFLIGHT_TIMEOUT_MS  Max wait for Surfer injection during preflight in ms (default 60000)');
@@ -337,6 +353,8 @@ export async function runCli(
   let cacheStore: CacheStore | null = null;
   let runId = '';
   let runDirectory = '';
+  let researchDirectory = '';
+  let archivePath = '';
   let debugRoot = '';
   try {
     const config = loadConfig(env);
@@ -347,19 +365,18 @@ export async function runCli(
     let refreshKeywords: string[] = [];
     let runConfig = config;
 
+    const outputRoot = resolveOutputRoot(options.outputRoot, env);
+
     if (options.resumeRunId) {
       runId = options.resumeRunId;
-      runDirectory = `runs/${runId}`;
-      debugRoot = `debug/${runId}`;
+      const location = await resolveRunLocation(outputRoot, runId);
+      runDirectory = location.discoveryDirectory;
+      researchDirectory = location.researchDirectory;
+      archivePath = location.archivePath;
+      debugRoot = location.legacy ? resolve(process.cwd(), 'debug', runId) : join(researchDirectory, 'debug');
       mode = 'resume';
 
-      const storePath = `${runDirectory}/run.sqlite`;
-      if (!existsSync(storePath)) {
-        throw new ResearchError(
-          'RESUME_NOT_FOUND',
-          `No run store found for run "${runId}" (expected ${storePath}). Use --seeds to start a new run.`,
-        );
-      }
+      const storePath = join(runDirectory, 'run.sqlite');
       store = RunStore.open(storePath);
       const run = validateResume(store, runId);
       runConfig = effectiveConfigForResume(config, run.configSnapshot, runId);
@@ -369,30 +386,15 @@ export async function runCli(
       console.log('');
       console.log(`[resume] ${runId} (state: ${run.state}, parser ${run.parserVersions.surfer}/${run.parserVersions.google})`);
       await ensureWritableDirectory(runDirectory);
-      console.log(`  ✓ runs/${runId} writable`);
+      console.log(`  ✓ ${runDirectory} writable`);
       await ensureWritableDirectory(debugRoot);
-      console.log(`  ✓ debug/${runId} writable`);
+      console.log(`  ✓ ${debugRoot} writable`);
     } else {
-      runId = createRunId();
-      runDirectory = `runs/${runId}`;
-      debugRoot = `debug/${runId}`;
       mode = 'fresh';
       input = options.microsoftPath
         ? { kind: 'microsoft', path: options.microsoftPath as string }
         : { kind: 'seeds', path: options.seedsPath as string };
 
-      console.log('Utility Research Runner');
-      console.log('');
-      console.log('[preflight]');
-      await createRunDirectory(runDirectory);
-      console.log(`  ✓ runs/${runId} writable`);
-      await ensureWritableDirectory(debugRoot);
-      console.log(`  ✓ debug/${runId} writable`);
-      store = RunStore.open(`${runDirectory}/run.sqlite`);
-      console.log(`  ✓ runs/${runId}/run.sqlite initialized (schema v${store.version})`);
-    }
-
-    if (mode === 'fresh') {
       if (options.microsoftPath) {
         const rows = await loadMicrosoftRows(options.microsoftPath);
         keywords = buildMicrosoftKeywords(rows);
@@ -402,6 +404,29 @@ export async function runCli(
         keywords = buildSeedKeywords(rows);
         console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
       }
+      if (keywords.length === 0) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', 'Input contains no research keywords.');
+      }
+
+      runId = createRunId();
+      const location = await allocateResearchLocation(outputRoot, options.name ?? keywords[0]!.keyword);
+      runDirectory = location.discoveryDirectory;
+      researchDirectory = location.researchDirectory;
+      archivePath = location.archivePath;
+      debugRoot = join(researchDirectory, 'debug');
+
+      console.log('Utility Research Runner');
+      console.log('');
+      console.log('[preflight]');
+      await ensureWritableDirectory(runDirectory);
+      await ensureWritableDirectory(debugRoot);
+      store = RunStore.open(join(runDirectory, 'run.sqlite'));
+      await writeRunIndex(outputRoot, { version: 1, runId, researchDirectory, discoveryDirectory: runDirectory });
+      console.log(`  ✓ research directory: ${researchDirectory}`);
+      console.log(`  ✓ run.sqlite initialized (schema v${store.version})`);
+    }
+
+    if (mode === 'fresh') {
       refreshKeywords = validateRefreshKeywords(
         options.refreshKeywords,
         keywords.map((item) => item.normalizedKeyword),
@@ -617,11 +642,20 @@ export async function runCli(
     if (outcome.scoringCompleteness) {
       console.log(`  Scoring completeness: ${outcome.scoringCompleteness.status}`);
     }
-    console.log(`  Artifacts: runs/${runId}/ (manifest.json, keywords.json, serp.json, keywords.csv, serp.csv, related-keywords.csv, domains.csv, candidates.csv, report.md, status.json)`);
-    console.log(`  CSV: runs/${runId}/keywords.csv`);
-    console.log(`  CSV: runs/${runId}/serp.csv`);
+    console.log(`  Artifacts: ${runDirectory}`);
+    console.log(`  CSV: ${join(runDirectory, 'keywords.csv')}`);
+    console.log(`  CSV: ${join(runDirectory, 'serp.csv')}`);
     if (options.jsonStatus && store) {
       console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness)));
+    }
+    store.close();
+    store = null;
+    try {
+      archivePath = await archiveResearchDirectory(researchDirectory);
+      console.log(`  Archive: ${archivePath}`);
+    } catch (archiveError) {
+      const message = archiveError instanceof Error ? archiveError.message : String(archiveError);
+      console.error(`  Archive warning: ${message}`);
     }
     return EXIT_OK;
   } catch (error) {
