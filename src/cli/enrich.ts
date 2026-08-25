@@ -2,6 +2,7 @@ import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
+import { loadDotEnv } from '../config/env.js';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
@@ -31,33 +32,6 @@ import {
 } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 import { allocateEnrichmentDirectory, archiveResearchDirectory, resolveEnrichmentLocation, resolveOutputRoot, resolveRunLocation, writeEnrichmentIndex } from '../outputs/researchLayout.js';
-
-function loadDotEnv(): void {
-  const envPath = resolve(process.cwd(), '.env');
-  if (!existsSync(envPath)) return;
-  try {
-    const content = readFileSync(envPath, 'utf8');
-    for (const rawLine of content.split('\n')) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const eqIndex = line.indexOf('=');
-      if (eqIndex === -1) continue;
-      const key = line.slice(0, eqIndex).trim();
-      let value = line.slice(eqIndex + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (key && process.env[key] === undefined) {
-        process.env[key] = value;
-      }
-    }
-  } catch {
-    // ignore
-  }
-}
 
 loadDotEnv();
 
@@ -98,6 +72,7 @@ const DEFAULT_SITE_STRUCTURE_CONFIG: EnrichmentSiteStructureConfig = {
 const DEFAULT_CACHE_DB_PATH = 'data/cache/enrichment_http_cache.sqlite';
 
 interface ParsedArgs {
+  help: boolean;
   sourceRunId: string;
   resumeEnrichmentId: string;
   modules: EnrichmentModuleId[];
@@ -112,8 +87,17 @@ interface ParsedArgs {
   outputRoot: string | null;
 }
 
+function nextOptionValue(args: string[], option: string): string {
+  const value = args.shift();
+  if (!value || value.startsWith('-')) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `${option} requires a value`);
+  }
+  return value;
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const args = [...argv];
+  let help = false;
   let sourceRunId = '';
   let resumeEnrichmentId = '';
   let modules: EnrichmentModuleId[] = ['clusters'];
@@ -129,13 +113,14 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   while (args.length > 0) {
     const arg = args.shift();
-    if (arg === '--run') {
-      sourceRunId = args.shift() ?? '';
+    if (arg === '--help' || arg === '-h') {
+      help = true;
+    } else if (arg === '--run') {
+      sourceRunId = nextOptionValue(args, '--run');
     } else if (arg === '--resume') {
-      resumeEnrichmentId = args.shift() ?? '';
+      resumeEnrichmentId = nextOptionValue(args, '--resume');
     } else if (arg === '--modules') {
-      const value = args.shift();
-      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--modules requires a value');
+      const value = nextOptionValue(args, '--modules');
       const parsed = value.split(',').map((m) => m.trim()).filter(Boolean);
       if (parsed.length === 0) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--modules must contain at least one module');
@@ -150,8 +135,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       modules = parsed as EnrichmentModuleId[];
     } else if (arg === '--top-n') {
-      const value = args.shift();
-      if (!value || Number.isNaN(Number(value))) {
+      const value = nextOptionValue(args, '--top-n');
+      if (Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--top-n requires a numeric value');
       }
       const parsed = Number(value);
@@ -160,8 +145,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       topN = parsed;
     } else if (arg === '--min-shared') {
-      const value = args.shift();
-      if (!value || Number.isNaN(Number(value))) {
+      const value = nextOptionValue(args, '--min-shared');
+      if (Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-shared requires a numeric value');
       }
       const parsed = Number(value);
@@ -170,21 +155,18 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       minShared = parsed;
     } else if (arg === '--min-jaccard') {
-      const value = args.shift();
-      if (!value || Number.isNaN(Number(value))) {
+      const value = nextOptionValue(args, '--min-jaccard');
+      if (Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-jaccard requires a numeric value');
       }
       minJaccard = Number(value);
     } else if (arg === '--shortlist') {
-      const value = args.shift();
-      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist requires a value');
+      const value = nextOptionValue(args, '--shortlist');
       shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
     } else if (arg === '--shortlist-file') {
-      shortlistFile = args.shift() ?? '';
-      if (!shortlistFile) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist-file requires a path');
+      shortlistFile = nextOptionValue(args, '--shortlist-file');
     } else if (arg === '--sources') {
-      const value = args.shift();
-      if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources requires a value');
+      const value = nextOptionValue(args, '--sources');
       const parsed = value.split(',').map((s) => s.trim()).filter(Boolean) as QuerySuggestionSource[];
       if (parsed.length === 0) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources must contain at least one source');
@@ -196,8 +178,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       sources = parsed;
     } else if (arg === '--max-suggestions-per-source') {
-      const value = args.shift();
-      if (!value || Number.isNaN(Number(value))) {
+      const value = nextOptionValue(args, '--max-suggestions-per-source');
+      if (Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-suggestions-per-source requires a numeric value');
       }
       const parsed = Number(value);
@@ -206,11 +188,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       maxSuggestions = parsed;
     } else if (arg === '--output-root') {
-      outputRoot = args.shift() ?? null;
-      if (!outputRoot) throw new ResearchError('INPUT_SCHEMA_ERROR', '--output-root requires an absolute path');
+      outputRoot = nextOptionValue(args, '--output-root');
     } else if (arg === '--max-parents') {
-      const value = args.shift();
-      if (!value || Number.isNaN(Number(value))) {
+      const value = nextOptionValue(args, '--max-parents');
+      if (Number.isNaN(Number(value))) {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-parents requires a numeric value');
       }
       const parsed = Number(value);
@@ -221,6 +202,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
+  }
+
+  if (help) {
+    return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
   }
 
   if (topN <= 0) {
@@ -240,7 +225,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist and --shortlist-file are mutually exclusive');
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
+  return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
 }
 
 function loadShortlistFile(path: string): string[] {
@@ -269,6 +254,23 @@ function loadShortlistFile(path: string): string[] {
   }
 
   return content.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+function printUsage(): void {
+  console.log('Utility Research Enrichment');
+  console.log('');
+  console.log('Usage:');
+  console.log('  npm run enrich -- --run <run-id> --modules <modules> --shortlist-file <path>');
+  console.log('  npm run enrich -- --resume <enrichment-id>');
+  console.log('');
+  console.log('Modules: clusters, query_suggestions, domain_age, pages, site_structure');
+  console.log('Options:');
+  console.log('  --shortlist <a,b,...>       Inline shortlist of 5-200 keywords.');
+  console.log('  --shortlist-file <path>     TXT (one per line) or CSV with a keyword column.');
+  console.log('  --sources <a,b,...>         Query-suggestion sources.');
+  console.log('  --max-parents <5-200>       Query-suggestion parent cap (default 200).');
+  console.log('  --output-root <path>        Durable output root.');
+  console.log('  --help, -h                  Show this help.');
 }
 
 function buildEnrichmentConfig(
@@ -342,6 +344,10 @@ async function main(): Promise<void> {
 
   try {
     const args = parseArgs(process.argv.slice(2));
+    if (args.help) {
+      printUsage();
+      return;
+    }
 
     if (!args.sourceRunId && !args.resumeEnrichmentId) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run <source-run-id> or --resume <enrichment-id> is required');

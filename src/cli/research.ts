@@ -1,7 +1,7 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { loadDotEnv } from '../config/env.js';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { loadConfig, type ResearchConfig } from '../config/config.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
@@ -9,35 +9,6 @@ import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords, normalizeKeyword, type SeedKeyword } from '../input/seeds/normalize.js';
 import { loadMicrosoftRows } from '../input/microsoft/load.js';
-
-// Minimal .env loader: only sets variables not already present in process.env,
-// so explicit shell/env values always win. No dependency required.
-function loadDotEnv(): void {
-  const envPath = resolve(process.cwd(), '.env');
-  if (!existsSync(envPath)) return;
-  try {
-    const content = readFileSync(envPath, 'utf8');
-    for (const rawLine of content.split('\n')) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const eqIndex = line.indexOf('=');
-      if (eqIndex === -1) continue;
-      const key = line.slice(0, eqIndex).trim();
-      let value = line.slice(eqIndex + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (key && process.env[key] === undefined) {
-        process.env[key] = value;
-      }
-    }
-  } catch {
-    // Silently ignore unreadable .env; env vars and defaults still work.
-  }
-}
 
 loadDotEnv();
 import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
@@ -108,6 +79,14 @@ export const DEFAULT_CLI_DEPS: CliDeps = {
   collectRelated: collectRelatedKeyword,
 };
 
+function optionValue(argv: string[], index: number, option: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith('-')) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `${option} requires a value.`);
+  }
+  return value;
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     seedsPath: null,
@@ -124,13 +103,13 @@ function parseArgs(argv: string[]): CliOptions {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
     if (arg === '--seeds') {
-      options.seedsPath = argv[index + 1] ?? null;
+      options.seedsPath = optionValue(argv, index, '--seeds');
       index += 1;
     } else if (arg === '--microsoft') {
-      options.microsoftPath = argv[index + 1] ?? null;
+      options.microsoftPath = optionValue(argv, index, '--microsoft');
       index += 1;
     } else if (arg === '--resume') {
-      options.resumeRunId = argv[index + 1] ?? null;
+      options.resumeRunId = optionValue(argv, index, '--resume');
       index += 1;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
@@ -141,23 +120,17 @@ function parseArgs(argv: string[]): CliOptions {
     } else if (arg === '--require-ahrefs') {
       options.requireAhrefs = true;
     } else if (arg === '--output-root') {
-      options.outputRoot = argv[index + 1] ?? null;
-      if (!options.outputRoot) throw new ResearchError('INPUT_SCHEMA_ERROR', '--output-root requires an absolute path.');
+      options.outputRoot = optionValue(argv, index, '--output-root');
       index += 1;
     } else if (arg === '--name') {
-      options.name = argv[index + 1] ?? null;
-      if (!options.name) throw new ResearchError('INPUT_SCHEMA_ERROR', '--name requires a label.');
+      options.name = optionValue(argv, index, '--name');
       index += 1;
     } else if (arg === '--refresh-keyword') {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new ResearchError(
-          'INPUT_SCHEMA_ERROR',
-          '--refresh-keyword requires a keyword argument, e.g. --refresh-keyword "json diff".',
-        );
-      }
+      const value = optionValue(argv, index, '--refresh-keyword');
       options.refreshKeywords.push(value);
       index += 1;
+    } else {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     }
   }
   return options;
