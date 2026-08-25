@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
+import { parse } from 'csv-parse/sync';
 import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
@@ -104,6 +105,7 @@ interface ParsedArgs {
   minShared: number;
   minJaccard: number;
   shortlist: string[];
+  shortlistFile: string;
   sources: QuerySuggestionSource[];
   maxSuggestions: number;
   maxParents: number;
@@ -119,6 +121,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let minShared = 3;
   let minJaccard = 0.3;
   let shortlist: string[] = [];
+  let shortlistFile = '';
   let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
   let maxSuggestions = 20;
   let maxParents = 200;
@@ -176,6 +179,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist requires a value');
       shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (arg === '--shortlist-file') {
+      shortlistFile = args.shift() ?? '';
+      if (!shortlistFile) throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist-file requires a path');
     } else if (arg === '--sources') {
       const value = args.shift();
       if (!value) throw new ResearchError('INPUT_SCHEMA_ERROR', '--sources requires a value');
@@ -230,7 +236,39 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
 
-  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, sources, maxSuggestions, maxParents, outputRoot };
+  if (shortlist.length > 0 && shortlistFile) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist and --shortlist-file are mutually exclusive');
+  }
+
+  return { sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
+}
+
+function loadShortlistFile(path: string): string[] {
+  let content: string;
+  try {
+    content = readFileSync(resolve(path), 'utf8');
+  } catch (error) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Cannot read shortlist file "${path}".`, { cause: error });
+  }
+  if (content.trim() === '') {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Shortlist file "${path}" is empty.`);
+  }
+
+  if (extname(path).toLowerCase() === '.csv') {
+    let records: Array<Record<string, string>>;
+    try {
+      records = parse(content, { columns: true, skip_empty_lines: true, bom: true, trim: false }) as Array<Record<string, string>>;
+    } catch (error) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Shortlist file "${path}" is not valid CSV.`, { cause: error });
+    }
+    const keywordColumn = Object.keys(records[0] ?? {}).find((column) => column.trim().toLowerCase() === 'keyword');
+    if (!keywordColumn) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Shortlist CSV "${path}" must have a "keyword" column.`);
+    }
+    return records.map((record) => String(record[keywordColumn] ?? '').trim()).filter(Boolean);
+  }
+
+  return content.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#'));
 }
 
 function buildEnrichmentConfig(
@@ -312,7 +350,7 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
     }
     if (args.resumeEnrichmentId) {
-      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--sources', '--max-suggestions-per-source', '--max-parents'];
+      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--shortlist-file', '--sources', '--max-suggestions-per-source', '--max-parents'];
       const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
       if (supplied.length > 0) {
         throw new ResearchError(
@@ -320,6 +358,10 @@ async function main(): Promise<void> {
           `Resume reuses persisted config/shortlist; remove: ${supplied.join(', ')}`,
         );
       }
+    }
+
+    if (args.shortlistFile) {
+      args.shortlist = loadShortlistFile(args.shortlistFile);
     }
 
     const config: ResearchConfig = loadConfig(process.env);
