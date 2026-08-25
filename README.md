@@ -411,23 +411,142 @@ Do not spend another project phase re-proving the same single-query spike.
 
 After a discovery run completes, enrichment modules derive additional signals from the persisted data without opening Chrome or calling external APIs.
 
- ```bash
- npm run enrich -- --run <source-run-id> --modules clusters
+### Operator guide
 
- # Collect factual Google query-language suggestions (does NOT expand the discovery queue)
- npm run enrich -- --run <source-run-id> --modules query_suggestions
- npm run enrich -- --run <source-run-id> --modules clusters,query_suggestions
+#### 1. Environment preparation
 
- # Limit sources or cap suggestions per source
- npm run enrich -- --run <source-run-id> --modules query_suggestions \
-   --sources google_autocomplete,google_related_search,google_paa,surfer_related \
-   --max-suggestions-per-source 20
+```bash
+# .env is gitignored; copy the template and adjust
+copy .env.example .env
 
- # Resume the same enrichment ID after Ctrl+C
- npm run enrich -- --resume <enrichment-id>
- ```
+# Required: Research Chrome running with CDP port open
+# (see ACCEPTANCE.md for the space-free profile workaround)
+set CDP_URL=http://127.0.0.1:9333
 
- ### SERP-overlap clustering
+# Optional: Ahrefs DR (skipped honestly when unset)
+set AHREFS_API_KEY=your-key
+```
+
+#### 2. Discovery run
+
+```bash
+# Cold run from seeds
+npm run research -- --seeds input/seeds.csv
+
+# With Surfer related-keyword expansion (depth 1)
+npm run research -- --seeds input/seeds.csv --expand
+
+# Machine-readable final status
+npm run research -- --seeds input/seeds.csv --json-status
+```
+
+#### 3. Shortlist selection
+
+After discovery, inspect `runs/<run-id>/candidates.csv` and choose 5-30 keywords for deep enrichment. The shortlist is passed verbatim to `--shortlist` (comma-separated, must be discovery keywords).
+
+#### 4. Running individual deep modules
+
+```bash
+# SERP-overlap clustering only
+npm run enrich -- --run <source-run-id> --modules clusters
+
+# Query-language suggestions (requires --shortlist)
+npm run enrich -- --run <source-run-id> --modules query_suggestions \
+  --shortlist "keyword one,keyword two,keyword three,four,five"
+
+# Domain registration age (requires --shortlist)
+npm run enrich -- --run <source-run-id> --modules domain_age \
+  --shortlist "keyword one,keyword two,keyword three,four,five"
+
+# Ranking pages inspection (requires --shortlist)
+npm run enrich -- --run <source-run-id> --modules pages \
+  --shortlist "keyword one,keyword two,keyword three,four,five"
+
+# Site structure inspection (requires --shortlist)
+npm run enrich -- --run <source-run-id> --modules site_structure \
+  --shortlist "keyword one,keyword two,keyword three,four,five"
+```
+
+#### 5. Combined run (all modules)
+
+```bash
+npm run enrich -- --run <source-run-id> \
+  --modules clusters,query_suggestions,domain_age,pages,site_structure \
+  --shortlist "keyword one,keyword two,keyword three,four,five"
+```
+
+#### 6. Pause / resume
+
+```bash
+# Ctrl+C during enrichment -> exit 130, run marked paused
+# Resume with the SAME enrichment ID (no other flags needed)
+npm run enrich -- --resume <enrichment-id>
+```
+
+Resume skips completed modules (`clusters`, `domain_age`, `pages`) and continues from where it stopped. The enrichment ID is printed at creation and on pause.
+
+#### 7. Warm cache rerun
+
+```bash
+# Second identical discovery run: cache hits for valid entries
+npm run research -- --seeds input/seeds.csv
+```
+
+Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `completed` entry uses the long TTL (default 7d); a `failed`/`partial` entry uses a short TTL (1h/6h) and may trigger a fresh lookup on the warm run. Zero browser lookups is only guaranteed when both primary and related cache entries are still valid.
+
+#### 8. Artifact locations
+
+```
+runs/<run-id>/                        # Discovery outputs (immutable after completion)
+  run.sqlite                          # Durable source of truth (WAL, schema v14)
+  manifest.json                       # Config snapshot, parser versions, progress
+  keywords.json                       # Per-keyword record (status, Surfer, geo, cache)
+  serp.json                           # Organic SERP rows with provenance
+  keywords.csv                        # Keyword-level summary
+  serp.csv                            # One row per organic result
+  related-keywords.csv                # Surfer related ideas
+  domains.csv                         # Unique domains + DR
+  candidates.csv                      # Scored, ranked candidates
+  report.md                           # Human-readable summary
+  status.json                         # Machine-readable terminal status
+
+enrichments/<enrichment-id>/          # Enrichment outputs
+  enrichment.sqlite                   # Per-item checkpoints
+  keyword-clusters.csv / .json        # SERP-overlap clusters
+  query-suggestions.csv / .json       # Collected query-language suggestions
+  domain-age.csv / .json              # Registration date + first-seen
+  pages.csv / .json                   # Ranking-page inspection
+  site-structure.csv / .json          # Robots/sitemap sampling
+  manifest.json                       # Modules, config, shortlist, summary
+  status.json                         # Machine-readable terminal status
+
+data/cache/cache.sqlite               # Persistent cross-run cache (keyword/related/DR)
+debug/<run-id>/                       # Parser-failure evidence (page.html/page.png/context)
+```
+
+#### 9. Status / error / cache counters
+
+| Counter | Meaning |
+| --- | --- |
+| `status` | `pending` / `running` / `completed` / `partial` / `failed` |
+| `cache_status` | `hit` / `miss` / `expired` / `refreshed` (mutually exclusive, sum = processed) |
+| `ahrefs.state` | `complete` / `partial` / `skipped` |
+| `collection_status` (suggestions) | `ok` / `empty` / `unavailable` / `error` |
+| `geo_warning` | `true` when detected Google location differs from target market |
+| `parser debug artifacts` | Saved to `debug/<run-id>/` on Surfer/Google parse failures |
+
+#### 10. Known limitations
+
+- **Related-keywords widget**: in a copied/free Surfer profile the `keyword-surfer-sidebar` often does not render. This produces a structured `related.status = 'error'` (or `unavailable` in enrichment) and is non-fatal: main volume/CPC/organic data is still collected. Debug evidence is retained.
+- **Geo mismatch**: `gl=us` does not guarantee a truly US-localized SERP. The detected physical Google location is recorded separately and a `geo_warning` is surfaced when it differs from the target market.
+- **CAPTCHA**: the run pauses for manual intervention. In a background (non-TTY) run it polls for the marker file `CAPTCHA_DONE_MARKER` (default `C:\tmp\captcha-done.txt`); create the file after solving CAPTCHA in Research Chrome.
+- **Resume display bug**: on resume, `summary.querySourceStats` in `manifest.json` may show zeros while the actual data in `query-suggestions.csv` / `.json` is correct.
+
+#### 11. TASK-015: paid SEO metrics (BLOCKED_BY_PROVIDER)
+
+Page backlinks, URL Rating, organic traffic, ranking keywords, top pages, and top keywords are **not collected**. They require a paid SEO API to which the project has no access/budget. These metrics appear as `unavailable`/`null` in outputs, never as successfully gathered data. Their absence does not block other modules or the final run. This module can be implemented later when suitable API access becomes available.
+
+### SERP-overlap clustering
 
 Clusters keywords by comparing normalized registrable-domain sets from their organic SERPs (top N, default 10).
 
@@ -479,6 +598,39 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
  **Outputs:**
 
  - `query-suggestions.csv` — normalized_suggestion, raw_text, parent_keywords, sources, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences
- - `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
- - `manifest.json` / `status.json` — include the same artifacts and summary counts
- - SQLite state in `enrichments/<enrichment-id>/enrichment.sqlite`
+  - `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
+  - `manifest.json` / `status.json` — include the same artifacts and summary counts
+  - SQLite state in `enrichments/<enrichment-id>/enrichment.sqlite`
+
+### Domain registration age
+
+Resolves domain registration date (via RDAP) and first-seen date (via Wayback Machine CDX) for registrable domains observed in the shortlisted keywords' SERPs.
+
+**Configurable flags (domain_age only):**
+- `--max-parents <n>` — cap shortlisted keywords processed (default 30, range 5-30)
+
+**Outputs:**
+- `domain-age.csv` — domain, registration_date, registration_status, registration_source, first_seen_date, source_keywords, cache_status
+- `domain-age.json` — full per-domain records with provenance
+
+Domains are bounded to the shortlisted keywords. A configurable cap (`maxDomains` in code, currently 30) limits how many domains are resolved; the rest are recorded as `omitted`. RDAP/first-seen results are cached per TTL so repeated domains across keywords resolve once.
+
+### Ranking-page inspection
+
+Fetches the top organic URLs for each shortlisted keyword and extracts page-level signals (title, meta, canonical, redirect chain, status, form counts).
+
+**Outputs:**
+- `pages.csv` — keyword, url, position, fetch_status, http_status, redirect_chain, canonical, title, is_canonical, form_counts, source_keywords
+- `pages.json` — full per-page records with provenance
+
+Pages are fetched through the shared HTTP client with SSRF protection. Failures are recorded per-page with `fetch_status` (`ok`/`error`/`redirect_loop`/`fetch_timeout`) and do not abort the run.
+
+### Site structure inspection
+
+Samples each domain's `robots.txt` and sitemap(s) to derive crawl-structure signals.
+
+**Outputs:**
+- `site-structure.csv` — domain, robots_status, sitemap_status, sitemap_count, sampled_urls, allows_all, disallows_all
+- `site-structure.json` — full per-domain records
+
+Sampling is bounded (`maxSitemapFiles`, `maxUrlsPerSitemap`, `maxSampleUrls`, `maxDomains`) so the run stays tractable. Absent robots/sitemap is recorded truthfully as `unavailable`, not as a fabricated success.

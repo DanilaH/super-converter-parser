@@ -541,6 +541,9 @@ test('runEnrichment: domain_age resolves domains and writes artifacts', async ()
     cacheStore,
     rdapClient: makeRdap(rdapCalls),
     firstSeenClient: makeFirstSeen(fsCalls),
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   });
 
@@ -594,6 +597,9 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
     cacheStore,
     rdapClient: makeRdap(rdapCalls),
     firstSeenClient: makeFirstSeen({ value: 0 }),
+    httpConfig: HTTP_CONFIG,
+    pagesConfig: PAGES_CONFIG,
+    siteStructureConfig: SITE_STRUCTURE_CONFIG,
     logger: () => {},
   };
 

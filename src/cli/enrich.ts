@@ -5,7 +5,7 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
 import { createRunDirectory, createRunId } from '../runs/run.js';
-import { runEnrichment } from '../enrichment/engine.js';
+import { runEnrichment, type EnrichmentHttpConfig, type EnrichmentPagesConfig, type EnrichmentSiteStructureConfig } from '../enrichment/engine.js';
 import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from '../enrichment/cache.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
@@ -499,61 +499,37 @@ async function main(): Promise<void> {
     } else if (outcome.kind === 'completed') {
       console.log('');
       console.log(`Artifacts: ${enrichmentDirectory}/`);
-      if (outcome.result) {
-        console.log(`Clusters: ${outcome.result.clusters.length}`);
+      if (outcome.domainAgeRecords) {
+        console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
+      }
+      if (outcome.result?.clusters) {
+        console.log(`Clusters: ${outcome.result.clusters.clusters.length}`);
+      }
+      if (outcome.result?.pages) {
+        console.log(`Pages: ${outcome.result.pages.length}`);
+      }
+      if (outcome.result?.siteStructure) {
+        console.log(`Site structure domains: ${outcome.result.siteStructure.length}`);
+      }
+      if (outcome.result?.clusters) {
         console.log('  keyword-clusters.csv');
         console.log('  keyword-clusters.json');
       }
       if (outcome.domainAgeRecords) {
-        console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
         console.log('  domain-age.csv');
         console.log('  domain-age.json');
       }
-      if (modules.includes('query_suggestions')) {
-        console.log('  query-suggestions.csv');
-        console.log('  query-suggestions.json');
-      }
-      console.log('  manifest.json');
-      console.log('  status.json');
-      console.log('');
-      console.log(`Artifacts: ${enrichmentDirectory}/`);
-      if (outcome.result) {
-        console.log(`Clusters: ${outcome.result.clusters.length}`);
-        console.log('  keyword-clusters.csv');
-        console.log('  keyword-clusters.json');
-      }
-      if (modules.includes('query_suggestions')) {
-        console.log('  query-suggestions.csv');
-        console.log('  query-suggestions.json');
-      }
-      console.log('  manifest.json');
-      console.log('  status.json');
-    } else if (outcome.kind === 'completed' && outcome.domainAgeRecords) {
-      console.log('');
-      console.log(`Domains enriched: ${outcome.domainAgeRecords.size}`);
-      if (outcome.result.clusters) {
-        console.log(`Clusters: ${outcome.result.clusters.clusters.length}`);
-      }
-      if (outcome.result.pages) {
-        console.log(`Pages: ${outcome.result.pages.length}`);
-      }
-      if (outcome.result.siteStructure) {
-        console.log(`Domains: ${outcome.result.siteStructure.length}`);
-      }
-      console.log(`Artifacts: ${enrichmentDirectory}/`);
-      console.log('  domain-age.csv');
-      console.log('  domain-age.json');
-      if (outcome.result.clusters) {
-        console.log('  keyword-clusters.csv');
-        console.log('  keyword-clusters.json');
-      }
-      if (outcome.result.pages) {
+      if (outcome.result?.pages) {
         console.log('  pages.csv');
         console.log('  pages.json');
       }
-      if (outcome.result.siteStructure) {
+      if (outcome.result?.siteStructure) {
         console.log('  site-structure.csv');
         console.log('  site-structure.json');
+      }
+      if (modules.includes('query_suggestions')) {
+        console.log('  query-suggestions.csv');
+        console.log('  query-suggestions.json');
       }
       console.log('  manifest.json');
       console.log('  status.json');

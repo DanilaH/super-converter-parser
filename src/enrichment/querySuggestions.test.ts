@@ -704,8 +704,11 @@ test('resume does not re-hit the browser for completed (parent, source) items', 
     researchConfig: config,
     debugRoot: '/tmp/enr-3/debug',
   });
+  assert.equal(collector2.openCalls, 0, 'fully completed resume must not open the browser');
   assert.equal(collector2.collectCalls, 0, 'resume must not re-collect completed items');
   assert.equal(second.suggestions.length, 19);
+  assert.deepEqual(second.sourceStats, first.sourceStats, 'resume must rebuild complete source stats from SQLite');
+  assert.ok(Object.values(second.sourceStats).some((stats) => stats.ok > 0 || stats.empty > 0));
   assert.ok(collectCallsAfterFirst > 0);
 });
 
@@ -1268,4 +1271,220 @@ test('maxParents limit prevents accidental large batches', async () => {
     }),
     (error: Error) => error.message.includes('Too many parent keywords'),
   );
+});
+
+test('fully completed resume: no browser work, sourceStats preserved from SQLite', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  const enrichmentId = 'enr-resume-full';
+
+  createTestEnrichmentRun(enrichmentStore, enrichmentId, sourceRunId, config);
+
+  const fetchedAt = '2026-01-01T00:00:00.000Z';
+  const sources: QuerySuggestionSource[] = ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'];
+  const parents = testShortlist();
+
+  // Pre-populate SQLite as if a previous (interrupted) run completed every (parent, source) pair.
+  for (const parent of parents) {
+    const normalizedParent = normalizeKeyword(parent);
+    const sourceResults = sources.map((source) => ({
+      source,
+      status: 'ok',
+      error: null,
+      fetchedAt,
+      requestCount: 1,
+      cacheStatus: 'none',
+      parserVersion: '1.0.0',
+    }));
+    const suggestions = [{
+      normalizedSuggestion: normalizeKeyword(`${parent} extra`),
+      rawText: `${parent} extra`,
+      volume: 100,
+      cpc: null,
+      ordinal: 0,
+      collectionStatus: 'ok',
+      occurrences: [{
+        parentKeyword: parent,
+        normalizedParent,
+        source: 'surfer_related',
+        market: config.research.market,
+        hl: config.research.googleHl,
+        gl: config.research.googleGl,
+        parserVersion: '1.0.0',
+        collectionStatus: 'ok',
+      }],
+    }];
+    enrichmentStore.persistParentAtomic(enrichmentId, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
+  }
+
+  // Sanity check: all 20 (5 parents x 4 sources) completed items exist.
+  const completedBefore = enrichmentStore.loadEnrichmentItems(enrichmentId)
+    .filter((i) => i.status === 'completed')
+    .length;
+  assert.equal(completedBefore, 20);
+
+  // Snapshot pre-resume sourceStats via buildQueryResultFromStore.
+  const beforeResume = buildQueryResultFromStore(enrichmentId, enrichmentStore, defaultQuerySuggestionsConfig(), config);
+  assert.equal(beforeResume.sourceStats.surfer_related.ok, 5);
+  assert.equal(beforeResume.sourceStats.google_autocomplete.ok, 5);
+  assert.equal(beforeResume.sourceStats.google_related_search.ok, 5);
+  assert.equal(beforeResume.sourceStats.google_paa.ok, 5);
+
+  // Fake collector that MUST NOT be called.
+  const collector = new class extends FakeCollector {
+    async open(): Promise<void> {
+      throw new Error('collector must not be opened on fully completed resume');
+    }
+    async collect(): Promise<CollectResult> {
+      throw new Error('collector must not be called on fully completed resume');
+    }
+  }({});
+
+  const result = await runQuerySuggestionsModule({
+    enrichmentId,
+    sourceStore,
+    enrichmentStore,
+    sourceRunId,
+    config: defaultQuerySuggestionsConfig(),
+    shortlist: parents,
+    logger: () => {},
+    signal: { cancelled: false },
+    collector,
+    cache: CacheStore.openInMemory(),
+    researchConfig: config,
+    debugRoot: '/tmp/enr-resume-full/debug',
+  });
+
+  // Result must come from SQLite (buildQueryResultFromStore), preserving the original stats.
+  assert.equal(result.sourceStats.surfer_related.ok, 5);
+  assert.equal(result.sourceStats.google_autocomplete.ok, 5);
+  assert.equal(result.sourceStats.google_related_search.ok, 5);
+  assert.equal(result.sourceStats.google_paa.ok, 5);
+  assert.equal(result.suggestions.length, beforeResume.suggestions.length);
+  assert.equal(result.inputCount, 5);
+
+  // Completed items must not have been re-fetched (request_count unchanged at 1).
+  const items = enrichmentStore.loadEnrichmentItems(enrichmentId);
+  for (const item of items) {
+    assert.equal(item.requestCount, 1, `item ${item.itemId} requestCount changed`);
+  }
+
+  // Collector was never opened.
+  assert.equal(collector.openCalls, 0);
+  assert.equal(collector.collectCalls, 0);
+
+  sourceStore.close();
+  enrichmentStore.close();
+});
+
+test('partial resume: only missing (parent, source) is collected', async () => {
+  const config = loadConfig(process.env);
+  const sourceStore = RunStore.openInMemory();
+  const enrichmentStore = RunStore.openInMemory();
+  const sourceRunId = setupSourceRun(sourceStore, config);
+  const enrichmentId = 'enr-resume-partial';
+
+  createTestEnrichmentRun(enrichmentStore, enrichmentId, sourceRunId, config);
+
+  const fetchedAt = '2026-01-01T00:00:00.000Z';
+  const sources: QuerySuggestionSource[] = ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'];
+  const parents = testShortlist();
+
+  // Pre-populate all pairs EXCEPT (json diff, google_paa).
+  for (const parent of parents) {
+    const normalizedParent = normalizeKeyword(parent);
+    const sourcesToWrite = parent === 'json diff'
+      ? sources.filter((s) => s !== 'google_paa')
+      : sources;
+    const sourceResults = sourcesToWrite.map((source) => ({
+      source,
+      status: 'ok',
+      error: null,
+      fetchedAt,
+      requestCount: 1,
+      cacheStatus: 'none',
+      parserVersion: '1.0.0',
+    }));
+    const suggestions = [{
+      normalizedSuggestion: normalizeKeyword(`${parent} extra`),
+      rawText: `${parent} extra`,
+      volume: 100,
+      cpc: null,
+      ordinal: 0,
+      collectionStatus: 'ok',
+      occurrences: [{
+        parentKeyword: parent,
+        normalizedParent,
+        source: 'surfer_related',
+        market: config.research.market,
+        hl: config.research.googleHl,
+        gl: config.research.googleGl,
+        parserVersion: '1.0.0',
+        collectionStatus: 'ok',
+      }],
+    }];
+    enrichmentStore.persistParentAtomic(enrichmentId, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
+  }
+
+  // Verify: (json diff, google_paa) is missing.
+  const missingBefore = enrichmentStore.loadEnrichmentItems(enrichmentId)
+    .find((i) => i.itemId === 'google_paa:json diff');
+  assert.equal(missingBefore, undefined);
+
+  // Plan only produces output for the missing pair.
+  const missingPlan: Record<string, RawSourceCollection[]> = {
+    [normalizeKeyword('json diff')]: [
+      collection('google_paa', [occ('json diff', 'google_paa', 'what is json diff tool?')]),
+    ],
+  };
+  const collector = new FakeCollector(missingPlan);
+
+  const result = await runQuerySuggestionsModule({
+    enrichmentId,
+    sourceStore,
+    enrichmentStore,
+    sourceRunId,
+    config: defaultQuerySuggestionsConfig(),
+    shortlist: parents,
+    logger: () => {},
+    signal: { cancelled: false },
+    collector,
+    cache: CacheStore.openInMemory(),
+    researchConfig: config,
+    debugRoot: '/tmp/enr-resume-partial/debug',
+  });
+
+  // Collector called exactly once for the single missing pair.
+  assert.equal(collector.openCalls, 1);
+  assert.equal(collector.collectCalls, 1);
+
+  // All 20 pairs now completed.
+  const completedAfter = enrichmentStore.loadEnrichmentItems(enrichmentId)
+    .filter((i) => i.status === 'completed')
+    .length;
+  assert.equal(completedAfter, 20);
+
+  // sourceStats reflects the full SQLite state, not just the resumed session.
+  assert.equal(result.sourceStats.surfer_related.ok, 5);
+  assert.equal(result.sourceStats.google_autocomplete.ok, 5);
+  assert.equal(result.sourceStats.google_related_search.ok, 5);
+  assert.equal(result.sourceStats.google_paa.ok, 5);
+  assert.equal(result.inputCount, 5);
+
+  // The (json diff, google_paa) pair has requestCount 1 (from this resume).
+  const missingAfter = enrichmentStore.loadEnrichmentItems(enrichmentId)
+    .find((i) => i.itemId === 'google_paa:json diff');
+  assert.ok(missingAfter);
+  assert.equal(missingAfter!.requestCount, 1);
+
+  // Previously completed pairs keep their original requestCount (still 1, not re-fetched).
+  const untouched = enrichmentStore.loadEnrichmentItems(enrichmentId)
+    .find((i) => i.itemId === 'surfer_related:json diff');
+  assert.ok(untouched);
+  assert.equal(untouched!.requestCount, 1);
+
+  sourceStore.close();
+  enrichmentStore.close();
 });
