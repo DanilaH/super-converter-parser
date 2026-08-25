@@ -164,7 +164,7 @@ Configuration via environment variables (all optional):
 | `BREAKER_SURFER_WINDOW` | `15` | Surfer failure window |
 | `BREAKER_SURFER_FAILURES` | `12` | Surfer failures in window that pause the run (at most `BREAKER_SURFER_WINDOW`) |
 | `BREAKER_GOOGLE_CONSECUTIVE` | `10` | Consecutive Google SERP parse failures that pause the run |
-| `CACHE_DB_PATH` | `data/cache/cache.sqlite` | Persistent cache path; relative values resolve under `RESEARCH_OUTPUT_ROOT`, so worktrees share one cache |
+| `CACHE_DB_PATH` | `data/cache/cache.sqlite` | Persistent cache database. Use an absolute path to share it deliberately between worktrees |
 | `CACHE_TTL_COMPLETED_MS` | `7d` | Cache TTL for completed keywords |
 | `CACHE_TTL_PARTIAL_MS` | `6h` | Cache TTL for partial keywords |
 | `CACHE_TTL_FAILED_MS` | `1h` | Cache TTL for failed keywords |
