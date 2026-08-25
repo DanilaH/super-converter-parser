@@ -13,28 +13,22 @@ browser run** (see §9); everything else is deterministic or fixture-driven.
 The runner connects to a running Chrome via the Chrome DevTools Protocol (CDP).
 It does **not** use or modify the operator's normal Chrome profile.
 
-1. Copy the real `Default` profile to a **space-free** path (Chrome refuses to open
-   the DevTools port when `--user-data-dir` contains a space):
+1. Prepare the isolated, space-free profile once:
 
    ```
-   robocopy "%LOCALAPPDATA%\Google\Chrome\User Data\Default" C:\tmp\research-profile\Default /E /XD Cache Code Cache Service Worker /XF *.log
+   npm run chrome:setup
    ```
 
-2. Launch Chrome on the copy with the DevTools port open:
+2. Start Research Chrome. The command waits until CDP is reachable:
 
    ```
-   start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-     --remote-debugging-port=9333 ^
-     --user-data-dir=C:\tmp\research-profile ^
-     --profile-directory=Default ^
-     --remote-allow-origins=*
+   npm run chrome:start
    ```
 
-3. In `chrome://extensions`, enable/re-install **Keyword Surfer** (a copied
-   profile is treated as non-standard and Chrome may disable extensions on first
-   launch).
+3. After the first setup, verify **Keyword Surfer** once in
+   `chrome://extensions`; Chrome may disable extensions in a copied profile.
 
-4. Export the CDP endpoint:
+4. Export the CDP endpoint only when overriding the default:
 
    ```
    set CDP_URL=http://127.0.0.1:9333
@@ -126,14 +120,11 @@ a `status.json` is never left without its matching `manifest.json`.
 
 The runner never solves or bypasses CAPTCHA.
 
-- **Interactive (TTY):** it waits for stdin. Solve the CAPTCHA in the Research
-  Chrome window, then press Enter in the terminal.
-- **Non-interactive (background):** it polls for the marker file
-  `CAPTCHA_DONE_MARKER` (default `C:\tmp\captcha-done.txt`; override via env).
-  After solving in the browser, create the file to let the run resume.
-
-A required CAPTCHA pauses the run and preserves the active checkpoint; new
-keywords are not scheduled until it is cleared.
+Solve the CAPTCHA in the Research Chrome window. The runner polls that page
+directly and continues automatically after the challenge disappears; no Enter
+press, marker file, or separate terminal action is required. Ctrl+C leaves the
+active keyword resumable. An unresolved CAPTCHA times out after 10 minutes with
+`CAPTCHA_REQUIRED`.
 
 ## 8. Geo mismatch visibility
 
@@ -197,7 +188,7 @@ mandatory row is `FAIL`.
 | --- | --- | --- | --- |
 | 1 | Preflight failures early, classified, actionable, non-terminal | PASS | `src/cli/research.test.ts` (cache DB unreadable → exit 3; preflight failure → exit 3), `src/browser/preflight.ts` |
 | 2 | Invalid inputs/CLI exit with documented code (2) | PASS | `src/cli/research.input.test.ts`, `src/cli/research.test.ts` |
-| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS | `src/browser/captcha.test.ts` (detection + marker pause + first Ctrl+C interrupt), `src/browser/collect.captcha.test.ts` (real collect wiring waitForManualCaptcha → pauseForManualCaptcha), `src/cli/research.captcha.test.ts` (first Ctrl+C during marker-wait via runCli → paused/130), `src/cli/research.test.ts` (SIGINT → 130, resume) |
+| 3 | CAPTCHA/manual pause and Ctrl+C/resume contracts | PASS | `src/browser/captcha.test.ts` (page polling, navigation race, timeout and cancellation), `src/browser/collect.captcha.test.ts` (real collect wiring), `src/cli/research.captcha.test.ts`, `src/cli/research.test.ts` (SIGINT → 130, resume) |
 | 4 | Geo mismatch visible, no false localization | PASS | `src/cli/research.geo.test.ts` (keywords.csv `detected_google_location` + `geo_warning`, keywords.json geo fields, report.md, CLI `GEO WARNING` log naming the detected location) |
 | 5 | Parser failures retain debug evidence; breakers trip | PASS | `src/diagnostics/artifacts.test.ts`, `src/runs/policies.test.ts`, `src/runs/engine.test.ts` |
 | 6 | Ahrefs isolated, cached, traceable, secret-safe | PASS | `src/cli/research.secretLeak.test.ts`, `src/runs/engine.dr.test.ts` |
