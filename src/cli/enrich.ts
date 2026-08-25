@@ -121,7 +121,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shortlist: string[] = [];
   let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
   let maxSuggestions = 20;
-  let maxParents = 30;
+  let maxParents = 200;
   let outputRoot: string | null = null;
 
   while (args.length > 0) {
@@ -208,8 +208,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--max-parents requires a numeric value');
       }
       const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 30) {
-        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be an integer in [5, 30], got ${value}`);
+      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 200) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--max-parents must be an integer in [5, 200], got ${value}`);
       }
       maxParents = parsed;
     } else if (arg && arg.startsWith('-')) {
@@ -262,10 +262,10 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
       sourceStore.loadKeywords(sourceRunId).map((keyword) => keyword.normalizedKeyword),
     );
     const normalized = [...new Set(rawShortlist.map(normalizeKeyword))];
-    if (normalized.length < 5 || normalized.length > 30) {
+    if (normalized.length < 5 || normalized.length > 200) {
       throw new ResearchError(
         'INPUT_SCHEMA_ERROR',
-        `--shortlist must contain 5-30 unique keywords, got ${normalized.length}`,
+        `--shortlist must contain 5-200 unique keywords, got ${normalized.length}`,
       );
     }
     const rejected = normalized.filter((keyword) => !available.has(keyword));
@@ -369,10 +369,10 @@ async function main(): Promise<void> {
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
       shortlist = existingRun.shortlistKeywords;
-      if (existingRun.modules.includes('query_suggestions') && (shortlist.length < 5 || shortlist.length > 30)) {
+      if (existingRun.modules.includes('query_suggestions') && (shortlist.length < 5 || shortlist.length > 200)) {
         throw new ResearchError(
           'INPUT_SCHEMA_ERROR',
-          `Persisted shortlist has ${shortlist.length} keywords; required 5-30. Cannot resume.`,
+          `Persisted shortlist has ${shortlist.length} keywords; required 5-200. Cannot resume.`,
         );
       }
       modules = existingRun.modules;
