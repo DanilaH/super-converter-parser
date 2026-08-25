@@ -488,11 +488,11 @@ Resume skips completed modules (`clusters`, `domain_age`, `pages`) and continues
 #### 7. Warm cache rerun
 
 ```bash
-# Second identical discovery run: 100% cache hits, 0 browser lookups
+# Second identical discovery run: cache hits for valid entries
 npm run research -- --seeds input/seeds.csv
 ```
 
-Cached keywords serve from `data/cache/cache.sqlite` with no browser work. Failed/partial entries use a shorter TTL than completed ones.
+Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `completed` entry uses the long TTL (default 7d); a `failed`/`partial` entry uses a short TTL (1h/6h) and may trigger a fresh lookup on the warm run. Zero browser lookups is only guaranteed when both primary and related cache entries are still valid.
 
 #### 8. Artifact locations
 
