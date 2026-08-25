@@ -87,7 +87,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -403,6 +403,11 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (enrichment_id, domain)
   );
   `,
+  // v15: diagnostic confidence flag for successful static page inspections
+  // that appear to contain only a JavaScript application shell.
+  `
+  ALTER TABLE enrichment_pages ADD COLUMN possibly_js_rendered INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export type StoredRun = {
@@ -576,6 +581,7 @@ export class RunStore {
     for (const [column, definition] of enrichmentItemDynamic) {
       addColumnIfMissingLocal(this.db, 'enrichment_items', column, definition);
     }
+    addColumnIfMissingLocal(this.db, 'enrichment_pages', 'possibly_js_rendered', 'INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissingLocal(this.db, 'enrichment_runs', 'shortlist_keywords', "TEXT NOT NULL DEFAULT '[]'");
     const siteStructureDynamic: Array<[string, string]> = [
       ['homepage_http_status', 'INTEGER'],
@@ -1886,6 +1892,7 @@ export class RunStore {
       canonical: string | null;
       language: string | null;
       wordCount: number | null;
+      possiblyJsRendered: boolean;
       forms: string;
       structuredDataTypes: string;
       sourceKeywords: string;
@@ -1897,9 +1904,9 @@ export class RunStore {
       `INSERT INTO enrichment_pages (
         enrichment_id, url, final_url, redirect_count, redirect_chain,
         http_status, content_type, fetch_status, fetch_error, fetched_at, cache_status,
-        title, meta_description, h1, canonical, language, word_count,
+        title, meta_description, h1, canonical, language, word_count, possibly_js_rendered,
         forms, structured_data_types, source_keywords, source_positions
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     const tx = this.db.transaction(() => {
@@ -1908,7 +1915,7 @@ export class RunStore {
         stmt.run(
           enrichmentId, p.url, p.finalUrl, p.redirectCount, p.redirectChain,
           p.httpStatus, p.contentType, p.fetchStatus, p.fetchError, p.fetchedAt, p.cacheStatus,
-          p.title, p.metaDescription, p.h1, p.canonical, p.language, p.wordCount,
+          p.title, p.metaDescription, p.h1, p.canonical, p.language, p.wordCount, p.possiblyJsRendered ? 1 : 0,
           p.forms, p.structuredDataTypes, p.sourceKeywords, p.sourcePositions,
         );
       }
@@ -1933,6 +1940,7 @@ export class RunStore {
     canonical: string | null;
     language: string | null;
     wordCount: number | null;
+    possiblyJsRendered: boolean;
     forms: string;
     structuredDataTypes: string;
     sourceKeywords: string;
@@ -1957,6 +1965,7 @@ export class RunStore {
       canonical: string | null;
       language: string | null;
       word_count: number | null;
+      possibly_js_rendered: number;
       forms: string;
       structured_data_types: string;
       source_keywords: string;
@@ -1979,6 +1988,7 @@ export class RunStore {
       canonical: row.canonical,
       language: row.language,
       wordCount: row.word_count,
+      possiblyJsRendered: row.possibly_js_rendered === 1,
       forms: row.forms,
       structuredDataTypes: row.structured_data_types,
       sourceKeywords: row.source_keywords,

@@ -194,10 +194,31 @@ test('extractAll: extracts all fields at once', () => {
   assert.equal(result.canonical, 'https://example.com/test');
   assert.equal(result.language, 'en');
   assert.equal(result.wordCount, 12);
+  assert.equal(result.possiblyJsRendered, false);
   assert.equal(result.forms.formCount, 1);
   assert.equal(result.forms.inputCount, 1);
   assert.equal(result.forms.buttonCount, 1);
   assert.deepEqual(result.structuredDataTypes, ['Article']);
+});
+
+test('extractAll: flags a thin JavaScript application shell without classifying it as an error', () => {
+  const result = extractAll(`
+    <html><head><title>Utility</title></head><body>
+      <div id="root">Loading</div>
+      <script src="runtime.js"></script>
+      <script src="vendors.js"></script>
+      <script src="app.js"></script>
+    </body></html>
+  `);
+  assert.equal(result.wordCount, 2);
+  assert.equal(result.possiblyJsRendered, true);
+});
+
+test('extractAll: does not flag a small static form as a JavaScript shell', () => {
+  const result = extractAll(`
+    <html><body><div id="app"><form><input><button>Convert</button></form></div><script src="app.js"></script></body></html>
+  `);
+  assert.equal(result.possiblyJsRendered, false);
 });
 
 test('extractAll: handles malformed HTML gracefully', () => {

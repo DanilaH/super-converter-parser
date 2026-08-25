@@ -59,6 +59,7 @@ export type EnrichmentItemSource =
 
 export type EnrichmentCacheStatus =
   | 'hit'
+  | 'source_run'
   | 'miss'
   | 'expired'
   | 'refreshed'
