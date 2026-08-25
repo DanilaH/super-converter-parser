@@ -18,7 +18,7 @@ import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js'
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
-import { allocateResearchLocation, archiveResearchDirectory, resolveOutputRoot, resolvePersistentPath, resolveRunLocation, writeRunIndex } from '../outputs/researchLayout.js';
+import { allocateResearchLocation, archiveResearchDirectory, resolveOutputRoot, resolveRunLocation, writeRunIndex } from '../outputs/researchLayout.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { ResearchError } from '../shared/errors.js';
@@ -330,7 +330,7 @@ export async function runCli(
   let archivePath = '';
   let debugRoot = '';
   try {
-    let config = loadConfig(env);
+    const config = loadConfig(env);
 
     let mode: 'fresh' | 'resume';
     let keywords: SeedKeyword[] | MicrosoftKeyword[] = [];
@@ -339,8 +339,6 @@ export async function runCli(
     let runConfig = config;
 
     const outputRoot = resolveOutputRoot(options.outputRoot, env);
-    config = { ...config, cache: { ...config.cache, path: resolvePersistentPath(outputRoot, config.cache.path) } };
-    runConfig = config;
 
     if (options.resumeRunId) {
       runId = options.resumeRunId;
