@@ -542,8 +542,9 @@ Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `co
 #### 8. Artifact locations
 
 ```
-runs/<run-id>/                        # Discovery outputs (immutable after completion)
-  run.sqlite                          # Durable source of truth (WAL, schema v15)
+<RESEARCH_OUTPUT_ROOT>/<date>-<label>/
+  discovery/
+    run.sqlite                        # Durable source of truth (WAL, schema v15)
   manifest.json                       # Config snapshot, parser versions, progress
   keywords.json                       # Per-keyword record (status, Surfer, geo, cache)
   serp.json                           # Organic SERP rows with provenance
@@ -555,8 +556,8 @@ runs/<run-id>/                        # Discovery outputs (immutable after compl
   report.md                           # Human-readable summary
   status.json                         # Machine-readable terminal status
 
-enrichments/<enrichment-id>/          # Enrichment outputs
-  enrichment.sqlite                   # Per-item checkpoints
+  enrichment/                         # First enrichment; later ones use enrichment-02, etc.
+    enrichment.sqlite                 # Per-item checkpoints
   keyword-clusters.csv / .json        # SERP-overlap clusters
   query-suggestions.csv / .json       # Collected query-language suggestions
   domain-age.csv / .json              # Registration date + first-seen
@@ -565,8 +566,10 @@ enrichments/<enrichment-id>/          # Enrichment outputs
   manifest.json                       # Modules, config, shortlist, summary
   status.json                         # Machine-readable terminal status
 
-data/cache/cache.sqlite               # Persistent cross-run cache (keyword/related/DR)
-debug/<run-id>/                       # Parser-failure evidence (page.html/page.png/context)
+  debug/                              # Parser-failure evidence
+  results.zip                         # Atomically refreshed deliverable archive
+
+data/cache/cache.sqlite                # Persistent cross-run cache (keyword/related/DR)
 ```
 
 #### 9. Status / error / cache counters
