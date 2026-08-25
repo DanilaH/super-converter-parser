@@ -146,7 +146,7 @@ Configuration via environment variables (all optional):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CDP_URL` | `http://127.0.0.1:9222` | Research Chrome DevTools endpoint |
+| `CDP_URL` | `http://127.0.0.1:9333` | Research Chrome DevTools endpoint |
 | `SURFER_WAIT_MS` | `60000` | Wait for the Keyword Surfer widget to mount |
 | `SURFER_PREFLIGHT_TIMEOUT_MS` | `60000` | Max wait for Keyword Surfer injection during preflight |
 | `NAVIGATION_TIMEOUT_MS` | `60000` | Per-navigation timeout |
@@ -461,8 +461,11 @@ After a discovery run completes, enrichment modules derive additional signals fr
 # .env is gitignored; copy the template and adjust
 copy .env.example .env
 
-# Required: Research Chrome running with CDP port open
-# (see ACCEPTANCE.md for the space-free profile workaround)
+# One-time profile preparation, then normal startup
+npm run chrome:setup
+npm run chrome:start
+
+# chrome:start verifies this endpoint before returning
 set CDP_URL=http://127.0.0.1:9333
 
 # Optional: Ahrefs DR (skipped honestly when unset)
@@ -484,7 +487,7 @@ npm run research -- --seeds input/seeds.csv --json-status
 
 #### 3. Shortlist selection
 
-After discovery, inspect `runs/<run-id>/candidates.csv` and choose 5-200 keywords for deep enrichment. The shortlist is passed verbatim to `--shortlist` (comma-separated, must be discovery keywords). Modules retain their own bounded work: for example, domain-age and site-structure use fair domain caps and report excess domains as `omitted` instead of silently dropping shortlist keywords.
+After discovery, inspect `candidates.csv` and choose 5-200 keywords for deep enrichment. For a short list, use `--shortlist`. For larger lists, prefer `--shortlist-file shortlist.txt` (one keyword per line) or a CSV with a `keyword` column. Modules retain their own bounded work: for example, domain-age and site-structure use fair domain caps and report excess domains as `omitted` instead of silently dropping shortlist keywords.
 
 #### 4. Running individual deep modules
 
@@ -492,9 +495,9 @@ After discovery, inspect `runs/<run-id>/candidates.csv` and choose 5-200 keyword
 # SERP-overlap clustering only
 npm run enrich -- --run <source-run-id> --modules clusters
 
-# Query-language suggestions (requires --shortlist)
+# Query-language suggestions from a file (recommended for long shortlists)
 npm run enrich -- --run <source-run-id> --modules query_suggestions \
-  --shortlist "keyword one,keyword two,keyword three,four,five"
+  --shortlist-file input/shortlist.csv
 
 # Domain registration age (requires --shortlist)
 npm run enrich -- --run <source-run-id> --modules domain_age \
@@ -539,8 +542,9 @@ Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `co
 #### 8. Artifact locations
 
 ```
-runs/<run-id>/                        # Discovery outputs (immutable after completion)
-  run.sqlite                          # Durable source of truth (WAL, schema v15)
+<RESEARCH_OUTPUT_ROOT>/<date>-<label>/
+  discovery/
+    run.sqlite                        # Durable source of truth (WAL, schema v15)
   manifest.json                       # Config snapshot, parser versions, progress
   keywords.json                       # Per-keyword record (status, Surfer, geo, cache)
   serp.json                           # Organic SERP rows with provenance
@@ -552,8 +556,8 @@ runs/<run-id>/                        # Discovery outputs (immutable after compl
   report.md                           # Human-readable summary
   status.json                         # Machine-readable terminal status
 
-enrichments/<enrichment-id>/          # Enrichment outputs
-  enrichment.sqlite                   # Per-item checkpoints
+  enrichment/                         # First enrichment; later ones use enrichment-02, etc.
+    enrichment.sqlite                 # Per-item checkpoints
   keyword-clusters.csv / .json        # SERP-overlap clusters
   query-suggestions.csv / .json       # Collected query-language suggestions
   domain-age.csv / .json              # Registration date + first-seen
@@ -562,8 +566,10 @@ enrichments/<enrichment-id>/          # Enrichment outputs
   manifest.json                       # Modules, config, shortlist, summary
   status.json                         # Machine-readable terminal status
 
-data/cache/cache.sqlite               # Persistent cross-run cache (keyword/related/DR)
-debug/<run-id>/                       # Parser-failure evidence (page.html/page.png/context)
+  debug/                              # Parser-failure evidence
+  results.zip                         # Atomically refreshed deliverable archive
+
+data/cache/cache.sqlite                # Persistent cross-run cache (keyword/related/DR)
 ```
 
 #### 9. Status / error / cache counters
@@ -582,7 +588,6 @@ debug/<run-id>/                       # Parser-failure evidence (page.html/page.
 - **Related-keywords widget**: in a copied/free Surfer profile the `keyword-surfer-sidebar` often does not render. This produces a structured `related.status = 'error'` (or `unavailable` in enrichment) and is non-fatal: main volume/CPC/organic data is still collected. Debug evidence is retained.
 - **Geo mismatch**: `gl=us` does not guarantee a truly US-localized SERP. The detected physical Google location is recorded separately and a `geo_warning` is surfaced when it differs from the target market.
 - **CAPTCHA**: the run pauses for manual intervention and polls the Research Chrome page directly. Solve the CAPTCHA in that window; the runner detects when it disappears and continues automatically. No Enter press or marker file is required. Ctrl+C leaves the run safely resumable, and an unresolved CAPTCHA times out after 10 minutes.
-- **Resume display bug**: on resume, `summary.querySourceStats` in `manifest.json` may show zeros while the actual data in `query-suggestions.csv` / `.json` is correct.
 
 #### 11. TASK-015: paid SEO metrics (BLOCKED_BY_PROVIDER)
 

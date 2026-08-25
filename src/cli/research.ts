@@ -188,7 +188,7 @@ function printUsage(): void {
   console.log('');
   console.log('Environment:');
   console.log('  RESEARCH_OUTPUT_ROOT         Durable output root (default <home>/super-converter-parser-output)');
-  console.log('  CDP_URL                      Research Chrome debugging endpoint (default http://127.0.0.1:9222)');
+  console.log('  CDP_URL                      Research Chrome debugging endpoint (default http://127.0.0.1:9333)');
   console.log('  SURFER_WAIT_MS               Max wait for Keyword Surfer data in ms (default 60000)');
   console.log('  SURFER_PREFLIGHT_TIMEOUT_MS  Max wait for Surfer injection during preflight in ms (default 60000)');
   console.log('  NAVIGATION_TIMEOUT_MS        Page load timeout in ms (default 60000)');
