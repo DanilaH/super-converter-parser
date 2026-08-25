@@ -340,6 +340,7 @@ export async function runCli(
 
     const outputRoot = resolveOutputRoot(options.outputRoot, env);
     config = { ...config, cache: { ...config.cache, path: resolvePersistentPath(outputRoot, config.cache.path) } };
+    runConfig = config;
 
     if (options.resumeRunId) {
       runId = options.resumeRunId;
