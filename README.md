@@ -652,7 +652,7 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 
 Resolves domain registration date (via RDAP) and first-seen date (via Wayback Machine CDX) for registrable domains observed in the shortlisted keywords' SERPs.
 
-**Configurable flags (domain_age only):**
+**Configurable flags (query_suggestions only):**
 - `--max-parents <n>` — cap shortlisted keywords processed by query suggestions (default 200, range 5-200)
 
 **Outputs:**
