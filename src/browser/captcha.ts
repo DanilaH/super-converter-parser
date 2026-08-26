@@ -9,8 +9,23 @@ export const NEVER_CANCELLED: CancellationSignal = { isCancelled: () => false };
 
 const CAPTCHA_SELECTOR = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
 const CAPTCHA_TEXT = /unusual traffic|not a robot|captcha/i;
+const ROTATE_COOKIES_URL = /^https:\/\/accounts\.google\.com\/RotateCookiesPage(?:[/?#]|$)/i;
 
-type CaptchaPresence = 'present' | 'absent' | 'unknown';
+type CaptchaPresence = 'manual' | 'rate_limited' | 'absent' | 'unknown';
+
+function hasRotateCookiesPage(page: Page): boolean {
+  try {
+    return page
+      .context()
+      .pages()
+      .some((candidate) => !candidate.isClosed() && ROTATE_COOKIES_URL.test(candidate.url()));
+  } catch {
+    // Context inspection is an additional signal only. If it is temporarily
+    // unavailable, keep the existing manual-CAPTCHA path rather than inventing
+    // a systemic rate limit.
+    return false;
+  }
+}
 
 async function detectCaptcha(page: Page): Promise<CaptchaPresence> {
   if (page.isClosed()) {
@@ -18,9 +33,16 @@ async function detectCaptcha(page: Page): Promise<CaptchaPresence> {
   }
 
   try {
-    if ((await page.locator(CAPTCHA_SELECTOR).count()) > 0) return 'present';
-    const bodyText = await page.locator('body').innerText();
-    return CAPTCHA_TEXT.test(bodyText) ? 'present' : 'absent';
+    const selectorPresent = (await page.locator(CAPTCHA_SELECTOR).count()) > 0;
+    const bodyText = selectorPresent ? '' : await page.locator('body').innerText();
+    const challengePresent = selectorPresent || CAPTCHA_TEXT.test(bodyText);
+    if (!challengePresent) return 'absent';
+
+    // RotateCookiesPage can appear briefly during normal account housekeeping,
+    // so it is not sufficient on its own. Together with challenge markers on
+    // the active SERP it means Google has rate-limited the browser/IP and there
+    // is no manual puzzle for the operator to solve.
+    return hasRotateCookiesPage(page) ? 'rate_limited' : 'manual';
   } catch (error) {
     if (page.isClosed()) {
       throw new ResearchError(
@@ -37,9 +59,17 @@ async function detectCaptcha(page: Page): Promise<CaptchaPresence> {
   }
 }
 
+function googleRateLimitError(): ResearchError {
+  return new ResearchError(
+    'RUN_PAUSED',
+    'Google bot challenge detected (RotateCookiesPage). The browser/IP is temporarily rate-limited; run paused safely. Resume after cooldown or from another network.',
+  );
+}
+
 export async function waitForManualCaptcha(page: Page): Promise<void> {
   const presence = await detectCaptcha(page);
   if (presence === 'absent') return;
+  if (presence === 'rate_limited') throw googleRateLimitError();
   if (presence === 'unknown') {
     throw new ResearchError(
       'GOOGLE_UNAVAILABLE',
@@ -87,6 +117,7 @@ export async function pauseForManualCaptcha(
   while (true) {
     const presence = await detectCaptcha(page);
     if (presence === 'absent') break;
+    if (presence === 'rate_limited') throw googleRateLimitError();
     if (signal.isCancelled()) return false;
     if (Date.now() - start >= timeoutMs) {
       throw new ResearchError('CAPTCHA_REQUIRED', 'CAPTCHA wait timeout; run remains resumable.');
