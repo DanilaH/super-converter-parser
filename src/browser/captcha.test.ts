@@ -7,15 +7,24 @@ import { ResearchError } from '../shared/errors.js';
 
 const CAPTCHA_SELECTOR_FOR_TEST = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
 
-function fakePage(opts: { captchaVisible: boolean; bodyText: string }): Page {
-  return {
+function fakePage(opts: { captchaVisible: boolean; bodyText: string; rotateCookiesPage?: boolean }): Page {
+  const page = {
     locator: (_sel: string) => ({
       count: async () => (opts.captchaVisible ? 1 : 0),
       innerText: async () => opts.bodyText,
     }),
     isClosed: () => false,
+    url: () => 'https://www.google.com/search?q=test',
     waitForLoadState: async () => undefined,
   } as unknown as Page;
+  const rotatePage = {
+    isClosed: () => false,
+    url: () => 'https://accounts.google.com/RotateCookiesPage?origin=https%3A%2F%2Fwww.google.com',
+  } as unknown as Page;
+  (page as unknown as { context: () => { pages: () => Page[] } }).context = () => ({
+    pages: () => (opts.rotateCookiesPage ? [page, rotatePage] : [page]),
+  });
+  return page;
 }
 
 test('waitForManualCaptcha throws CAPTCHA_REQUIRED when a captcha widget is present', async () => {
@@ -38,6 +47,29 @@ test('waitForManualCaptcha detects captcha by body text', async () => {
   );
 });
 
+test('waitForManualCaptcha pauses immediately for a RotateCookiesPage bot challenge', async () => {
+  const page = fakePage({
+    captchaVisible: false,
+    bodyText: 'Our systems have detected unusual traffic from your computer network.',
+    rotateCookiesPage: true,
+  });
+  await assert.rejects(
+    () => waitForManualCaptcha(page),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'RUN_PAUSED' &&
+      error.message.includes('RotateCookiesPage'),
+  );
+});
+
+test('waitForManualCaptcha ignores a standalone RotateCookiesPage without challenge markers', async () => {
+  await waitForManualCaptcha(fakePage({
+    captchaVisible: false,
+    bodyText: 'normal search results',
+    rotateCookiesPage: true,
+  }));
+});
+
 test('pauseForManualCaptcha polls the page and resumes automatically when CAPTCHA disappears', async () => {
   const state = { captchaVisible: true, bodyText: 'unusual traffic' };
   const timer = setTimeout(() => {
@@ -51,6 +83,29 @@ test('pauseForManualCaptcha polls the page and resumes automatically when CAPTCH
       timeoutMs: 1000,
     });
     assert.equal(solved, true);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+test('pauseForManualCaptcha stops waiting if RotateCookiesPage appears', async () => {
+  const state = {
+    captchaVisible: true,
+    bodyText: 'unusual traffic',
+    rotateCookiesPage: false,
+  };
+  const timer = setTimeout(() => {
+    state.rotateCookiesPage = true;
+  }, 20);
+
+  try {
+    await assert.rejects(
+      () => pauseForManualCaptcha(fakePage(state), NEVER_CANCELLED, {
+        pollIntervalMs: 5,
+        timeoutMs: 1000,
+      }),
+      (error: unknown) => error instanceof ResearchError && error.code === 'RUN_PAUSED',
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -108,6 +163,7 @@ test('pauseForManualCaptcha retries a transient page-inspection failure instead 
       },
       innerText: async () => 'normal search results',
     }),
+    context: () => ({ pages: () => [] }),
     waitForLoadState: async () => undefined,
   } as unknown as Page;
 
