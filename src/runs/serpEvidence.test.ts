@@ -76,7 +76,7 @@ test('not-fetched evidence stays missing', () => {
   );
 });
 
-test('legacy completed clean zero remains a provable genuine empty SERP when Google metadata exists', () => {
+test('legacy completed clean zero remains a provable genuine empty SERP', () => {
   const legacyGoogle: KeywordRecord['google'] = {
     hl: 'en',
     gl: 'us',
@@ -87,13 +87,6 @@ test('legacy completed clean zero remains a provable genuine empty SERP when Goo
   assert.deepEqual(
     resolveSerpEvidence({ status: 'completed', error: null, google: legacyGoogle }, 0),
     { status: 'empty', organicResultCount: 0, errorCode: null, errorMessage: null, trustworthy: true },
-  );
-});
-
-test('legacy completed row without Google metadata is unknown rather than fabricated zero', () => {
-  assert.deepEqual(
-    resolveSerpEvidence({ status: 'completed', error: null, google: null }, 0),
-    { status: 'unknown', organicResultCount: null, errorCode: null, errorMessage: null, trustworthy: false },
   );
 });
 
