@@ -78,6 +78,7 @@ import type { ResearchConfig } from '../config/config.js';
 import type { SeedKeyword } from '../input/seeds/normalize.js';
 import { aggregateMicrosoft, type MicrosoftKeyword } from '../input/microsoft/normalize.js';
 import type { SerpResult } from '../google/serp.js';
+import { registrableDomain } from '../domains/normalize.js';
 import {
   TERMINAL_KEYWORD_STATUSES,
   type KeywordRecord,
@@ -480,8 +481,8 @@ type RunRow = {
   parser_versions: string;
   lookups: number;
   pause_reason: string | null;
-  force_refresh: number;
-  refresh_keywords: string;
+  force_refresh?: number;
+  refresh_keywords?: string;
 };
 
 type KeywordRow = {
@@ -496,14 +497,16 @@ type KeywordRow = {
   google: string | null;
   error: string | null;
   collected_at: string | null;
-  cache_status: string | null;
+  cache_status?: string | null;
 };
 
 export class RunStore {
   private readonly db: Database.Database;
+  private readonly readOnlySource: boolean;
 
-  private constructor(db: Database.Database) {
+  private constructor(db: Database.Database, readOnlySource = false) {
     this.db = db;
+    this.readOnlySource = readOnlySource;
   }
 
   static open(path: string): RunStore {
@@ -534,8 +537,74 @@ export class RunStore {
   }
 
   static openReadOnly(path: string): RunStore {
-    const db = new Database(path, { readonly: true });
-    return new RunStore(db);
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(path, { readonly: true, fileMustExist: true });
+      const store = new RunStore(db, true);
+      store.assertReadableDiscoverySchema();
+      return store;
+    } catch (error) {
+      try {
+        db?.close();
+      } catch {
+        // Preserve the original open/compatibility error.
+      }
+      if (error instanceof ResearchError && error.code === 'DB_ERROR') throw error;
+      throw new ResearchError(
+        'DB_ERROR',
+        `Failed to open run store read-only at "${path}".`,
+        { cause: error },
+      );
+    }
+  }
+
+  private tableColumns(table: 'runs' | 'keywords' | 'serp_rows' | 'related_keywords'): Set<string> {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return new Set(rows.map((row) => row.name));
+  }
+
+  private assertReadableDiscoverySchema(): void {
+    const current = this.version;
+    if (current < 1) {
+      throw new ResearchError(
+        'DB_ERROR',
+        `Run store schema version ${current} predates the supported discovery schema (v1).`,
+      );
+    }
+    if (current > SCHEMA_VERSION) {
+      throw new ResearchError(
+        'DB_ERROR',
+        `Run store is at schema version ${current}, newer than this build supports (${SCHEMA_VERSION}). Refusing read-only access.`,
+      );
+    }
+
+    const required: Record<'runs' | 'keywords' | 'serp_rows', readonly string[]> = {
+      runs: [
+        'run_id', 'state', 'created_at', 'updated_at', 'input_kind', 'input_path',
+        'config_snapshot', 'parser_versions', 'lookups', 'pause_reason',
+      ],
+      keywords: [
+        'run_id', 'idx', 'id', 'keyword', 'normalized_keyword', 'sources', 'status',
+        'surfer', 'google', 'error', 'collected_at',
+      ],
+      serp_rows: [
+        'run_id', 'keyword_idx', 'position', 'keyword', 'title', 'url', 'hostname', 'result_type',
+      ],
+    };
+
+    const missing: string[] = [];
+    for (const table of ['runs', 'keywords', 'serp_rows'] as const) {
+      const columns = this.tableColumns(table);
+      for (const column of required[table]) {
+        if (!columns.has(column)) missing.push(`${table}.${column}`);
+      }
+    }
+    if (missing.length > 0) {
+      throw new ResearchError(
+        'DB_ERROR',
+        `Run store schema v${current} is not a readable discovery source; missing required columns: ${missing.join(', ')}.`,
+      );
+    }
   }
 
   private migrate(): void {
@@ -769,7 +838,8 @@ export class RunStore {
       lookups: row.lookups,
       pauseReason: row.pause_reason,
       forceRefresh: row.force_refresh === 1,
-      refreshKeywords: JSON.parse(row.refresh_keywords) as string[],
+      refreshKeywords:
+        row.refresh_keywords === undefined ? [] : JSON.parse(row.refresh_keywords) as string[],
     };
   }
 
@@ -817,9 +887,25 @@ export class RunStore {
   }
 
   loadSerpRows(runId: string): SerpResult[] {
+    // Historical discovery stores are opened read-only and therefore cannot be
+    // migrated just to satisfy newer derived SERP columns. Select compatible
+    // aliases for columns added after v1, then reconstruct only the missing
+    // registrable-domain value from the immutable hostname/URL evidence.
+    // Only immutable source stores may adapt missing historical columns.
+    // Writable/current stores keep the strict schema contract so corruption is
+    // not silently reinterpreted as historical data.
+    const columns = this.readOnlySource ? this.tableColumns('serp_rows') : null;
+    const hasRegistrableDomainColumn = columns === null || columns.has('registrable_domain');
+    const registrableDomainExpr = hasRegistrableDomainColumn
+      ? 'registrable_domain'
+      : "'' AS registrable_domain";
+    const drExpr = columns === null || columns.has('dr') ? 'dr' : 'NULL AS dr';
+    const drStatusExpr = columns === null || columns.has('dr_status') ? 'dr_status' : 'NULL AS dr_status';
+    const drErrorExpr = columns === null || columns.has('dr_error') ? 'dr_error' : 'NULL AS dr_error';
     const rows = this.db
       .prepare(
-        `SELECT keyword_idx, position, keyword, title, url, hostname, registrable_domain, dr, dr_status, dr_error, result_type
+        `SELECT keyword_idx, position, keyword, title, url, hostname,
+                ${registrableDomainExpr}, ${drExpr}, ${drStatusExpr}, ${drErrorExpr}, result_type
          FROM serp_rows WHERE run_id = ? ORDER BY keyword_idx ASC, position ASC`,
       )
       .all(runId) as Array<{
@@ -842,7 +928,9 @@ export class RunStore {
       title: row.title,
       url: row.url,
       hostname: row.hostname,
-      registrableDomain: row.registrable_domain,
+      registrableDomain: hasRegistrableDomainColumn
+        ? row.registrable_domain
+        : deriveHistoricalRegistrableDomain(row.hostname, row.url),
       dr: row.dr,
       drStatus: (row.dr_status as SerpResult['drStatus']) ?? null,
       drError: row.dr_error ?? null,
@@ -1046,6 +1134,14 @@ export class RunStore {
   }
 
   loadRelatedKeywords(runId: string): StoredRelatedKeyword[] {
+    // v1-v4 discovery stores predate persisted related-keyword provenance.
+    // In read-only enrichment that absence means there is no reusable source-run
+    // Surfer collection; callers may collect the source normally instead.
+    if (
+      this.readOnlySource &&
+      this.version < 5 &&
+      this.tableColumns('related_keywords').size === 0
+    ) return [];
     return (
       this.db
         .prepare(
@@ -2367,6 +2463,16 @@ export class RunStore {
   }
 }
 
+function deriveHistoricalRegistrableDomain(hostname: string, url: string): string {
+  const fromHostname = registrableDomain(hostname);
+  if (fromHostname) return fromHostname;
+  try {
+    return registrableDomain(new URL(url).hostname) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function mapKeywordRow(row: KeywordRow): StoredKeyword {
   return {
     idx: row.idx,
@@ -2379,7 +2485,7 @@ function mapKeywordRow(row: KeywordRow): StoredKeyword {
     google: row.google === null ? null : JSON.parse(row.google),
     error: row.error === null ? null : JSON.parse(row.error),
     collectedAt: row.collected_at,
-    cacheStatus: row.cache_status === null ? null : (row.cache_status as StoredKeyword['cacheStatus']),
+    cacheStatus: row.cache_status == null ? null : (row.cache_status as StoredKeyword['cacheStatus']),
   };
 }
 
