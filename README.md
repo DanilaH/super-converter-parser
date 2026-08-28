@@ -92,6 +92,7 @@ C:\\1Projects\\super-converter-parser-output\\
   2026-08-25-converters\\
     discovery\\
     enrichment\\
+    debug\\
     results.zip
 ```
 
@@ -214,8 +215,11 @@ is not republished as a standalone Ahrefs dataset.
 
 ### Durable run state, checkpoints, and resume
 
-State is committed to SQLite (`runs/<run-id>/run.sqlite`, versioned schema, WAL) after
-every keyword, so an interrupted run is never lost. On resume:
+State is committed to SQLite in the allocated discovery directory
+(`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/discovery/run.sqlite`, versioned schema,
+WAL) after every keyword, so an interrupted run is never lost. Legacy
+`runs/<run-id>/run.sqlite` stores remain resume-compatible through the legacy
+resolver. On resume:
 
 - `--seeds` and `--resume` are mutually exclusive; `--resume` reads the persisted queue
   and does not need the original input file;
@@ -245,17 +249,27 @@ and marks the run `paused`; a second Ctrl+C force-quits. Exit codes: `0` success
 (including `completed_with_errors`), `1` internal error, `2` invalid input/config,
 `3` preflight failure, `130` gracefully paused.
 
-Each run writes snapshots under `runs/<run-id>/`, with parser-failure evidence under `debug/<run-id>/`:
+New durable-layout runs keep checkpoints and published discovery artifacts in
+`discovery/`, with parser-failure evidence in the sibling research-level `debug/`
+directory:
 
 ```text
-runs/<run-id>/
-├── run.sqlite     # durable source of truth (WAL, versioned schema)
-├── manifest.json  # config snapshot, parser versions, timestamps, progress, pause reason
-├── keywords.json  # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers, cacheStatus)
-└── serp.json      # organic SERP rows with provenance
-
-debug/<run-id>/     # page.html / page.png / parser-context.json on parser failures
+<RESEARCH_OUTPUT_ROOT>/<date>-<label>/
+├── discovery/
+│   ├── run.sqlite     # durable source of truth (WAL, versioned schema)
+│   ├── manifest.json  # config snapshot, parser versions, timestamps, progress, pause reason
+│   ├── keywords.json  # per-keyword record (status, Surfer volume/CPC, geo, seed provenance rowNumbers, cacheStatus)
+│   └── serp.json      # organic SERP rows with provenance
+└── debug/
+    └── <keyword-slug>/
+        ├── page.html
+        ├── page.png
+        └── parser-context.json
 ```
+
+Legacy runs preserve their historical `runs/<run-id>/` discovery directory and
+`debug/<run-id>/<keyword-slug>/` parser-evidence layout; new runs do not create
+those paths.
 
 A parser failure never silently marks a keyword as completed: an unexpected empty organic SERP (page is not a genuine zero-result page) is reported as `GOOGLE_SERP_PARSE_ERROR` with debug evidence.
 
@@ -343,23 +357,31 @@ A preflight runs before any keyword work and verifies: Research Chrome reachable
 
 ## Primary outputs
 
-Each execution creates an immutable historical run:
+Each execution creates an immutable historical research directory:
 
 ```text
-runs/<run-id>/
-├── manifest.json
-├── keywords.csv
-├── related-keywords.csv
-├── serp.csv
-├── domains.csv
-├── candidates.csv
-├── report.md
-└── status.json
+<RESEARCH_OUTPUT_ROOT>/<date>-<label>/
+├── discovery/
+│   ├── run.sqlite
+│   ├── manifest.json
+│   ├── keywords.json
+│   ├── serp.json
+│   ├── keywords.csv
+│   ├── related-keywords.csv
+│   ├── serp.csv
+│   ├── domains.csv
+│   ├── candidates.csv
+│   ├── report.md
+│   └── status.json
+├── debug/          # parser-failure evidence, excluded from results.zip
+└── results.zip     # atomically refreshed deliverable archive
 ```
 
-Parser-failure evidence is written outside the run directory, under `debug/<run-id>/` (the currently implemented contract; see the Implemented CLI section).
+Parser-failure evidence for new runs is written to
+`<research-directory>/debug/<keyword-slug>/`. Legacy runs keep the historical
+`debug/<run-id>/<keyword-slug>/` layout.
 
-Persistent reusable cache lives outside run directories:
+Persistent reusable cache lives outside research directories:
 
 ```text
 data/
@@ -551,35 +573,35 @@ Cached keywords serve from `data/cache/cache.sqlite` with no browser work. A `co
 
 #### 8. Artifact locations
 
-```
+```text
 <RESEARCH_OUTPUT_ROOT>/<date>-<label>/
   discovery/
-    run.sqlite                        # Durable source of truth (WAL, schema v15)
-  manifest.json                       # Config snapshot, parser versions, progress
-  keywords.json                       # Per-keyword record (status, Surfer, geo, cache)
-  serp.json                           # Organic SERP rows with provenance
-  keywords.csv                        # Keyword-level summary
-  serp.csv                            # One row per organic result
-  related-keywords.csv                # Surfer related ideas
-  domains.csv                         # Unique domains + DR
-  candidates.csv                      # Scored, ranked candidates
-  report.md                           # Human-readable summary
-  status.json                         # Machine-readable terminal status
+    run.sqlite                        # Durable source of truth (WAL, versioned schema)
+    manifest.json                     # Config snapshot, parser versions, progress
+    keywords.json                     # Per-keyword record (status, Surfer, geo, cache)
+    serp.json                         # Organic SERP rows with provenance
+    keywords.csv                      # Keyword-level summary
+    serp.csv                          # One row per organic result
+    related-keywords.csv              # Surfer related ideas
+    domains.csv                       # Unique domains + DR
+    candidates.csv                    # Scored, ranked candidates
+    report.md                         # Human-readable summary
+    status.json                       # Machine-readable terminal status
 
   enrichment/                         # First enrichment; later ones use enrichment-02, etc.
     enrichment.sqlite                 # Per-item checkpoints
-  keyword-clusters.csv / .json        # SERP-overlap clusters
-  query-suggestions.csv / .json       # Collected query-language suggestions
-  domain-age.csv / .json              # Registration date + first-seen
-  pages.csv / .json                   # Ranking-page inspection
-  site-structure.csv / .json          # Robots/sitemap sampling
-  manifest.json                       # Modules, config, shortlist, summary
-  status.json                         # Machine-readable terminal status
+    keyword-clusters.csv / .json      # SERP-overlap clusters
+    query-suggestions.csv / .json     # Collected query-language suggestions
+    domain-age.csv / .json            # Registration date + first-seen
+    pages.csv / .json                 # Ranking-page inspection
+    site-structure.csv / .json        # Robots/sitemap sampling
+    manifest.json                     # Modules, config, shortlist, summary
+    status.json                       # Machine-readable terminal status
 
-  debug/                              # Parser-failure evidence
+  debug/                              # Parser-failure evidence by keyword slug
   results.zip                         # Atomically refreshed deliverable archive
 
-data/cache/cache.sqlite                # Persistent cross-run cache (keyword/related/DR)
+data/cache/cache.sqlite               # Persistent cross-run cache (keyword/related/DR)
 ```
 
 #### 9. Status / error / cache counters
@@ -588,10 +610,10 @@ data/cache/cache.sqlite                # Persistent cross-run cache (keyword/rel
 | --- | --- |
 | `status` | `pending` / `running` / `completed` / `partial` / `failed` |
 | `cache_status` | `hit` / `miss` / `expired` / `refreshed` (mutually exclusive, sum = processed) |
-| `ahrefs.state` | `complete` / `partial` / `skipped` |
+| `ahrefs.state` | `complete` / `degraded` / `skipped` / `failed` |
 | `collection_status` (suggestions) | `ok` / `empty` / `unavailable` / `error` |
 | `geo_warning` | `true` when detected Google location differs from target market |
-| `parser debug artifacts` | Saved to `debug/<run-id>/` on Surfer/Google parse failures |
+| `parser debug artifacts` | Saved to `<research-directory>/debug/<keyword-slug>/` on Surfer/Google parse failures |
 
 #### 10. Known limitations
 
@@ -626,7 +648,7 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 - `manifest.json` — persisted modules/config/shortlist, artifact list, and summary counts
 - `status.json` — machine-readable terminal status and the same summary counts
 
- The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. Enrichment checkpoints are stored in `enrichments/<enrichment-id>/enrichment.sqlite`; Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
+ The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. New enrichment checkpoints live in the allocated sibling enrichment directory (`<research-directory>/enrichment/enrichment.sqlite`, then `enrichment-02`, etc.); legacy `enrichments/<enrichment-id>/enrichment.sqlite` directories remain resume-compatible. Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
 
  ### Query-language collection
 
@@ -661,7 +683,7 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
  - `query-suggestions.csv` — normalized_suggestion, raw_text, parent_keywords, sources, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences
   - `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
   - `manifest.json` / `status.json` — include the same artifacts and summary counts
-  - SQLite state in `enrichments/<enrichment-id>/enrichment.sqlite`
+  - SQLite state lives in the allocated enrichment directory (`<research-directory>/enrichment[-NN]/enrichment.sqlite`); legacy `enrichments/<enrichment-id>/enrichment.sqlite` remains resume-compatible.
 
 ### Domain registration age
 

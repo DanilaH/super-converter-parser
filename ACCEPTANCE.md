@@ -97,8 +97,10 @@ must name a real run keyword.
 | `3` | preflight / infrastructure failure (CDP, Google, Surfer, unwritable dir, bad cache) |
 | `130` | gracefully paused (Ctrl+C) |
 
-Run states: `running`, `paused`, `completed`, `completed_with_errors`. A terminal
-run (`completed` / `completed_with_errors`) is immutable; `--resume` refuses it.
+Run states are `created`, `running`, `paused`, `completed`,
+`completed_with_errors`, `failed`, and `cancelled`. `created` / `running` /
+`paused` are resumable; terminal runs (`completed`, `completed_with_errors`,
+`failed`, `cancelled`) are immutable and `--resume` refuses them.
 
 ## 5. Expected artifacts
 
@@ -178,13 +180,15 @@ as success.
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `related` status `error`, main volume/CPC/organic present | Copied-profile Surfer widget not rendering (env) | Expected; keep error + debug, do not claim expansion success |
-| Main Surfer volume/CPC missing or organic parse empty with debug `parser-context.json` | Product/parser defect | Inspect `debug/<run-id>/page.html`, `page.png`, `parser-context.json`; file a defect |
+| Main Surfer volume/CPC missing or organic parse empty with debug `parser-context.json` | Product/parser defect | Inspect the current research directory's `debug/<keyword-slug>/page.html`, `page.png`, and `parser-context.json`; file a defect |
 | `gl=us` but detected location differs | Geo mismatch, not a defect | Verify `geo_warning` surfaces everywhere |
 | `BROWSER_CONNECTION_ERROR` / `SURFER_NOT_DETECTED` / `GOOGLE_UNAVAILABLE` | Preflight/infra (exit 3) | Fix environment; not a false success |
 
-Debug artifacts live under `debug/<run-id>/` and contain: `page.html`,
-`page.png`, `parser-context.json` (keyword, parser/error code, selector/version,
-page URL — no secrets).
+For new durable-layout runs, parser evidence lives under
+`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/debug/<keyword-slug>/` and contains
+`page.html`, `page.png`, and `parser-context.json` (keyword, parser/error code,
+selector/version, page URL — no secrets). Legacy runs retain their historical
+`debug/<run-id>/<keyword-slug>/` location.
 
 ## 11. Acceptance result matrix
 
@@ -281,4 +285,3 @@ npm run research -- --seeds input/seeds.csv --force-refresh   # cold, real brows
 npm run research -- --resume <run-id>                         # no repeated completed work
 npm run research -- --seeds input/seeds.csv                   # warm: 100% cache hits, 0 lookups
 ```
-
