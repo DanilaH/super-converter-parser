@@ -304,6 +304,7 @@ export function score(
 
 export function buildCandidates(
   keywords: Array<{
+    idx: number;
     keyword: string;
     normalizedKeyword: string;
     status: KeywordStatus;
@@ -313,15 +314,16 @@ export function buildCandidates(
   serpRows: SerpResult[],
   thresholds: DrThresholds,
 ): Candidate[] {
-  const byKeyword = new Map<string, SerpResult[]>();
+  const byKeywordIdx = new Map<number, SerpResult[]>();
   for (const row of serpRows) {
-    const existing = byKeyword.get(row.keyword) ?? [];
+    if (row.keywordIdx === undefined) continue;
+    const existing = byKeywordIdx.get(row.keywordIdx) ?? [];
     existing.push(row);
-    byKeyword.set(row.keyword, existing);
+    byKeywordIdx.set(row.keywordIdx, existing);
   }
 
   const candidates: Candidate[] = keywords.map((keyword) => {
-    const rows = byKeyword.get(keyword.keyword) ?? [];
+    const rows = byKeywordIdx.get(keyword.idx) ?? [];
     const features = aggregate(
       {
         keyword: keyword.keyword,
