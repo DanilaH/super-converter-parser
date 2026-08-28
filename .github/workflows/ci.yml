@@ -15,9 +15,13 @@ jobs:
           node-version: 20
           cache: npm
       - name: Refresh lockfile for branch validation
-        run: |
-          npm install --package-lock-only --ignore-scripts
-          base64 -w 0 package-lock.json
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-lockfile
+          path: package-lock.json
+          retention-days: 1
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
