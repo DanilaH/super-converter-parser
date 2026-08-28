@@ -4,8 +4,8 @@ const DOMAIN_OPTIONS = {
   // For SEO research, private PSL boundaries represent independent sites too.
   // Example: foo.github.io and bar.github.io must not collapse to github.io.
   allowPrivateDomains: true,
-  // Callers already pass URL.hostname. Disabling extraction keeps this helper
-  // hostname-only instead of letting tldts reinterpret URLs/emails/host:port.
+  // Callers already pass URL.hostname. Disable tldts URL/email extraction too;
+  // the explicit delimiter guard below is what enforces the hostname-only contract.
   extractHostname: false,
 } as const;
 
