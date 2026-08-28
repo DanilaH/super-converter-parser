@@ -92,6 +92,7 @@ C:\\1Projects\\super-converter-parser-output\\
   2026-08-25-converters\\
     discovery\\
     enrichment\\
+    debug\\
     results.zip
 ```
 
@@ -361,7 +362,10 @@ Each execution creates an immutable historical research directory:
 ```text
 <RESEARCH_OUTPUT_ROOT>/<date>-<label>/
 ├── discovery/
+│   ├── run.sqlite
 │   ├── manifest.json
+│   ├── keywords.json
+│   ├── serp.json
 │   ├── keywords.csv
 │   ├── related-keywords.csv
 │   ├── serp.csv
