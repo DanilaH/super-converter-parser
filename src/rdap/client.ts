@@ -4,13 +4,13 @@
 //   1. Resolve the authoritative RDAP base URL(s) for the registrable domain via
 //      the IANA bootstrap (RdapBootstrapResolver, cached in-memory).
 //   2. Query each base URL, enforcing a per-host minimum delay, honoring
-//      Retry-After, and applying bounded retry/backoff for transient failures.
+//      Retry-After within the configured retry ceiling, and applying bounded
+//      retry/backoff for transient failures.
 //   3. Map HTTP outcome -> status and delegate body parsing to parse.ts.
 //
 // Mirrors the isolation/retry shape of createAhrefsClient (env/secret safety is
 // handled by the caller — RDAP needs no key). fetchImpl, now, and random are
 // injectable so the module is fully mock-testable.
-import { ResearchError } from '../shared/errors.js';
 import { registrableDomain } from '../domains/normalize.js';
 import { RdapBootstrapResolver } from './bootstrap.js';
 import { parseRdapDomainResponse } from './parse.js';
@@ -31,21 +31,26 @@ export function backoffMs(attempt: number, min: number, max: number, random: () 
   return Math.floor(Math.min(max, base + jitter));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function parseRetryAfter(header: string | null, fallbackSeconds: number): number {
-  if (!header) return fallbackSeconds * 1000;
-  const trimmed = header.trim();
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const parsed = Date.parse(trimmed);
-  if (Number.isFinite(parsed)) {
-    const delta = parsed - Date.now();
-    return delta > 0 ? delta : 0;
+function parseRetryAfter(
+  header: string | null,
+  fallbackMs: number,
+  maxDelayMs: number,
+  nowMs: number,
+): number {
+  let delayMs = fallbackMs;
+  if (header) {
+    const trimmed = header.trim();
+    const seconds = Number(trimmed);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      delayMs = seconds * 1000;
+    } else {
+      const parsed = Date.parse(trimmed);
+      if (Number.isFinite(parsed)) {
+        delayMs = Math.max(0, parsed - nowMs);
+      }
+    }
   }
-  return fallbackSeconds * 1000;
+  return Math.min(maxDelayMs, Math.max(0, delayMs));
 }
 
 export function createRdapClient(config: RdapClientConfig): RdapClient {
@@ -62,7 +67,7 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
     let baseUrls: string[] | null;
     try {
       baseUrls = await resolver.resolveBaseUrls(rdapDomain);
-     } catch (error) {
+    } catch (error) {
       return errorResult(
         rdapDomain,
         fetchedAt,
@@ -152,9 +157,12 @@ export function createRdapClient(config: RdapClientConfig): RdapClient {
               code: response.status === 429 ? 'RDAP_RATE_LIMIT' : 'RDAP_ERROR',
             };
             if (attempt < config.maxAttempts) {
+              const fallback = backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, config.random);
               const retryAfter = parseRetryAfter(
                 response.headers.get('Retry-After'),
-                backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, config.random) / 1000,
+                fallback,
+                config.maxDelayMs,
+                now(),
               );
               await sleep(retryAfter);
               continue;
