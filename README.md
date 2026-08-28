@@ -42,7 +42,7 @@ The spike output showed the Google URL with `hl=en&gl=us`, but Google still disp
 
 ## Main commands
 
-Target CLI:
+Primary CLI examples:
 
 ```bash
 # Main broad-discovery flow
@@ -59,13 +59,12 @@ npm run research -- --resume <run-id>
 
 # Force selected refresh
 npm run research -- --resume <run-id> --refresh-keyword "json diff"
-npm run research -- --resume <run-id> --refresh-domain example.com
 
 # Machine-readable final status for agents
 npm run research -- --microsoft input/microsoft.csv --json-status
 ```
 
-Exact flag names may be adjusted during implementation if consistency improves, but the capabilities are required.
+These examples reflect the implemented CLI. The `Implemented CLI` section below is authoritative for research commands; use `npm run enrich -- --help` for enrichment-specific options.
 
 ## Output location and names
 

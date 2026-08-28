@@ -208,7 +208,7 @@ mandatory row is `FAIL`.
 | 12 | `--json-status` stable and machine-readable | PASS | `src/cli/research.jsonstatus.test.ts` (completed / completed_with_errors / paused; JSON asserted as the single, final stdout line with no other JSON/ANSI noise) |
 | 13 | Representative real Google + Surfer e2e | PASS | live run against Research Chrome (CDP `http://127.0.0.1:9333`): cold `force-refresh` collected real Surfer volume/CPC + organic rows; `Ctrl+C` mid-collection exited `130` with the active keyword left resumable (`status.json` `"status":"paused"`); on the SAME run id `--resume` skipped the already-`completed` keyword (not re-collected, no keyword-cache re-fetch — volume unchanged) and performed exactly `2` browser lookups for the two pending keywords only; warm run was `100%` cache hits / `0` browser lookups. See §12.1 for the single-run-id evidence |
 | 14 | Docs reproducible, evidence + limitations honest | PASS | `ACCEPTANCE.md`, README acceptance note, `IMPLEMENTATION_PLAN.md` |
-| 15 | Typecheck + test suite green | PASS | `npx tsc --noEmit` clean; 299 pass / 0 fail / 1 skipped |
+| 15 | Typecheck + test suite green | PASS | CI runs `npm run typecheck` and the complete `npm test` suite; exact test counts are intentionally not pinned here because the suite grows |
 
 ## 12. PR #17 live E2E evidence (issue #16 §9)
 
