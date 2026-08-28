@@ -1,0 +1,294 @@
+from pathlib import Path
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"unexpected {label} shape: {count} matches")
+    return text.replace(old, new)
+
+store = Path("src/db/store.ts")
+text = store.read_text(encoding="utf-8")
+
+text = replace_once(
+    text,
+    "import type { SerpResult } from '../google/serp.js';\n",
+    "import type { SerpResult } from '../google/serp.js';\n"
+    "import { registrableDomain } from '../domains/normalize.js';\n",
+    "store registrableDomain import",
+)
+
+text = replace_once(
+    text,
+    "  force_refresh: number;\n  refresh_keywords: string;\n",
+    "  force_refresh?: number;\n  refresh_keywords?: string;\n",
+    "RunRow historical fields",
+)
+
+text = replace_once(
+    text,
+    "  cache_status: string | null;\n};\n\nexport class RunStore",
+    "  cache_status?: string | null;\n};\n\nexport class RunStore",
+    "KeywordRow historical cache field",
+)
+
+old_open = (
+    "  static openReadOnly(path: string): RunStore {\n"
+    "    const db = new Database(path, { readonly: true });\n"
+    "    return new RunStore(db);\n"
+    "  }\n\n"
+    "  private migrate(): void {\n"
+)
+new_open = (
+    "  static openReadOnly(path: string): RunStore {\n"
+    "    let db: Database.Database | null = null;\n"
+    "    try {\n"
+    "      db = new Database(path, { readonly: true, fileMustExist: true });\n"
+    "      const store = new RunStore(db);\n"
+    "      store.assertReadableDiscoverySchema();\n"
+    "      return store;\n"
+    "    } catch (error) {\n"
+    "      try {\n"
+    "        db?.close();\n"
+    "      } catch {\n"
+    "        // Preserve the original open/compatibility error.\n"
+    "      }\n"
+    "      if (error instanceof ResearchError && error.code === 'DB_ERROR') throw error;\n"
+    "      throw new ResearchError(\n"
+    "        'DB_ERROR',\n"
+    "        `Failed to open run store read-only at \"${path}\".`,\n"
+    "        { cause: error },\n"
+    "      );\n"
+    "    }\n"
+    "  }\n\n"
+    "  private tableColumns(table: 'runs' | 'keywords' | 'serp_rows'): Set<string> {\n"
+    "    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;\n"
+    "    return new Set(rows.map((row) => row.name));\n"
+    "  }\n\n"
+    "  private assertReadableDiscoverySchema(): void {\n"
+    "    const current = this.version;\n"
+    "    if (current < 1) {\n"
+    "      throw new ResearchError(\n"
+    "        'DB_ERROR',\n"
+    "        `Run store schema version ${current} predates the supported discovery schema (v1).`,\n"
+    "      );\n"
+    "    }\n"
+    "    if (current > SCHEMA_VERSION) {\n"
+    "      throw new ResearchError(\n"
+    "        'DB_ERROR',\n"
+    "        `Run store is at schema version ${current}, newer than this build supports (${SCHEMA_VERSION}). Refusing read-only access.`,\n"
+    "      );\n"
+    "    }\n\n"
+    "    const required: Record<'runs' | 'keywords' | 'serp_rows', readonly string[]> = {\n"
+    "      runs: [\n"
+    "        'run_id', 'state', 'created_at', 'updated_at', 'input_kind', 'input_path',\n"
+    "        'config_snapshot', 'parser_versions', 'lookups', 'pause_reason',\n"
+    "      ],\n"
+    "      keywords: [\n"
+    "        'run_id', 'idx', 'id', 'keyword', 'normalized_keyword', 'sources', 'status',\n"
+    "        'surfer', 'google', 'error', 'collected_at',\n"
+    "      ],\n"
+    "      serp_rows: [\n"
+    "        'run_id', 'keyword_idx', 'position', 'keyword', 'title', 'url', 'hostname', 'result_type',\n"
+    "      ],\n"
+    "    };\n\n"
+    "    const missing: string[] = [];\n"
+    "    for (const table of ['runs', 'keywords', 'serp_rows'] as const) {\n"
+    "      const columns = this.tableColumns(table);\n"
+    "      for (const column of required[table]) {\n"
+    "        if (!columns.has(column)) missing.push(`${table}.${column}`);\n"
+    "      }\n"
+    "    }\n"
+    "    if (missing.length > 0) {\n"
+    "      throw new ResearchError(\n"
+    "        'DB_ERROR',\n"
+    "        `Run store schema v${current} is not a readable discovery source; missing required columns: ${missing.join(', ')}.`,\n"
+    "      );\n"
+    "    }\n"
+    "  }\n\n"
+    "  private migrate(): void {\n"
+)
+text = replace_once(text, old_open, new_open, "openReadOnly")
+
+text = replace_once(
+    text,
+    "      forceRefresh: row.force_refresh === 1,\n"
+    "      refreshKeywords: JSON.parse(row.refresh_keywords) as string[],\n",
+    "      forceRefresh: row.force_refresh === 1,\n"
+    "      refreshKeywords:\n"
+    "        row.refresh_keywords === undefined ? [] : JSON.parse(row.refresh_keywords) as string[],\n",
+    "loadRun historical defaults",
+)
+
+start = text.index("  loadSerpRows(runId: string): SerpResult[] {")
+end = text.index("\n  // Organic result counts per keyword", start)
+new_method = (
+    "  loadSerpRows(runId: string): SerpResult[] {\n"
+    "    // Historical discovery stores are opened read-only and therefore cannot be\n"
+    "    // migrated just to satisfy newer derived SERP columns. Select compatible\n"
+    "    // aliases for columns added after v1, then reconstruct only the missing\n"
+    "    // registrable-domain value from the immutable hostname/URL evidence.\n"
+    "    const columns = this.tableColumns('serp_rows');\n"
+    "    const registrableDomainExpr = columns.has('registrable_domain')\n"
+    "      ? 'registrable_domain'\n"
+    "      : \"'' AS registrable_domain\";\n"
+    "    const drExpr = columns.has('dr') ? 'dr' : 'NULL AS dr';\n"
+    "    const drStatusExpr = columns.has('dr_status') ? 'dr_status' : 'NULL AS dr_status';\n"
+    "    const drErrorExpr = columns.has('dr_error') ? 'dr_error' : 'NULL AS dr_error';\n"
+    "    const rows = this.db\n"
+    "      .prepare(\n"
+    "        `SELECT keyword_idx, position, keyword, title, url, hostname,\n"
+    "                ${registrableDomainExpr}, ${drExpr}, ${drStatusExpr}, ${drErrorExpr}, result_type\n"
+    "         FROM serp_rows WHERE run_id = ? ORDER BY keyword_idx ASC, position ASC`,\n"
+    "      )\n"
+    "      .all(runId) as Array<{\n"
+    "      keyword_idx: number;\n"
+    "      position: number;\n"
+    "      keyword: string;\n"
+    "      title: string;\n"
+    "      url: string;\n"
+    "      hostname: string;\n"
+    "      registrable_domain: string;\n"
+    "      dr: number | null;\n"
+    "      dr_status: string | null;\n"
+    "      dr_error: string | null;\n"
+    "      result_type: string;\n"
+    "    }>;\n"
+    "    return rows.map((row) => ({\n"
+    "      keyword: row.keyword,\n"
+    "      keywordIdx: row.keyword_idx,\n"
+    "      position: row.position,\n"
+    "      title: row.title,\n"
+    "      url: row.url,\n"
+    "      hostname: row.hostname,\n"
+    "      registrableDomain:\n"
+    "        row.registrable_domain || deriveHistoricalRegistrableDomain(row.hostname, row.url),\n"
+    "      dr: row.dr,\n"
+    "      drStatus: (row.dr_status as SerpResult['drStatus']) ?? null,\n"
+    "      drError: row.dr_error ?? null,\n"
+    "      resultType: row.result_type as SerpResult['resultType'],\n"
+    "    }));\n"
+    "  }\n"
+)
+text = text[:start] + new_method + text[end:]
+
+text = replace_once(
+    text,
+    "    cacheStatus: row.cache_status === null ? null : (row.cache_status as StoredKeyword['cacheStatus']),\n",
+    "    cacheStatus: row.cache_status == null ? null : (row.cache_status as StoredKeyword['cacheStatus']),\n",
+    "mapKeywordRow historical cache default",
+)
+
+marker = "\nfunction mapKeywordRow(row: KeywordRow): StoredKeyword {"
+helper = (
+    "\nfunction deriveHistoricalRegistrableDomain(hostname: string, url: string): string {\n"
+    "  const fromHostname = registrableDomain(hostname);\n"
+    "  if (fromHostname) return fromHostname;\n"
+    "  try {\n"
+    "    return registrableDomain(new URL(url).hostname) ?? '';\n"
+    "  } catch {\n"
+    "    return '';\n"
+    "  }\n"
+    "}\n"
+)
+if text.count(marker) != 1:
+    raise SystemExit(f"unexpected mapKeywordRow marker: {text.count(marker)} matches")
+text = text.replace(marker, helper + marker)
+store.write_text(text, encoding="utf-8")
+
+tests = Path("src/db/store.test.ts")
+text = tests.read_text(encoding="utf-8")
+insert_at = "\ntest('a v1 run store migrates to the current schema with its data intact', async () => {"
+regression = r"""
+test('openReadOnly reads a v1 discovery store without migrating it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-readonly-v1-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'completed', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 1, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.0.0' }),
+  );
+  v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status, surfer, google, error, collected_at)
+     VALUES ('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', ?, 'completed', ?, ?, NULL, ?)`,
+  ).run(
+    JSON.stringify([{ type: 'seed', rowNumbers: [1] }]),
+    JSON.stringify({ volume: 49500, cpc: 7.9, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' }),
+    JSON.stringify({ hl: 'en', gl: 'us' }),
+    '2026-01-01T00:00:00.000Z',
+  );
+  v1.prepare(
+    `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, result_type)
+     VALUES ('run-1', 0, 1, 'compare lists', 'title', 'https://tools.example.co.uk/a', 'tools.example.co.uk', 'organic')`,
+  ).run();
+  v1.close();
+
+  const source = RunStore.openReadOnly(path);
+  assert.equal(source.version, 1);
+  const run = source.loadRun('run-1');
+  assert.ok(run);
+  assert.equal(run.forceRefresh, false);
+  assert.deepEqual(run.refreshKeywords, []);
+  assert.equal(source.loadKeywords('run-1')[0]?.cacheStatus, null);
+  const serp = source.loadSerpRows('run-1');
+  assert.equal(serp.length, 1);
+  assert.equal(serp[0]?.registrableDomain, 'example.co.uk');
+  assert.equal(serp[0]?.dr, null);
+  assert.equal(serp[0]?.drStatus, null);
+  assert.equal(serp[0]?.drError, null);
+  source.close();
+
+  // Read-only compatibility must never mutate a historical source run.
+  const raw = new Database(path, { readonly: true });
+  assert.equal(raw.pragma('user_version', { simple: true }), 1);
+  const keywordColumns = raw.prepare('PRAGMA table_info(keywords)').all() as Array<{ name: string }>;
+  const serpColumns = raw.prepare('PRAGMA table_info(serp_rows)').all() as Array<{ name: string }>;
+  assert.ok(!keywordColumns.some((column) => column.name === 'cache_status'));
+  assert.ok(!serpColumns.some((column) => column.name === 'registrable_domain'));
+  raw.close();
+});
+
+test('openReadOnly refuses discovery stores from a newer schema version', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-readonly-future-'));
+  const path = join(directory, 'run.sqlite');
+  const newer = new Database(path);
+  newer.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+  newer.close();
+
+  assert.throws(
+    () => RunStore.openReadOnly(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'DB_ERROR' &&
+      error.message.includes('newer than this build supports'),
+  );
+});
+
+"""
+if text.count(insert_at) != 1:
+    raise SystemExit(f"unexpected v1 test insertion marker: {text.count(insert_at)} matches")
+text = text.replace(insert_at, "\n" + regression + insert_at)
+tests.write_text(text, encoding="utf-8")
+
+readme = Path("README.md")
+text = readme.read_text(encoding="utf-8")
+old = (
+    "Legacy `runs/<uuid>` and `enrichments/<uuid>` directories remain resumable when\n"
+    "the CLI is launched from the checkout that contains them; they are not migrated\n"
+    "automatically.\n"
+)
+new = old + (
+    "\nEnrichment never migrates a source discovery database. Its read-only loader accepts\n"
+    "the v1 base discovery schema through the current schema, supplies null/default values\n"
+    "for later optional columns, and derives a missing registrable domain from the stored\n"
+    "hostname/URL. Source stores from a newer schema version are refused explicitly.\n"
+)
+text = replace_once(text, old, new, "README historical source note")
+readme.write_text(text, encoding="utf-8")
