@@ -87,14 +87,24 @@ export async function allocateEnrichmentDirectory(researchDirectory: string): Pr
   return allocateDirectory(researchDirectory, 'enrichment');
 }
 
-export async function writeRunIndex(outputRoot: string, record: RunIndexRecord): Promise<void> {
+export async function writeRunIndex(
+  outputRoot: string,
+  record: RunIndexRecord,
+  beforeCleanup?: () => void | Promise<void>,
+): Promise<void> {
   assertSafeId(record.runId, 'run');
   try {
     await writeIndex(join(outputRoot, 'index', 'runs', `${record.runId}.json`), record);
   } catch (error) {
-    // A discovery run publishes its index during fresh initialization, before
-    // the durable run row is created. If index publication fails, the allocated
-    // research directory is not resumable and must not survive as an orphan.
+    // Fresh discovery opens run.sqlite before publishing the index. Close any
+    // caller-owned handles first so Windows can delete the unindexed directory.
+    // The callback is best-effort because the original index failure is the
+    // operator-facing error that must be preserved.
+    if (beforeCleanup) {
+      await Promise.resolve(beforeCleanup()).catch(() => undefined);
+    }
+    // Index publication still precedes creation of the durable run row, so this
+    // directory is not resumable and must not survive as an orphan.
     await rm(record.researchDirectory, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
