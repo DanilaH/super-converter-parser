@@ -1,0 +1,181 @@
+name: PR 39 repair
+
+on:
+  push:
+    branches:
+      - fix/psl-domain-normalization
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/psl-domain-normalization
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply reviewed fixes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          # tldts is deliberately configured for PSL/private suffix handling,
+          # but the helper itself still owns the stricter hostname-only contract.
+          replace_once(
+              'src/domains/normalize.ts',
+              "  if (!host) return null;\n\n  return getDomain(host, DOMAIN_OPTIONS);",
+              "  if (!host) return null;\n  if (/[\\s/:@?#]/.test(host)) return null;\n\n  return getDomain(host, DOMAIN_OPTIONS);",
+          )
+
+          # Current documented/default Research Chrome endpoint is 9333.
+          replace_once(
+              'src/config/config.test.ts',
+              "assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9222');",
+              "assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9333');",
+          )
+
+          # Keep the declared Node 20 runtime: Undici 7.x supports Node >=20.18.1;
+          # Undici 8.x requires Node >=22.19.0.
+          replace_once('package.json', '"undici": "^8.10.0"', '"undici": "^7.29.0"')
+
+          # --json-status promises the compact JSON object as the final stdout line.
+          replace_once(
+              'src/cli/research.ts',
+              "    if (options.jsonStatus && store) {\n      console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness)));\n    }\n    store.close();",
+              "    const finalJsonStatus = options.jsonStatus && store\n      ? JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness))\n      : null;\n    store.close();",
+          )
+          replace_once(
+              'src/cli/research.ts',
+              "    } catch (archiveError) {\n      const message = archiveError instanceof Error ? archiveError.message : String(archiveError);\n      console.error(`  Archive warning: ${message}`);\n    }\n    return EXIT_OK;",
+              "    } catch (archiveError) {\n      const message = archiveError instanceof Error ? archiveError.message : String(archiveError);\n      console.error(`  Archive warning: ${message}`);\n    }\n    if (finalJsonStatus) console.log(finalJsonStatus);\n    return EXIT_OK;",
+          )
+
+          # CLI behavior tests predate the durable output layout. Keep them focused
+          # on CLI behavior while the dedicated researchLayout tests own layout rules.
+          Path('src/cli/testCli.ts').write_text("""import process from 'node:process';
+          import { mkdir, readFile, readdir, symlink } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { DEFAULT_CLI_DEPS, runCli as runCliRaw, type CliDeps } from './research.js';
+
+          type RunIndexRecord = {
+            version: 1;
+            runId: string;
+            researchDirectory: string;
+            discoveryDirectory: string;
+          };
+
+          export async function runCliInTestLayout(
+            argv: string[],
+            deps: CliDeps = DEFAULT_CLI_DEPS,
+            env: NodeJS.ProcessEnv = {},
+          ): Promise<number> {
+            const cwd = process.cwd();
+            const outputRoot = join(cwd, '.test-output');
+            const effectiveArgv = argv.includes('--output-root')
+              ? argv
+              : [...argv, '--output-root', outputRoot];
+            const code = await runCliRaw(effectiveArgv, deps, env);
+            await exposeLegacyTestViews(outputRoot, cwd);
+            return code;
+          }
+
+          async function exposeLegacyTestViews(outputRoot: string, cwd: string): Promise<void> {
+            const indexRoot = join(outputRoot, 'index', 'runs');
+            let entries: string[];
+            try {
+              entries = (await readdir(indexRoot)).filter((entry) => entry.endsWith('.json'));
+            } catch (error) {
+              if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+              throw error;
+            }
+
+            const runsRoot = join(cwd, 'runs');
+            const debugRoot = join(cwd, 'debug');
+            await mkdir(runsRoot, { recursive: true });
+            await mkdir(debugRoot, { recursive: true });
+
+            for (const entry of entries) {
+              const record = JSON.parse(await readFile(join(indexRoot, entry), 'utf8')) as RunIndexRecord;
+              await ensureDirectoryLink(record.discoveryDirectory, join(runsRoot, record.runId));
+              await ensureDirectoryLink(join(record.researchDirectory, 'debug'), join(debugRoot, record.runId));
+            }
+          }
+
+          async function ensureDirectoryLink(target: string, linkPath: string): Promise<void> {
+            try {
+              await symlink(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+            } catch (error) {
+              if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+            }
+          }
+          """.replace('\n          ', '\n').lstrip())
+
+          cli_tests = [
+              'src/cli/research.test.ts',
+              'src/cli/research.captcha.test.ts',
+              'src/cli/research.geo.test.ts',
+              'src/cli/research.jsonstatus.test.ts',
+              'src/cli/research.microsoft.test.ts',
+              'src/cli/research.preflight.test.ts',
+              'src/cli/research.secretLeak.test.ts',
+          ]
+          import_pattern = re.compile(r"import \{([^}]*)\} from './research\.js';")
+          for path in cli_tests:
+              p = Path(path)
+              text = p.read_text()
+              match = import_pattern.search(text)
+              if not match:
+                  raise SystemExit(f'{path}: research import not found')
+              names = [name.strip() for name in match.group(1).split(',') if name.strip()]
+              if 'runCli' not in names:
+                  raise SystemExit(f'{path}: runCli import not found')
+              names.remove('runCli')
+              production_import = "import { " + ', '.join(names) + " } from './research.js';" if names else ''
+              replacement = production_import + ("\n" if production_import else '') + "import { runCliInTestLayout as runCli } from './testCli.js';"
+              p.write_text(text[:match.start()] + replacement + text[match.end():])
+
+          # CAPTCHA detection now checks Page.isClosed(); old fakes must model it.
+          replace_once(
+              'src/browser/collect.captcha.test.ts',
+              "  const page = {\n    goto: async () => undefined,",
+              "  const page = {\n    isClosed: () => false,\n    goto: async () => undefined,",
+          )
+          for path in ['src/cli/research.captcha.test.ts', 'src/cli/research.preflight.test.ts']:
+              replace_once(
+                  path,
+                  "  return {\n    async goto(_url: string) {},",
+                  "  return {\n    isClosed: () => false,\n    async goto(_url: string) {},",
+              )
+          PY
+
+      - name: Refresh package lock only
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit fixes and remove helper workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/pr39-repair.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ci): repair hidden test debt"
+          git push origin HEAD:fix/psl-domain-normalization
