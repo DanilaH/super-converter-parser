@@ -606,7 +606,7 @@ data/cache/cache.sqlite               # Persistent cross-run cache (keyword/rela
 | --- | --- |
 | `status` | `pending` / `running` / `completed` / `partial` / `failed` |
 | `cache_status` | `hit` / `miss` / `expired` / `refreshed` (mutually exclusive, sum = processed) |
-| `ahrefs.state` | `complete` / `partial` / `skipped` |
+| `ahrefs.state` | `complete` / `degraded` / `skipped` / `failed` |
 | `collection_status` (suggestions) | `ok` / `empty` / `unavailable` / `error` |
 | `geo_warning` | `true` when detected Google location differs from target market |
 | `parser debug artifacts` | Saved to `<research-directory>/debug/<keyword-slug>/` on Surfer/Google parse failures |
@@ -644,42 +644,42 @@ Clusters keywords by comparing normalized registrable-domain sets from their org
 - `manifest.json` — persisted modules/config/shortlist, artifact list, and summary counts
 - `status.json` — machine-readable terminal status and the same summary counts
 
-The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. New enrichment checkpoints live in the allocated sibling enrichment directory (`<research-directory>/enrichment/enrichment.sqlite`, then `enrichment-02`, etc.); legacy `enrichments/<enrichment-id>/enrichment.sqlite` directories remain resume-compatible. Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
+ The source discovery SQLite is opened read-only. Keywords without a persisted SERP are recorded as explicit `no_serp` exclusions. New enrichment checkpoints live in the allocated sibling enrichment directory (`<research-directory>/enrichment/enrichment.sqlite`, then `enrichment-02`, etc.); legacy `enrichments/<enrichment-id>/enrichment.sqlite` directories remain resume-compatible. Ctrl+C exits 130 and the same ID resumes without recomputing completed modules.
 
-### Query-language collection
+ ### Query-language collection
 
-Collects factual query-language suggestions for shortlisted keywords from four sources, strictly separate from the discovery expansion queue. Collected rows **never** enter the Google lookup/expansion queue merely because this module ran.
+ Collects factual query-language suggestions for shortlisted keywords from four sources, strictly separate from the discovery expansion queue. Collected rows **never** enter the Google lookup/expansion queue merely because this module ran.
 
-**Sources (each keeps its own raw text and normalized identity; dedup is on the normalized identity while every parent/source occurrence is retained):**
+ **Sources (each keeps its own raw text and normalized identity; dedup is on the normalized identity while every parent/source occurrence is retained):**
 
-- `surfer_related` — Keyword Surfer related-keyword sidebar (carries volume where available)
-- `google_autocomplete` — Google autocomplete XHR
-- `google_related_search` — "Searches related to …" block
-- `google_paa` — People Also Ask question text only (answers are never clicked or collected)
+ - `surfer_related` — Keyword Surfer related-keyword sidebar (carries volume where available)
+ - `google_autocomplete` — Google autocomplete XHR
+ - `google_related_search` — "Searches related to …" block
+ - `google_paa` — People Also Ask question text only (answers are never clicked or collected)
 
-**Constraints enforced:**
+ **Constraints enforced:**
 
-- Google-sourced suggestions retain `volume`/`cpc` as `null`; this module never invents demand.
-- An absent sidebar/source is recorded truthfully as `unavailable`/`empty`/`error` — never as a fabricated successful row.
-- Reuses the TASK-009 research Chrome profile; never the user's daily profile. No proxy/anti-bot, no CAPTCHA bypass.
-- When the source discovery run already contains a successful or truthful-empty
-  Surfer related result, enrichment reuses it with `cache_status=source_run`.
-  It does not repeat the browser lookup or replace valid discovery evidence with
-  a later `empty`/`unavailable` result.
-- Cached per (source + parent keyword + market/hl/gl + parser version) with source-appropriate TTL, so resume and repeat runs avoid re-hitting the browser.
-- Checkpointed per (parent, source) and Ctrl+C-pausable like every enrichment module.
+ - Google-sourced suggestions retain `volume`/`cpc` as `null`; this module never invents demand.
+ - An absent sidebar/source is recorded truthfully as `unavailable`/`empty`/`error` — never as a fabricated successful row.
+ - Reuses the TASK-009 research Chrome profile; never the user's daily profile. No proxy/anti-bot, no CAPTCHA bypass.
+ - When the source discovery run already contains a successful or truthful-empty
+   Surfer related result, enrichment reuses it with `cache_status=source_run`.
+   It does not repeat the browser lookup or replace valid discovery evidence with
+   a later `empty`/`unavailable` result.
+ - Cached per (source + parent keyword + market/hl/gl + parser version) with source-appropriate TTL, so resume and repeat runs avoid re-hitting the browser.
+ - Checkpointed per (parent, source) and Ctrl+C-pausable like every enrichment module.
 
-**Configurable flags (query_suggestions only):**
+ **Configurable flags (query_suggestions only):**
 
-- `--sources <csv>` — subset of the four sources above (default: all four)
-- `--max-suggestions-per-source <n>` — cap per source (default 20)
+ - `--sources <csv>` — subset of the four sources above (default: all four)
+ - `--max-suggestions-per-source <n>` — cap per source (default 20)
 
-**Outputs:**
+ **Outputs:**
 
-- `query-suggestions.csv` — normalized_suggestion, raw_text, parent_keywords, sources, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences
-- `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
-- `manifest.json` / `status.json` — include the same artifacts and summary counts
-- SQLite state lives in the allocated enrichment directory (`<research-directory>/enrichment[-NN]/enrichment.sqlite`); legacy `enrichments/<enrichment-id>/enrichment.sqlite` remains resume-compatible.
+ - `query-suggestions.csv` — normalized_suggestion, raw_text, parent_keywords, sources, volume, cpc, ordinal, market, hl, gl, parser_version, collection_status, occurrences
+  - `query-suggestions.json` — full per-source status, source-stats, deduped suggestions with every occurrence
+  - `manifest.json` / `status.json` — include the same artifacts and summary counts
+  - SQLite state lives in the allocated enrichment directory (`<research-directory>/enrichment[-NN]/enrichment.sqlite`); legacy `enrichments/<enrichment-id>/enrichment.sqlite` remains resume-compatible.
 
 ### Domain registration age
 
