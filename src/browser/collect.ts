@@ -13,7 +13,7 @@ import {
   ORGANIC_EXTRACT_SCRIPT,
   type SerpResult,
 } from '../google/serp.js';
-import type { KeywordRecord } from '../runs/run.js';
+import type { KeywordRecord, SerpObservationStatus } from '../runs/run.js';
 import {
   pauseForManualCaptcha,
   waitForManualCaptcha,
@@ -96,6 +96,8 @@ export async function collectKeyword(
     let volume: number | null = null;
     let cpc: number | null = null;
     let serpRows: SerpResult[] = [];
+    let serpStatus: SerpObservationStatus = 'not_fetched';
+    let serpError: ComponentError | null = null;
 
     try {
       const surfer = await readSurferResult(
@@ -163,10 +165,14 @@ export async function collectKeyword(
             'Organic SERP extraction returned zero rows while the page is not a zero-result page; the selector may be broken.',
           );
         }
+        serpStatus = 'empty';
+      } else {
+        serpStatus = 'ok';
       }
     } catch (error) {
-      const { code, message } = toComponentError(error, 'GOOGLE_SERP_PARSE_ERROR');
-      errors.push({ code, message });
+      serpError = toComponentError(error, 'GOOGLE_SERP_PARSE_ERROR');
+      serpStatus = serpError.code === 'GOOGLE_UNAVAILABLE' ? 'fetch_error' : 'parse_error';
+      errors.push(serpError);
     }
 
     const detectedLocation = await readDetectedLocation(page);
@@ -188,6 +194,26 @@ export async function collectKeyword(
           config,
           firstError.code,
           firstError.message,
+        ),
+      );
+    }
+
+    // The aggregate keyword error preserves the first failing component for
+    // backward compatibility, but the Google SERP error is independently
+    // persisted below. When Surfer failed first, retain a Google-specific debug
+    // context as well instead of losing the second parser failure completely.
+    if (serpError && serpError !== firstError && isParserErrorCode(serpError.code)) {
+      debugArtifactPath = await saveParserFailureArtifacts(
+        page,
+        config,
+        debugRoot,
+        `${keywordSlug(keyword.normalizedKeyword)}-serp`,
+        buildParserFailureContext(
+          keyword.normalizedKeyword,
+          pageUrl,
+          config,
+          serpError.code,
+          serpError.message,
         ),
       );
     }
@@ -227,6 +253,8 @@ export async function collectKeyword(
         pageUrl,
         detectedLocation,
         geoWarning,
+        serpStatus,
+        serpError,
       },
       error: firstError ? { code: firstError.code, message: firstError.message } : null,
     };
@@ -251,6 +279,8 @@ export async function collectKeyword(
         pageUrl,
         detectedLocation: null,
         geoWarning: false,
+        serpStatus: 'fetch_error',
+        serpError: { code, message },
       },
       error: { code, message },
     };
@@ -315,7 +345,7 @@ export async function collectRelatedKeyword(
           ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
           : rows.length > 0
             ? { status: 'ok', error: null, rows }
-            : { status: 'empty', error: null, rows: [] },
+            : { status: 'empty', error: null, rows },
         debugArtifactPath: null,
       };
     } catch (error) {
