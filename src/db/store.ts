@@ -615,7 +615,10 @@ export class RunStore {
         `Run store is at schema version ${current}, newer than this build supports (${MIGRATIONS.length}). Refusing to open it.`,
       );
     }
-    if (current === MIGRATIONS.length) return;
+    // `user_version` only records the ordered migration sequence. The dynamic
+    // repair phase below is deliberately idempotent and must still run when the
+    // version is already current: a previous open may have advanced user_version
+    // before a later repair step was interrupted or failed.
     for (let version = current; version < MIGRATIONS.length; version += 1) {
       try {
         const apply = this.db.transaction(() => {
@@ -624,9 +627,13 @@ export class RunStore {
         });
         apply();
       } catch (error) {
+        // Migrations commit one version at a time. Earlier versions in this open
+        // may already be durable, so report the actual persisted version rather
+        // than the version observed before the migration loop started.
+        const persistedVersion = this.db.pragma('user_version', { simple: true }) as number;
         throw new ResearchError(
           'DB_ERROR',
-          `Run store schema migration v${version + 1} failed; the database was left at v${current}.`,
+          `Run store schema migration v${version + 1} failed; the database was left at v${persistedVersion}.`,
           { cause: error },
         );
       }
