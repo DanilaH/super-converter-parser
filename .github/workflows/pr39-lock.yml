@@ -1,0 +1,33 @@
+name: PR 39 lock refresh
+
+on:
+  push:
+    branches:
+      - fix/psl-domain-normalization
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/psl-domain-normalization
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts
+      - name: Commit lockfile and remove helper
+        shell: bash
+        run: |
+          git rm .github/workflows/pr39-lock.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: refresh undici lockfile"
+          git push origin HEAD:fix/psl-domain-normalization
