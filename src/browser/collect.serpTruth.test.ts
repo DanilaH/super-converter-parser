@@ -16,7 +16,9 @@ import type { KeywordRecord } from '../runs/run.js';
 
 const config = loadConfig({
   EXPANSION_ENABLED: 'false',
-  SURFER_WAIT_MS: '0',
+  // readSurferResult compares Date.now() against the deadline. A literal 0 ms
+  // makes the test depend on two clock reads landing in the same millisecond.
+  SURFER_WAIT_MS: '25',
 } as NodeJS.ProcessEnv);
 
 function keyword(): KeywordRecord {
