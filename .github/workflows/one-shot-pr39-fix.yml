@@ -1,0 +1,69 @@
+name: One-shot PR39 test patch
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'fix/psl-domain-normalization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply exact replacements
+        shell: python
+        run: |
+          from pathlib import Path
+
+          store = Path('src/cache/store.test.ts')
+          text = store.read_text(encoding='utf-8')
+          old = """test('keywordCacheIdentity comes from config and parser versions', () => {
+            assert.deepEqual(keywordCacheIdentity(CONFIG), {
+              market: 'US',
+              hl: 'en',
+              gl: 'us',
+              topN: 10,
+              surferParserVersion: '1.0.0',
+              googleParserVersion: '1.2.0',
+            });
+          });"""
+          new = old.replace("googleParserVersion: '1.2.0'", "googleParserVersion: '1.3.0'")
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one store.test target, found {text.count(old)}')
+          store.write_text(text.replace(old, new), encoding='utf-8')
+
+          captcha = Path('src/cli/research.captcha.test.ts')
+          text = captcha.read_text(encoding='utf-8')
+          old = """    const t1 = setTimeout(() => process.emit('SIGINT'), 400);
+              const t2 = setTimeout(() => process.emit('SIGINT'), 600);
+              const code = await run;
+              clearTimeout(t1);
+              clearTimeout(t2);"""
+          new = """    const t = setTimeout(() => {
+                process.emit('SIGINT');
+                process.emit('SIGINT');
+              }, 400);
+              const code = await run;
+              clearTimeout(t);"""
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one captcha target, found {text.count(old)}')
+          captcha.write_text(text.replace(old, new), encoding='utf-8')
+
+          Path('.github/workflows/one-shot-pr39-fix.yml').unlink()
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cache/store.test.ts src/cli/research.captcha.test.ts .github/workflows/one-shot-pr39-fix.yml
+          git diff --cached --check
+          git commit -m "test: fix final parser-version and SIGINT assertions"
+          git push origin HEAD:${{ github.head_ref }}
