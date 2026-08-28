@@ -294,6 +294,52 @@ test('runEnrichment: reads a v1 source path without migrating it', async () => {
 });
 
 
+test('runEnrichment: resume refuses pages without a persisted shortlist', async () => {
+  const runId = 'resume-shortlist-source';
+  const sourceStore = createTestSourceStore(runId);
+  const enrichmentDir = await mkdtemp(join(tmpdir(), 'enrichment-resume-shortlist-'));
+  const enrichmentStore = RunStore.open(join(enrichmentDir, 'enrichment.sqlite'));
+  const enrichmentId = 'resume-shortlist-enrichment';
+
+  enrichmentStore.createEnrichmentRun({
+    enrichmentId,
+    sourceRunId: runId,
+    modules: ['pages'],
+    config: JSON.stringify({ pages: PAGES_CONFIG, http: HTTP_CONFIG }),
+    sourceRunDirectory: 'source',
+    enrichmentDirectory: enrichmentDir,
+    shortlistKeywords: [],
+  });
+
+  try {
+    const outcome = await runEnrichment({
+      enrichmentId,
+      sourceStoreOrPath: sourceStore,
+      sourceRunId: runId,
+      enrichmentStore,
+      enrichmentDirectory: enrichmentDir,
+      modules: ['pages'],
+      shortlist: [],
+      config: { pages: PAGES_CONFIG, http: HTTP_CONFIG },
+      httpConfig: HTTP_CONFIG,
+      pagesConfig: PAGES_CONFIG,
+      siteStructureConfig: SITE_STRUCTURE_CONFIG,
+      logger: () => {},
+      resume: true,
+    });
+
+    assert.equal(outcome.kind, 'failed');
+    assert.match(outcome.error ?? '', /require a --shortlist of 5–200 keywords/);
+    assert.equal(enrichmentStore.loadEnrichmentRun(enrichmentId)?.state, 'failed');
+    assert.equal(enrichmentStore.loadPageTargets(enrichmentId).length, 0);
+  } finally {
+    sourceStore.close();
+    enrichmentStore.close();
+    await rm(enrichmentDir, { recursive: true, force: true });
+  }
+});
+
+
 test('runEnrichment: removes terminal status when final manifest publication fails', async () => {
   const runId = 'manifest-failure-source';
   const sourceStore = createTestSourceStore(runId);

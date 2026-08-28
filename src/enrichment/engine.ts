@@ -309,7 +309,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     let queryResult: QuerySuggestionResult | undefined;
 
     const networkModules = modules.filter((m) => m === 'pages' || m === 'site_structure');
-    if (networkModules.length > 0 && !resume) {
+    if (networkModules.length > 0) {
       if (!shortlist || shortlist.length === 0) {
         throw new Error(`Modules ${networkModules.join(', ')} require a --shortlist of 5–200 keywords (deep selection). Got no shortlist.`);
       }

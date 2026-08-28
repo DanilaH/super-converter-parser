@@ -434,10 +434,16 @@ async function main(): Promise<void> {
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
       shortlist = existingRun.shortlistKeywords;
-      if (existingRun.modules.includes('query_suggestions') && (shortlist.length < 5 || shortlist.length > 200)) {
+      const persistedShortlistRequiredBy = existingRun.modules.filter((module) =>
+        SHORTLIST_REQUIRED_MODULES.includes(module),
+      );
+      if (
+        persistedShortlistRequiredBy.length > 0 &&
+        (shortlist.length < 5 || shortlist.length > 200)
+      ) {
         throw new ResearchError(
           'INPUT_SCHEMA_ERROR',
-          `Persisted shortlist has ${shortlist.length} keywords; required 5-200. Cannot resume.`,
+          `Persisted shortlist has ${shortlist.length} keywords; modules ${persistedShortlistRequiredBy.join(', ')} require 5-200. Cannot resume.`,
         );
       }
       modules = existingRun.modules;
