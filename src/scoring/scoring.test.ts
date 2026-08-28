@@ -251,5 +251,5 @@ test('buildCandidates sorts by score desc, volume desc, normalized keyword asc, 
 });
 
 test('SCORING_VERSION is the documented contract version', () => {
-  assert.equal(SCORING_VERSION, '1.0.0');
+  assert.equal(SCORING_VERSION, '1.1.0');
 });
