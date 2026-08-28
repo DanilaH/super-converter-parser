@@ -5,55 +5,103 @@
 1. Local-first.
 2. CLI-first.
 3. Strict TypeScript.
-4. Reuse the browser/Surfer/SERP logic proven by the spike.
+4. Reuse the browser/Surfer/SERP integration proven by the spike.
 5. Persistent cache and resumability are core functionality, not polish.
 6. No frontend framework.
 7. No unnecessary service architecture.
-8. Provider integrations must be isolated behind small adapters.
-9. Raw evidence must be retained for debugging parser breakage.
+8. Provider integrations stay isolated behind small adapters.
+9. Raw/debug evidence is retained when parser health fails.
+10. User-facing artifacts must distinguish measured, unavailable, failed, and intentionally omitted data.
 
-## Proposed stack
+## Implemented stack
 
 ```text
-Node.js
-TypeScript
-Playwright
-CSV parser/writer
-small durable local persistence layer
+Node.js >= 20
+TypeScript 5
+Playwright Core over CDP
+better-sqlite3
+csv-parse
+undici
+TLDTS
+CSV / JSON / Markdown artifacts
 ```
 
-Persistence can be implemented with SQLite or a carefully designed file-based store.
+SQLite is the implemented durable persistence layer. It is not an optional proposal:
 
-Preferred decision rule:
+```text
+Discovery run        -> <research>/discovery/run.sqlite
+Deep enrichment     -> <research>/enrichment*/enrichment.sqlite
+Cross-run cache     -> data/cache/cache.sqlite (configurable)
+```
 
-- use SQLite if it materially simplifies cache TTL, run state, atomic checkpoints, and queries;
-- use JSON/files only if reliability remains equally clear and atomic.
-
-Do not introduce a remote database.
+JSON/CSV/Markdown files are publication artifacts derived from durable state; they are not the resume source of truth. Do not introduce a remote database unless the product architecture changes materially.
 
 ## High-level modules
 
 ```text
 src/
-├── cli/
-├── config/
+├── ahrefs/          # Domain Rating provider adapter
+├── browser/         # CDP connection, collection, CAPTCHA/preflight
+├── cache/           # Persistent cross-run cache + identities/TTL
+├── cli/             # research / enrich entry points
+├── config/          # typed runtime configuration
+├── db/              # SQLite schema, migrations, RunStore
+├── diagnostics/     # parser-failure evidence
+├── domains/         # hostname / registrable-domain normalization
+├── enrichment/      # clusters, suggestions, pages, site structure, HTTP safety
+├── exports/         # generic CSV/export helpers
+├── firstseen/       # first-seen provider adapter (Wayback path)
+├── google/          # SERP, autocomplete, PAA, related-search parsing
 ├── input/
 │   ├── seeds/
 │   └── microsoft/
-├── browser/
-├── google/
-├── surfer/
-├── ahrefs/
-├── domains/
-├── cache/
-├── runs/
-├── scoring/
-├── output/
-├── diagnostics/
-└── shared/
+├── outputs/         # research layout, archive/publication paths
+├── rdap/            # registration-date provider adapter
+├── runs/            # discovery engine, snapshots, domain-age enrichment
+├── scoring/         # candidate scoring/ranking
+├── shared/          # intentionally small cross-cutting utilities
+└── surfer/          # Keyword Surfer parsing/selectors
 ```
 
-Keep `shared` intentionally small.
+Keep `shared` intentionally small. Provider-specific behavior belongs in its provider module; durable state belongs behind `RunStore`/cache abstractions rather than ad-hoc files.
+
+## Runtime shape
+
+The product has two durable phases.
+
+### Discovery
+
+```text
+Seeds / Microsoft CSV
+        ↓
+research CLI
+        ↓
+Google + Keyword Surfer via Playwright/CDP
+        ↓
+optional Ahrefs DR
+        ↓
+run.sqlite checkpoints
+        ↓
+keywords / SERP / related / domains / candidates artifacts
+```
+
+A fresh run is allocated only after input/config/cache preflight that can be completed without durable run state. Once a run row and keywords exist, browser preflight failures or cancellation remain resumable.
+
+### Deep enrichment
+
+```text
+completed discovery run + explicit shortlist
+        ↓
+enrich CLI
+        ↓
+clusters | query_suggestions | domain_age | pages | site_structure
+        ↓
+enrichment.sqlite per-module/per-target checkpoints
+        ↓
+module CSV/JSON + status.json + manifest.json
+```
+
+Deep modules are bounded independently. Domain caps must be visible in artifacts as omitted evidence, not silently discarded.
 
 ## Browser architecture
 
@@ -76,7 +124,7 @@ Do not automate Chrome Web Store extension installation. One-time manual install
 
 ## Proven Surfer integration
 
-The spike showed useful extension elements injected into the main Google document, including:
+The implementation relies on extension elements injected into the main Google document, including markers such as:
 
 ```text
 surfer-main-keyword-widget
@@ -84,7 +132,7 @@ keyword-surfer-result
 keyword-surfer-sidebar
 ```
 
-The implementation should reuse the proven parsing strategy where reasonable, but selectors must be centralized and guarded with parser health checks because extension/Google DOM can change.
+Selectors are centralized and versioned. Parser-health failures must produce structured errors/debug evidence instead of silently turning missing DOM into valid zero data.
 
 ## Google location model
 
@@ -92,65 +140,63 @@ Track these independently:
 
 ```ts
 type ResearchMarket = {
-  surferMarket: string;       // e.g. US
-  googleHl: string;           // e.g. en
-  googleGl: string;           // e.g. us
+  surferMarket: string;
+  googleHl: string;
+  googleGl: string;
   detectedGoogleLocation?: string;
   serpGeoMatchesTarget?: boolean;
 };
 ```
 
-`gl=us` does not guarantee a physically US-localized SERP.
+`gl=us` does not guarantee a physically US-localized SERP. The runner must never silently claim "US SERP" merely because `gl=us` was supplied.
 
-The runner must never silently claim "US SERP" merely because `gl=us` was supplied.
+## Provider boundaries
 
-## Ahrefs
+### Ahrefs
 
-Use the official free Domain Rating endpoint.
+Use the official free Domain Rating endpoint. Do not scrape Ahrefs UI.
 
-Do not scrape Ahrefs UI.
+The adapter accepts a normalized registrable domain and returns a structured success/not-found/error result. Requests, including response-body consumption, are timeout-bounded. Authentication failures are treated as systemic rather than fanned out across every domain.
 
-Ahrefs integration should accept a normalized registrable domain and return:
+### RDAP
 
-```ts
-type DomainRatingResult = {
-  domain: string;
-  dr: number | null;
-  fetchedAt: string;
-  source: "ahrefs";
-  status: "ok" | "not_found" | "error";
-};
-```
+RDAP resolves registration evidence. Bootstrap/query state is isolated behind the RDAP adapter, with bounded retries/backoff and capped `Retry-After` handling.
+
+### First seen
+
+First-seen evidence is a separate fact from registration date. It may be unavailable when no provider is configured. Registration date and first-seen date must never alias one another.
 
 ## Agent compatibility
 
-The runner must expose:
+The CLIs expose:
 
-- stable CLI commands;
+- stable commands;
 - meaningful exit codes;
 - `status.json`;
 - final JSON status output option;
-- deterministic result paths.
+- deterministic result paths;
+- durable SQLite checkpoints for resume.
 
-An agent should not need to parse ANSI terminal progress output to know whether a run succeeded.
+An agent should not need to parse ANSI terminal progress output to determine whether a run succeeded.
 
 ---
 
 ## Data model
 
-The exact implementation may differ, but the information below must be representable without lossy transformations.
+The shapes below describe logical runtime records. SQLite schemas/migrations are authoritative for persisted identifiers and checkpoints.
 
 ## Keyword
 
 ```ts
 type KeywordRecord = {
   id: string;
-  keyword: string;
-  normalizedKeyword: string;
+  idx: number;                 // stable persisted keyword ownership key
+  keyword: string;             // original display text
+  normalizedKeyword: string;   // normalized lookup/cache identity
 
   sources: Array<
-    | { type: "seed" }
-    | { type: "microsoft"; sourceRow?: number }
+    | { type: "seed"; rowNumbers?: number[] }
+    | { type: "microsoft"; rowNumbers?: number[] }
     | {
         type: "surfer_related";
         parentKeyword: string;
@@ -158,36 +204,11 @@ type KeywordRecord = {
       }
   >;
 
-  microsoft?: {
-    volumeBucket?: string | null;
-    volumeRaw?: number | null;
-    competition?: string | null;
-    cpc?: number | null;
-  };
-
-  surfer?: {
-    volume: number | null;
-    cpc: number | null;
-    market: string;
-    fetchedAt: string;
-  };
-
-  google?: {
-    hl: string;
-    gl: string;
-    pageUrl: string;
-    detectedLocation?: string | null;
-    geoWarning?: boolean;
-  };
-
-  status:
-    | "pending"
-    | "running"
-    | "completed"
-    | "partial"
-    | "failed";
+  status: "pending" | "running" | "completed" | "partial" | "failed";
 };
 ```
+
+Text normalization is not a relational key. SERP ownership, scoring, clustering, and other persisted joins must use the durable keyword index/ID rather than comparing raw keyword strings.
 
 ## Related keyword
 
@@ -206,169 +227,123 @@ type RelatedKeyword = {
 ```ts
 type SerpResult = {
   keyword: string;
+  keywordIdx?: number;         // populated for persisted rows
   position: number;
   title: string;
   url: string;
   hostname: string;
   registrableDomain: string;
-  resultType: "organic" | "featured_organic" | "unknown";
   dr: number | null;
+  drStatus: "ok" | "not_found" | "error" | "not_attempted" | null;
+  drError?: string | null;
+  resultType: "organic";
 };
 ```
 
-## Domain cache entry
+## Cache identities
 
-```ts
-type DomainCacheEntry = {
-  domain: string;
-  dr: number | null;
-  source: "ahrefs";
-  status: "ok" | "not_found" | "error";
-  fetchedAt: string;
-  expiresAt: string;
-};
-```
+Cache separate facts independently:
 
-## Keyword cache entry
+1. Google/Surfer keyword research;
+2. Surfer related-keyword expansion;
+3. Ahrefs domain DR;
+4. RDAP/first-seen domain-age facts;
+5. query-suggestion source results.
 
-Cache separately:
+This allows independent TTLs, parser versions, refresh, and error lifetimes. A short-lived sibling fact must not reset or invalidate an unrelated long-lived fact.
 
-1. Google/Surfer research result;
-2. related-keyword result;
-3. domain DR.
+## Durable run state
 
-This allows independent TTLs and refresh.
+Discovery state lives in `run.sqlite`; enrichment state lives in `enrichment.sqlite`. Important invariants:
 
-```ts
-type KeywordResearchCache = {
-  keyword: string;
-  market: string;
-  hl: string;
-  gl: string;
-  volume: number | null;
-  cpc: number | null;
-  organicResults: SerpResult[];
-  fetchedAt: string;
-  expiresAt: string;
-  parserVersion: string;
-};
-```
-
-## Run
-
-```ts
-type RunManifest = {
-  runId: string;
-  createdAt: string;
-  updatedAt: string;
-  state:
-    | "created"
-    | "running"
-    | "paused"
-    | "completed"
-    | "completed_with_errors"
-    | "failed"
-    | "cancelled";
-
-  input: {
-    kind: "seeds" | "microsoft";
-    path: string;
-  };
-
-  configSnapshot: unknown;
-  parserVersion: string;
-
-  progress: {
-    totalKeywords: number;
-    completedKeywords: number;
-    totalDomains: number;
-    completedDomains: number;
-    errors: number;
-  };
-};
-```
-
-## Cache invariants
-
-- Cache entries must include fetch timestamp.
-- TTL must be configurable by source.
-- A parser-version change may invalidate browser-derived cache if necessary.
-- Failed responses should not be cached with the same TTL as successful data.
-- Force-refresh must bypass cache intentionally.
+- schema changes use versioned migrations;
+- per-keyword/per-target work is checkpointed incrementally;
+- a terminal artifact is published only from durable state;
+- resume resets interrupted `running` work to retryable state where appropriate;
+- completed checkpoints are not re-fetched merely because a mutable cross-run cache entry changed;
+- omitted work is terminal evidence, not successful measurement.
 
 ---
 
 ## Configuration
 
-Configuration should be explicit and versioned into each run manifest.
-
-Example shape:
+`ResearchConfig` is explicit and persisted as a sanitized snapshot for reproducibility. The implemented top-level shape is:
 
 ```ts
-type Config = {
+type ResearchConfig = {
   research: {
-    market: "US";
-    googleHl: "en";
-    googleGl: "us";
-    topN: 10;
+    market: string;
+    googleHl: string;
+    googleGl: string;
+    topN: number;
   };
 
   browser: {
     cdpUrl: string;
     navigationTimeoutMs: number;
     surferWaitTimeoutMs: number;
+    surferPreflightTimeoutMs: number;
+    surferWidgetSelector: string;
+    surferRelatedWidgetSelector: string;
+    surferRelatedMissingWidgetTimeoutMs: number;
   };
 
-  rateLimit: {
-    keywordConcurrency: number;
-    minDelayMs: number;
+  retry: {
+    maxAttempts: number;
+    baseDelayMs: number;
     maxDelayMs: number;
   };
 
-  retries: {
-    maxAttempts: number;
-    baseDelayMs: number;
+  circuitBreaker: {
+    surferWindow: number;
+    surferFailureThreshold: number;
+    googleConsecutiveThreshold: number;
+  };
+
+  expansion: {
+    enabled: boolean;
+    depth: number;
+    maxCandidatesPerKeyword: number;
+    minOverlap: number;
+    minVolume: number;
   };
 
   cache: {
-    keywordTtlHours: number;
-    relatedKeywordTtlHours: number;
-    domainDrTtlHours: number;
+    path: string;
+    ttl: Record<string, number | object>;
   };
 
-  surferExpansion: {
-    enabled: boolean;
-    maxRelatedPerSeed: number;
-    maxDepth: 1;
-    minVolume?: number;
+  ahrefs: {
+    endpoint: string;
+    rateLimitMinDelayMs: number;
+    rateLimitMaxDelayMs: number;
+    timeoutMs: number;
+    requireAhrefs: boolean;
   };
 
-  drThresholds: {
-    veryWeakBelow: number;
-    weakBelow: number;
-    strongFrom: number;
-    veryStrongFrom: number;
-  };
+  rdap: object;
+  firstSeen: object;
 
-  circuitBreaker: {
-    rollingWindow: number;
-    maxParserFailureRate: number;
-    maxConsecutiveGoogleFailures: number;
+  scoring: {
+    drThresholds: {
+      veryWeakMax: number;
+      weakMax: number;
+      strongMin: number;
+      strongMax: number;
+    };
   };
 };
 ```
 
-Secrets:
+The exact nested TTL/provider fields are defined in `src/config/config.ts`; do not duplicate independent defaults elsewhere.
+
+Secrets such as:
 
 ```text
 AHREFS_API_KEY
 ```
 
-must come from environment configuration and must never be committed.
-
-Provide `.env.example`.
-
-Every run must save a sanitized config snapshot in `manifest.json`.
+come from environment configuration and must never be committed or persisted in sanitized run snapshots.
 
 ---
 
@@ -378,60 +353,47 @@ Reliability is part of v1.
 
 ## Persistent cache
 
-Cache:
-
-1. keyword → Google/Surfer result;
-2. keyword → Surfer related ideas;
-3. domain → Ahrefs DR.
-
-Required:
+Required properties:
 
 - persisted between runs;
-- configurable TTL;
-- cache hit/miss statistics;
+- configurable TTL per fact/status;
+- parser/query-version aware where semantics depend on a parser contract;
+- cache hit/miss/error accounting;
 - force refresh;
-- safe invalidation.
-
-Suggested default TTLs are implementation decisions and must be documented.
+- safe invalidation;
+- failed responses use shorter TTLs than valid stable data.
 
 ## Resume/checkpoints
 
-A run must persist progress incrementally.
-
-If it stops at keyword 137/200:
+A discovery run stopped partway through must continue unfinished work:
 
 ```text
 npm run research -- --resume <run-id>
 ```
 
-must continue unfinished work.
+A deep-enrichment run resumes by enrichment ID:
 
-Do not require restarting from zero.
+```text
+npm run enrich -- --resume <enrichment-id>
+```
 
-## Atomicity
+Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifacts.
 
-Checkpoint writes should be atomic enough that an interrupted process does not corrupt the entire run state.
+## Atomic publication
+
+Writes that represent terminal/public state are atomic enough that an interrupted write does not advertise a completed run with mismatched artifacts. `manifest.json` is the final publication marker for terminal output sets; status/manifest publication must remain consistent.
 
 ## Graceful shutdown
 
-On Ctrl+C:
-
-```text
-Stopping...
-✓ active work settled/cancelled safely
-✓ checkpoint saved
-✓ run marked paused
-```
-
-Then print the resume command.
+On the first Ctrl+C, the system requests a graceful pause and preserves resumability. A second Ctrl+C may force termination. A paused run must print enough information to resume it.
 
 ## Retry policy
 
-Use bounded retries with exponential backoff + jitter for transient failures.
+Use bounded retries with backoff + jitter for transient failures. `Retry-After` is advisory but must be capped by the configured maximum delay. Network timeouts cover body consumption as well as response headers.
 
 Do not retry indefinitely.
 
-Classify at least:
+Representative classified errors include:
 
 ```text
 BROWSER_CONNECTION_ERROR
@@ -444,43 +406,30 @@ AHREFS_RATE_LIMIT
 AHREFS_ERROR
 INPUT_SCHEMA_ERROR
 OUTPUT_WRITE_ERROR
+CACHE_DB_ERROR
 ```
 
 ## Error isolation
 
-One keyword failure must not kill the whole batch unless a circuit-breaker condition is met.
+One keyword failure must not kill the whole discovery batch unless a circuit-breaker condition is met.
 
-One Ahrefs domain failure must not kill the whole batch.
+One domain/provider failure must not erase successful sibling evidence.
 
-Failed records remain in outputs with status/error metadata.
+For query suggestions, each source is isolated. Successful source collections survive a sibling failure; bounded retries request only sources that have not produced a result.
+
+Failed or unavailable records remain distinguishable in durable state and artifacts.
 
 ## Circuit breaker
 
-If parser/system health clearly collapses, pause instead of producing garbage.
-
-Examples:
-
-```text
-12 of last 15 Surfer parses failed
-→ pause
-
-10 consecutive Google SERP parse failures
-→ pause
-```
-
-Thresholds should be configurable.
+If parser/system health clearly collapses, pause instead of producing garbage. Thresholds are configurable and persisted as part of run semantics where relevant.
 
 ## Parser versioning
 
-Browser-derived cache/output must include a parser version.
-
-When Google/Surfer DOM changes, it should be possible to distinguish results produced by different parser versions.
+Browser-derived cache/output includes parser-version identity where parser semantics affect validity. Parser changes that alter interpretation must invalidate or version cached facts rather than silently mixing contracts.
 
 ## Debug artifacts
 
-Always save lightweight run logs.
-
-On parser errors save:
+On parser errors, retain lightweight evidence under the run debug directory, for example:
 
 ```text
 debug/<keyword-slug>/
@@ -489,21 +438,36 @@ debug/<keyword-slug>/
 └── parser-context.json
 ```
 
-Avoid dumping huge debug snapshots for every successful keyword by default.
+Avoid dumping large snapshots for every successful keyword by default.
 
-`--debug` may preserve more evidence.
+## HTTP / SSRF boundary
 
-## Raw evidence
+Deep HTTP inspection (`pages`, `site_structure`) must retain the bounded-fetch safety contract:
 
-The user should be able to inspect why a parser failed without rerunning immediately.
+- DNS/IP validation before connection;
+- private/reserved address blocking;
+- redirect re-validation;
+- pinned/validated connection target where implemented;
+- response byte/text limits;
+- timeout covering body reads;
+- bounded retry/backoff.
+
+Do not replace this path with a raw unbounded `fetch` for convenience.
+
+## Raw evidence and measurement honesty
+
+The user must be able to tell why a parser/provider failed without immediately rerunning it. Missing evidence must not be silently converted into zero, success, or a fabricated measurement.
+
+Examples:
+
+- missing SERP is not `organic_result_count = 0` unless zero was actually observed;
+- omitted domains are explicitly marked `omitted` / `domain_cap`;
+- unavailable first-seen data is distinct from registration data;
+- successful suggestion sources are retained even if another source fails.
 
 ## Rate limiting
 
-Browser search should be deliberately conservative.
-
-Do not maximize concurrency.
-
-Initial default should favor correctness and avoiding anti-bot triggers over speed.
+Browser search and provider calls are deliberately conservative. Do not maximize concurrency at the expense of correctness, anti-bot stability, or provider limits.
 
 ## CAPTCHA policy
 
