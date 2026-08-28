@@ -114,10 +114,12 @@ export function resolveSerpEvidence(
     };
   }
 
-  // Under the old collector contract a clean completed keyword with no SERP
-  // rows could only be emitted after Google explicitly confirmed its zero-result
-  // page. This is the one zero-row legacy state that is still provable.
-  if (keyword.status === 'completed' && legacyError === null) {
+  // Under the old collector contract a clean completed keyword with persisted
+  // Google metadata and no SERP rows could only be emitted after Google
+  // explicitly confirmed its zero-result page. A metadata-less completed row
+  // (google === null) does not prove that observation and therefore stays
+  // unknown rather than becoming a fabricated zero.
+  if (keyword.status === 'completed' && legacyError === null && keyword.google !== null) {
     return {
       status: 'empty',
       organicResultCount: 0,
