@@ -618,9 +618,9 @@ export async function runCli(
     console.log(`  Artifacts: ${runDirectory}`);
     console.log(`  CSV: ${join(runDirectory, 'keywords.csv')}`);
     console.log(`  CSV: ${join(runDirectory, 'serp.csv')}`);
-    if (options.jsonStatus && store) {
-      console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness)));
-    }
+    const finalJsonStatus = options.jsonStatus && store
+      ? JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness))
+      : null;
     store.close();
     store = null;
     try {
@@ -630,6 +630,7 @@ export async function runCli(
       const message = archiveError instanceof Error ? archiveError.message : String(archiveError);
       console.error(`  Archive warning: ${message}`);
     }
+    if (finalJsonStatus) console.log(finalJsonStatus);
     return EXIT_OK;
   } catch (error) {
     console.error('');

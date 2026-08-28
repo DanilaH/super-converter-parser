@@ -14,6 +14,7 @@ export function registrableDomain(hostname: string): string | null {
 
   const host = hostname.trim().toLowerCase().replace(/\.$/, '');
   if (!host) return null;
+  if (/[\s/:@?#]/.test(host)) return null;
 
   return getDomain(host, DOMAIN_OPTIONS);
 }
