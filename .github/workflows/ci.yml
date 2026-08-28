@@ -7,7 +7,13 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 20/npm 10 bundles node-gyp 10, which cannot discover VS 2026 on windows-latest.
+        # Keep VS2022 until the Node/npm native-build toolchain is upgraded.
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

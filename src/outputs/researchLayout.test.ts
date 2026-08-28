@@ -20,9 +20,13 @@ test('researchSlug produces short human-readable ASCII names', () => {
 });
 
 test('resolveOutputRoot priority is CLI, env, then home fallback', () => {
-  assert.equal(resolveOutputRoot('/cli', { RESEARCH_OUTPUT_ROOT: '/env' }, '/home/user'), '/cli');
-  assert.equal(resolveOutputRoot(null, { RESEARCH_OUTPUT_ROOT: '/env' }, '/home/user'), '/env');
-  assert.equal(resolveOutputRoot(null, {}, '/home/user'), '/home/user/super-converter-parser-output');
+  const cliRoot = join(tmpdir(), 'output-root-cli');
+  const envRoot = join(tmpdir(), 'output-root-env');
+  const userHome = join(tmpdir(), 'output-root-home');
+
+  assert.equal(resolveOutputRoot(cliRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), cliRoot);
+  assert.equal(resolveOutputRoot(null, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), envRoot);
+  assert.equal(resolveOutputRoot(null, {}, userHome), join(userHome, 'super-converter-parser-output'));
 });
 
 test('research and enrichment directories are human-readable and collision-safe', async () => {
