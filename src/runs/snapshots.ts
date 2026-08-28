@@ -266,7 +266,8 @@ function organicCounts(runId: string, store: RunStore): Map<number, number> {
 // input order. Missing values are empty cells (never "null"/"undefined"); a
 // numeric zero is emitted only when Google explicitly proved a genuine empty
 // SERP. The organic count comes from the durable run checkpoint, never cache
-// state, and source-specific SERP status is published alongside it.
+// state. Source-specific status/error remains available in keywords.json and
+// the human-readable report without breaking the established CSV columns.
 export function renderKeywordsCsv(keywords: StoredKeyword[], organicCounts: Map<number, number>): string {
   const rows = [KEYWORDS_CSV_HEADERS];
   for (const keyword of keywords) {
@@ -292,9 +293,6 @@ export function renderKeywordsCsv(keywords: StoredKeyword[], organicCounts: Map<
       keyword.error?.message ?? '',
       keyword.cacheStatus ?? '',
       keyword.collectedAt ?? '',
-      evidence.status,
-      evidence.errorCode ?? '',
-      evidence.errorMessage ?? '',
     ]);
   }
   return renderCsv(rows);
@@ -353,9 +351,6 @@ const KEYWORDS_CSV_HEADERS = [
   'error_message',
   'cache_status',
   'collected_at',
-  'serp_status',
-  'serp_error_code',
-  'serp_error_message',
 ];
 
 const SERP_CSV_HEADERS = [
@@ -420,9 +415,6 @@ export const CANDIDATES_CSV_HEADERS = [
   'scoring_version',
   'scoring_completeness',
   'rationale',
-  'serp_status',
-  'serp_error_code',
-  'serp_error_message',
 ];
 
 export function renderRelatedKeywordsCsv(rows: StoredRelatedKeyword[]): string {
@@ -494,9 +486,6 @@ export function renderCandidatesCsv(candidates: Candidate[]): string {
       row.scoringVersion,
       row.scoringCompleteness,
       row.rationale,
-      row.serpStatus,
-      row.serpErrorCode ?? '',
-      row.serpErrorMessage ?? '',
     ]);
   }
   return renderCsv(csv);
