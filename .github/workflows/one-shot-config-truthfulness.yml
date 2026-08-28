@@ -24,14 +24,14 @@ jobs:
 
           config = Path('src/config/config.ts')
           text = config.read_text(encoding='utf-8')
-          old = """  const topN = readPositiveNumber('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN < 1 || topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected a number between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"""
-          new = """  const topN = readPositiveInt('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected an integer between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"""
+          old = "  const topN = readPositiveNumber('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN < 1 || topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected a number between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"
+          new = "  const topN = readPositiveInt('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected an integer between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"
           if text.count(old) != 1:
               raise SystemExit('unexpected TOP_N config shape')
           text = text.replace(old, new)
 
-          old = """  if (expansion.depth < 1) {\n    throw new ResearchError('INPUT_SCHEMA_ERROR', 'EXPANSION_DEPTH must be at least 1.');\n  }\n"""
-          new = """  if (expansion.depth !== 1) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid EXPANSION_DEPTH: only depth 1 is currently supported, got \"${expansion.depth}\".`,\n    );\n  }\n"""
+          old = "  if (expansion.depth < 1) {\n    throw new ResearchError('INPUT_SCHEMA_ERROR', 'EXPANSION_DEPTH must be at least 1.');\n  }\n"
+          new = "  if (expansion.depth !== 1) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid EXPANSION_DEPTH: only depth 1 is currently supported, got \"${expansion.depth}\".`,\n    );\n  }\n"
           if text.count(old) != 1:
               raise SystemExit('unexpected EXPANSION_DEPTH config shape')
           text = text.replace(old, new)
@@ -39,29 +39,28 @@ jobs:
 
           tests = Path('src/config/config.test.ts')
           text = tests.read_text(encoding='utf-8')
-          marker = """  assert.throws(\n    () => loadConfig({ TOP_N: '31' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"""
-          replacement = marker + """  assert.throws(\n    () => loadConfig({ TOP_N: '1.5' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"""
+          marker = "  assert.throws(\n    () => loadConfig({ TOP_N: '31' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"
+          fractional = "  assert.throws(\n    () => loadConfig({ TOP_N: '1.5' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"
           if text.count(marker) != 1:
               raise SystemExit('unexpected TOP_N test shape')
-          text = text.replace(marker, replacement)
+          text = text.replace(marker, marker + fractional)
 
           insertion_point = "\ntest('loadConfig rejects non-numeric timeouts', () => {"
-          expansion_test = """
-
-test('loadConfig rejects unsupported EXPANSION_DEPTH', () => {
-  assert.equal(
-    loadConfig({ EXPANSION_DEPTH: '1' } as NodeJS.ProcessEnv).expansion.depth,
-    1,
-  );
-  assert.throws(
-    () => loadConfig({ EXPANSION_DEPTH: '2' } as NodeJS.ProcessEnv),
-    (error: unknown) =>
-      error instanceof ResearchError &&
-      error.code === 'INPUT_SCHEMA_ERROR' &&
-      error.message.includes('only depth 1 is currently supported'),
-  );
-});
-"""
+          expansion_test = (
+              "\ntest('loadConfig rejects unsupported EXPANSION_DEPTH', () => {\n"
+              "  assert.equal(\n"
+              "    loadConfig({ EXPANSION_DEPTH: '1' } as NodeJS.ProcessEnv).expansion.depth,\n"
+              "    1,\n"
+              "  );\n"
+              "  assert.throws(\n"
+              "    () => loadConfig({ EXPANSION_DEPTH: '2' } as NodeJS.ProcessEnv),\n"
+              "    (error: unknown) =>\n"
+              "      error instanceof ResearchError &&\n"
+              "      error.code === 'INPUT_SCHEMA_ERROR' &&\n"
+              "      error.message.includes('only depth 1 is currently supported'),\n"
+              "  );\n"
+              "});\n"
+          )
           if text.count(insertion_point) != 1:
               raise SystemExit('unexpected config test insertion point')
           text = text.replace(insertion_point, expansion_test + insertion_point)
