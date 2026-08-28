@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSerpEvidence } from './serpEvidence.js';
+import { formatOrganicResultCount, resolveSerpEvidence } from './serpEvidence.js';
 import type { KeywordRecord } from './run.js';
 
 function google(
@@ -66,6 +66,24 @@ test('Google parse and fetch failures never become numeric zero', () => {
       errorMessage: 'navigation failed',
       trustworthy: false,
     },
+  );
+});
+
+test('operator count rendering keeps genuine zero but prints unavailable evidence as n/a', () => {
+  assert.equal(
+    formatOrganicResultCount({ status: 'completed', error: null, google: google('empty') }, 0),
+    '0',
+  );
+  assert.equal(
+    formatOrganicResultCount(
+      {
+        status: 'partial',
+        error: { code: 'GOOGLE_SERP_PARSE_ERROR', message: 'bad serp' },
+        google: google('parse_error', { code: 'GOOGLE_SERP_PARSE_ERROR', message: 'bad serp' }),
+      },
+      0,
+    ),
+    'n/a',
   );
 });
 
