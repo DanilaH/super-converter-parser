@@ -115,6 +115,30 @@ test('429 then 200 succeeds after retry', async () => {
   assert.equal(result.requestCount, 2);
 });
 
+test('Retry-After cannot exceed configured maxDelayMs', async () => {
+  let calls = 0;
+  const slept: number[] = [];
+  const config = baseConfig(
+    fakeFetch(COM_BOOTSTRAP, () => {
+      calls += 1;
+      return calls === 1
+        ? resp(429, {}, { 'Retry-After': '86400' })
+        : resp(200, registrationBody('example.com', '2001-01-01T00:00:00Z'));
+    }),
+  );
+  config.maxAttempts = 2;
+  config.maxDelayMs = 250;
+  config.sleep = (ms: number) => {
+    slept.push(ms);
+    return Promise.resolve();
+  };
+
+  const result = await createRdapClient(config)('example.com');
+  assert.equal(result.status, 'ok');
+  assert.equal(calls, 2);
+  assert.deepEqual(slept, [250]);
+});
+
 test('500 exhausts retries and returns RDAP_ERROR', async () => {
   let calls = 0;
   const config = baseConfig(
