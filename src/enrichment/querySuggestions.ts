@@ -425,11 +425,21 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
   private async collectAutocomplete(page: Page, parentKeyword: string, normalizedParent: string): Promise<RawSourceCollection> {
     try {
       const url = buildAutocompleteUrlForConfig(this.config, parentKeyword);
-      const response = (await page.evaluate(async (target: string) => {
-        const res = await fetch(target, { headers: { Accept: 'application/json' } });
-        const body = await res.text();
-        return { status: res.status, ok: res.ok, body };
-      }, url)) as { status: number; ok: boolean; body: string };
+      const timeoutMs = this.config.browser.navigationTimeoutMs;
+      const response = (await page.evaluate(async ({ target, timeoutMs }: { target: string; timeoutMs: number }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(target, {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+          });
+          const body = await res.text();
+          return { status: res.status, ok: res.ok, body };
+        } finally {
+          clearTimeout(timer);
+        }
+      }, { target: url, timeoutMs })) as { status: number; ok: boolean; body: string };
 
       if (!response.ok) {
         throw classifyHttpResponse(response.status, parentKeyword);
@@ -626,34 +636,62 @@ export async function runQuerySuggestionsModule(
     parentKeyword: string,
     normalizedParent: string,
     sources: QuerySuggestionSource[],
-): Promise<{ result: CollectResult; attempts: number; totalNavigations: number; totalXhrs: number }> => {
+  ): Promise<{ result: CollectResult; attempts: number; totalNavigations: number; totalXhrs: number }> => {
     const maxAttempts = 3;
+    const completed = new Map<QuerySuggestionSource, RawSourceCollection>();
+    let pendingSources = [...sources];
     let lastError: string | null = null;
     let totalNavigations = 0;
     let totalXhrs = 0;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+
+    for (let attempt = 1; attempt <= maxAttempts && pendingSources.length > 0; attempt += 1) {
       try {
-        const result = await collector.collect(parentKeyword, normalizedParent, sources);
+        const result = await collector.collect(parentKeyword, normalizedParent, pendingSources);
         totalNavigations += result.navigationRequests;
         totalXhrs += result.xhrRequests;
+
+        for (const collection of result.collections) {
+          completed.set(collection.source, collection);
+        }
+        pendingSources = sources.filter((source) => !completed.has(source));
+
+        if (pendingSources.length === 0) {
+          return {
+            result: {
+              collections: sources.map((source) => completed.get(source)!),
+              navigationRequests: 0,
+              xhrRequests: 0,
+            },
+            attempts: attempt,
+            totalNavigations,
+            totalXhrs,
+          };
+        }
+
         if (result.partialError) {
           lastError = result.partialError.code;
-          if (attempt < maxAttempts) await sleep(1000 * attempt);
-          continue;
+        } else {
+          // A collector that returns neither a source result nor an error has
+          // violated the source contract. Keep the missing sources retryable,
+          // then surface an explicit error if the bounded attempts are exhausted.
+          lastError = 'ENRICHMENT_ERROR';
         }
-        return { result, attempts: attempt, totalNavigations, totalXhrs };
       } catch (error) {
         if (error instanceof EnrichmentCancelledError) throw error;
         totalNavigations += 1;
         const code = error instanceof ResearchError ? error.code : 'GOOGLE_UNAVAILABLE';
         if (code === 'RUN_PAUSED') throw error;
         lastError = code;
-        if (attempt < maxAttempts) await sleep(1000 * attempt);
+      }
+
+      if (attempt < maxAttempts && pendingSources.length > 0) {
+        await sleep(1000 * attempt);
       }
     }
+
     return {
       result: {
-        collections: sources.map((source) => ({
+        collections: sources.map((source) => completed.get(source) ?? ({
           source,
           status: 'error' as QuerySuggestionCollectionStatus,
           occurrences: [],
@@ -737,11 +775,11 @@ export async function runQuerySuggestionsModule(
           await collector.open();
           collectorOpened = true;
         }
-         const { result, totalNavigations, totalXhrs } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
-         transportRequests = totalNavigations + totalXhrs;
-         for (const col of result.collections) {
-           await new Promise(resolve => setImmediate(resolve));
-           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
+        const { result, totalNavigations, totalXhrs } = await collectWithRetry(keyword.keyword, keyword.normalizedKeyword, cacheMissSources);
+        transportRequests = totalNavigations + totalXhrs;
+        for (const col of result.collections) {
+          await new Promise(resolve => setImmediate(resolve));
+          const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
           const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
           cache.putSuggestion(
