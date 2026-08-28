@@ -56,6 +56,8 @@ function okResult(keyword: KeywordRecord): CollectionResult {
         pageUrl: 'https://google.com/search?q=x',
         detectedLocation: null,
         geoWarning: false,
+        serpStatus: 'ok',
+        serpError: null,
       },
       error: null,
     },
@@ -150,7 +152,7 @@ test('keywords.csv follows the operator column contract with zero vs missing val
     'hit',
   );
   // Row 2: zero volume is a real number, no Surfer CPC is a missing value,
-  // and there are no organic results for this keyword.
+  // and there are no organic results for this legacy completed keyword.
   store.commitKeyword(
     runId,
     {
@@ -164,7 +166,8 @@ test('keywords.csv follows the operator column contract with zero vs missing val
     [],
     'miss',
   );
-  // Row 3: failed keyword carries its error and stays terminal in the CSV.
+  // Row 3: an old failed keyword with only a Surfer error cannot prove whether
+  // Google was genuinely empty. The organic count must remain missing, not zero.
   store.commitKeyword(
     runId,
     {
@@ -201,10 +204,10 @@ test('keywords.csv follows the operator column contract with zero vs missing val
     lines[2],
     'best office chairs,best office chairs,2,0,,US,,,,,,0,completed,,,miss,2026-01-01T00:00:00.000Z',
   );
-  // Row 3: failed keywords carry their error; no Surfer data means empty.
+  // Row 3: failed keyword carries its error but unavailable SERP evidence is blank.
   assert.equal(
     lines[3],
-    'standing desk,standing desk,3,,,,,,,,,0,failed,SURFER_PARSE_ERROR,widget not found,miss,2026-01-01T00:00:00.000Z',
+    'standing desk,standing desk,3,,,,,,,,,,failed,SURFER_PARSE_ERROR,widget not found,miss,2026-01-01T00:00:00.000Z',
   );
   // Row 4: pending keywords have no data yet and no organic count.
   assert.equal(lines[4], 'ergonomic mouse,ergonomic mouse,4,,,,,,,,,,pending,,,,');
@@ -454,8 +457,8 @@ test('a partial keyword appears in keywords.csv with its organic count', async (
   const csv = await readFile(join(runDirectory, 'keywords.csv'), 'utf8');
   const lines = csv.slice(1).split('\r\n').filter((line) => line.length > 0);
   assert.equal(lines.length, 5, 'header + 4 keyword rows, only the first is committed');
-  // Partial keywords are terminal: they carry their Surfer data and the
-  // organic count from the checkpoint, with empty Google/error cells.
+  // Partial keywords with stored SERP rows carry the organic count from the
+  // checkpoint even when the historical fixture lacks source-specific status.
   assert.equal(
     lines[1],
     'compare lists,compare lists,1,49500,7.9,US,,,,,,3,partial,,,miss,2026-01-01T00:00:00.000Z',
@@ -506,7 +509,7 @@ test('an atomic snapshot failure preserves the previously published CSV byte-for
   const previousManifest = await readFile(manifestPath, 'utf8');
 
   // Deterministic failure: force the atomic rename to throw. We do NOT delete
-  // the target first â€” that would only prove a missing file stays missing.
+  // the target first — that would only prove a missing file stays missing.
   // The point is that an existing target must survive the failed replace.
   const { setRenameForTesting } = await import('../runs/run.js');
   setRenameForTesting(async () => {
