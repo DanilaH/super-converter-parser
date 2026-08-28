@@ -16,7 +16,7 @@ function serp(
 ): SerpResult {
   return {
     keyword,
-    keywordIdx,
+    ...(keywordIdx === undefined ? {} : { keywordIdx }),
     position,
     title: 't',
     url: `https://${domain}/${position}`,
