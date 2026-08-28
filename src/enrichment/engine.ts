@@ -698,7 +698,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       }
     }
 
-
     if (!result.clusters && !result.pages && !result.siteStructure && !domainAgeRecords && !queryResult) {
       throw new Error('No modules executed');
     }
@@ -758,12 +757,19 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (result.siteStructure) {
       const csvPath = join(enrichmentDirectory, 'site-structure.csv');
       const jsonPath = join(enrichmentDirectory, 'site-structure.json');
+      const omitted = enrichmentStore
+        .loadSiteStructureTargets(enrichmentId)
+        .filter((target) => target.status === 'error' && (target.error ?? '').startsWith('omitted:'))
+        .map((target) => ({ domain: target.domain, reason: 'domain_cap' }))
+        .sort((a, b) => a.domain.localeCompare(b.domain));
 
-      await writeSiteStructureCsv(csvPath, result.siteStructure);
-      await writeSiteStructureJson(jsonPath, { enrichmentId, sourceRunId, records: result.siteStructure });
+      await writeSiteStructureCsv(csvPath, result.siteStructure, omitted);
+      await writeSiteStructureJson(jsonPath, { enrichmentId, sourceRunId, records: result.siteStructure, omitted });
 
       summary.domainCount = result.siteStructure.length;
       summary.domainCacheHitCount = result.siteStructure.filter((r) => r.cacheStatus === 'hit').length;
+      summary.siteStructureOmittedCount = omitted.length;
+      summary.siteStructureDiscoveredDomainCount = result.siteStructure.length + omitted.length;
 
       artifacts.push('site-structure.csv', 'site-structure.json');
     }
@@ -817,7 +823,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       summary.querySourceStats = queryResult.sourceStats;
       artifacts.push('query-suggestions.csv', 'query-suggestions.json');
     }
-
 
     if (domainAgeRecords) {
       const domainAgeCsvPath = join(enrichmentDirectory, 'domain-age.csv');
@@ -881,12 +886,19 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     const parts: string[] = [];
     if (result.clusters) parts.push(`${result.clusters.clusters.length} clusters from ${result.clusters.inputCount} keywords (${result.clusters.excludedCount} excluded)`);
     if (result.pages) parts.push(`${result.pages.length} pages`);
-    if (result.siteStructure) parts.push(`${result.siteStructure.length} site-structure domains`);
+    if (result.siteStructure) {
+      const omittedCount = enrichmentStore
+        .loadSiteStructureTargets(enrichmentId)
+        .filter((target) => target.status === 'error' && (target.error ?? '').startsWith('omitted:')).length;
+      parts.push(`${result.siteStructure.length} site-structure domains inspected${omittedCount > 0 ? ` (${omittedCount} omitted)` : ''}`);
+    }
     if (queryResult) parts.push(`${queryResult.suggestions.length} query suggestions from ${queryResult.inputCount} keywords (${queryResult.emptyCount} empty, ${queryResult.errorCount} errors)`);
     if (domainAgeRecords) {
-      const resolvedCount = [...domainAgeRecords.values()].filter((r) => r.error === null).length;
-      const errorCount = [...domainAgeRecords.values()].filter((r) => r.error !== null).length;
-      parts.push(`${resolvedCount} domain ages resolved (${errorCount} errors)`);
+      const records = [...domainAgeRecords.values()];
+      const resolvedCount = records.filter((r) => !r.omitted && r.error === null).length;
+      const errorCount = records.filter((r) => !r.omitted && r.error !== null).length;
+      const omittedCount = records.filter((r) => r.omitted).length;
+      parts.push(`${resolvedCount} domain ages resolved (${errorCount} errors${omittedCount > 0 ? `, ${omittedCount} omitted` : ''})`);
     }
     logger(`Enrichment completed: ${parts.join('; ')}`);
     return {

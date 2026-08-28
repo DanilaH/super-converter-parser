@@ -337,8 +337,32 @@ export async function runCli(
     let input: { kind: 'seeds' | 'microsoft'; path: string };
     let refreshKeywords: string[] = [];
     let runConfig = config;
+    let ahrefsApiKey: string | null = null;
 
     const outputRoot = resolveOutputRoot(options.outputRoot, env);
+
+    // CLI semantic overrides apply only to a new run. Resume restores the
+    // persisted semantic snapshot below and deliberately ignores these flags.
+    if (!options.resumeRunId) {
+      if (options.expand) {
+        runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
+      }
+      if (options.requireAhrefs) {
+        runConfig = { ...runConfig, ahrefs: { ...runConfig.ahrefs, requireAhrefs: true } };
+      }
+    }
+
+    const validateAhrefsRequirement = (candidateConfig: ResearchConfig): string | null => {
+      const rawKey = (env.AHREFS_API_KEY ?? '').trim();
+      const key = rawKey.length > 0 ? rawKey : null;
+      if (candidateConfig.ahrefs.requireAhrefs && !key) {
+        throw new ResearchError(
+          'AHREFS_REQUIRE_CONFIG',
+          'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
+        );
+      }
+      return key;
+    };
 
     if (options.resumeRunId) {
       runId = options.resumeRunId;
@@ -354,6 +378,12 @@ export async function runCli(
       const run = validateResume(store, runId);
       runConfig = effectiveConfigForResume(config, run.configSnapshot, runId);
       input = run.input;
+      refreshKeywords = validateRefreshKeywords(
+        options.refreshKeywords,
+        store.loadKeywords(runId).map((item) => item.normalizedKeyword),
+      );
+      ahrefsApiKey = validateAhrefsRequirement(runConfig);
+      cacheStore = CacheStore.open(runConfig.cache.path);
 
       console.log('Utility Research Runner');
       console.log('');
@@ -362,6 +392,8 @@ export async function runCli(
       console.log(`  ✓ ${runDirectory} writable`);
       await ensureWritableDirectory(debugRoot);
       console.log(`  ✓ ${debugRoot} writable`);
+      console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
+      console.log('');
     } else {
       mode = 'fresh';
       input = options.microsoftPath
@@ -381,6 +413,18 @@ export async function runCli(
         throw new ResearchError('INPUT_SCHEMA_ERROR', 'Input contains no research keywords.');
       }
 
+      // Input/config/cache validation happens before allocating a durable research
+      // directory. Ordinary preflight errors therefore cannot leave an indexed
+      // directory containing only run.sqlite with no run row. Browser preflight
+      // intentionally remains after createRun so an interrupted/failed browser
+      // preflight is resumable.
+      refreshKeywords = validateRefreshKeywords(
+        options.refreshKeywords,
+        keywords.map((item) => item.normalizedKeyword),
+      );
+      ahrefsApiKey = validateAhrefsRequirement(runConfig);
+      cacheStore = CacheStore.open(runConfig.cache.path);
+
       runId = createRunId();
       const location = await allocateResearchLocation(outputRoot, options.name ?? keywords[0]!.keyword);
       runDirectory = location.discoveryDirectory;
@@ -397,48 +441,14 @@ export async function runCli(
       await writeRunIndex(outputRoot, { version: 1, runId, researchDirectory, discoveryDirectory: runDirectory });
       console.log(`  ✓ research directory: ${researchDirectory}`);
       console.log(`  ✓ run.sqlite initialized (schema v${store.version})`);
+      console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
+      console.log('');
     }
 
-    if (mode === 'fresh') {
-      refreshKeywords = validateRefreshKeywords(
-        options.refreshKeywords,
-        keywords.map((item) => item.normalizedKeyword),
-      );
-    } else {
-      refreshKeywords = validateRefreshKeywords(
-        options.refreshKeywords,
-        store.loadKeywords(runId).map((item) => item.normalizedKeyword),
-      );
+    if (!cacheStore) {
+      throw new ResearchError('CACHE_DB_ERROR', 'Cache store was not initialized.');
     }
 
-    // --expand applies only when starting a fresh run. A resumed run must
-    // reproduce its persisted expansion config and must never silently flip
-    // expansion on for a run that was created without it.
-    if (options.expand && mode === 'fresh') {
-      runConfig = { ...runConfig, expansion: { ...runConfig.expansion, enabled: true } };
-    }
-
-    // --require-ahrefs overrides the persisted/env config for fresh runs. For
-    // resume, the requirement is validated (and restored) by effectiveConfigForResume.
-    if (options.requireAhrefs && mode === 'fresh') {
-      runConfig = { ...runConfig, ahrefs: { ...runConfig.ahrefs, requireAhrefs: true } };
-    }
-
-    cacheStore = CacheStore.open(runConfig.cache.path);
-    console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
-    console.log('');
-
-    const rawKey = (env.AHREFS_API_KEY ?? '').trim();
-    const ahrefsApiKey = rawKey.length > 0 ? rawKey : null;
-    // In required mode, a missing/blank key fails before keyword collection with
-    // a classified, actionable error. This persists through resume because the
-    // requirement is part of the persisted config snapshot.
-    if (runConfig.ahrefs.requireAhrefs && !ahrefsApiKey) {
-      throw new ResearchError(
-        'AHREFS_REQUIRE_CONFIG',
-        'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
-      );
-    }
     // AHREFS_API_KEY gates DR enrichment: without a key the DR phase is skipped
     // (organic SERP and all other stages still run). In optional mode this is
     // reported as skipped/degraded, never as resolved.
