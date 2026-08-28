@@ -34,6 +34,7 @@ test('rejects IP literals, bare public suffixes, bare hosts and empty input', ()
 test('keeps the helper hostname-only', () => {
   assert.equal(registrableDomain('https://example.com/path'), null);
   assert.equal(registrableDomain('user@example.com'), null);
+  assert.equal(registrableDomain('example.com:443'), null);
 });
 
 test('normalizes case and trailing dot', () => {
