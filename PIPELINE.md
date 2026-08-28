@@ -15,7 +15,7 @@ Google + Keyword Surfer
   ├── volume
   ├── CPC
   ├── related ideas
-  └── organic SERP
+  └── organic SERP + source-specific SERP status
         ↓
 optional Surfer expansion
         ↓
@@ -25,7 +25,7 @@ dedupe domains globally
         ↓
 Ahrefs DR
         ↓
-aggregate keyword-level SERP metrics
+aggregate trustworthy keyword-level SERP metrics
         ↓
 deterministic scoring
         ↓
@@ -86,11 +86,26 @@ For each canonical keyword collect:
   googleHl,
   googleGl,
   detectedGoogleLocation,
-  status
+  status,
+  google: {
+    serpStatus,
+    serpError
+  }
 }
 ```
 
 The browser collector must also collect organic results.
+
+The aggregate keyword `status` is not the source of truth for Google SERP availability because Surfer and Google can succeed or fail independently. Fresh collection persists a Google-specific SERP observation:
+
+```text
+ok
+empty
+fetch_error
+parse_error
+```
+
+`not_fetched` and `unknown` are also supported by the evidence resolver for incomplete/historical state.
 
 ### Organic result rules
 
@@ -111,6 +126,20 @@ Do not count:
 Store result type explicitly when uncertain.
 
 If only 9 valid organic results exist on the rendered page, `9` is correct. Never fabricate a 10th result.
+
+A numeric zero is equally strict:
+
+```text
+serpStatus=empty + Google explicitly confirmed a zero-results page
+→ organic_result_count = 0
+
+serpStatus=fetch_error | parse_error | not_fetched | unknown
+→ organic_result_count is missing
+```
+
+A Surfer failure does not erase a valid Google zero or valid Google rows. A Google failure does not become zero merely because the aggregate keyword is terminal.
+
+Historical rows that predate source-specific SERP status are interpreted conservatively from persisted state: positive stored rows prove a successful SERP; a clean historical completed zero-row keyword preserves the old collector's confirmed zero-results behavior; ambiguous terminal zero-row rows remain unknown/missing.
 
 ## Stage 4 — Surfer related-keyword expansion
 
@@ -172,7 +201,7 @@ One domain may occur in dozens of keyword SERPs. It must not trigger dozens of A
 
 ## Stage 7 — Aggregation
 
-Compute keyword-level observable metrics such as:
+For keywords with trustworthy SERP evidence, compute observable metrics such as:
 
 ```text
 organic_result_count
@@ -192,6 +221,8 @@ exact_match_domain_count
 serp_diversity
 ```
 
+If the SERP observation is unavailable or ambiguous, SERP-derived candidate metrics are missing instead of a bundle of valid-looking zeros.
+
 Thresholds belong in configuration, not scattered through code.
 
 Initial defaults may be:
@@ -208,6 +239,8 @@ These are research heuristics, not SEO laws.
 ## Stage 8 — Candidate scoring
 
 See `SCORING.md`.
+
+The existing formula/version is unchanged by the SERP truth contract, but a candidate is only scored when its SERP observation is trustworthy. A partial keyword with valid Surfer demand and a Google parse/fetch failure remains visible but receives `score=null` rather than being scored as an empty/easy SERP.
 
 ## Stage 9 — Output
 
@@ -236,7 +269,7 @@ report.md
 status.json
 ```
 
-Errors must not disappear from output.
+Errors must not disappear from output. Source-specific Google SERP status/error is retained in the per-keyword JSON and surfaced in the failed/incomplete section of `report.md`. Existing CSV column contracts remain stable; unavailable numeric SERP evidence is represented as an empty cell rather than `0` or the string `null`.
 
 ---
 
@@ -432,6 +465,8 @@ exact-match/niche-domain count
 missing-DR ratio
 ```
 
+SERP-derived inputs participate only when the Google SERP observation is trustworthy.
+
 ## Important methodological constraints
 
 ### Do not sum synonym volumes automatically
@@ -491,7 +526,7 @@ Avoid calling these automatically `BUILD` or `KILL`.
 
 ## Explainability
 
-For each candidate provide a short machine-generated rationale using raw facts, e.g.:
+For each scored candidate provide a short machine-generated rationale using raw facts, e.g.:
 
 ```text
 Score 84
@@ -501,6 +536,8 @@ Score 84
 - top3 median DR 19
 - CPC $2.40
 ```
+
+An unscored candidate with unavailable SERP evidence must remain visibly incomplete rather than receive a zero-like rationale.
 
 Do not generate speculative prose.
 
@@ -528,6 +565,8 @@ organic_result_count
 status
 error_code
 ```
+
+`organic_result_count` is blank when Google SERP evidence is unavailable/ambiguous and `0` only for a confirmed genuine empty SERP. Source-specific SERP status/error is retained in `keywords.json` and the report without changing the established CSV column list.
 
 ## related-keywords.csv
 
@@ -587,7 +626,7 @@ tier
 status
 ```
 
-Exact-match and niche-domain classification must be documented if implemented.
+When a candidate lacks trustworthy SERP evidence, its SERP-derived numeric cells and score/tier are blank. Genuine observed zeros remain numeric zero. Exact-match and niche-domain classification must be documented if implemented.
 
 ## report.md
 
@@ -598,7 +637,7 @@ Run overview
 Input summary
 Environment/geo warnings
 Top candidates
-Failed/incomplete keywords
+Failed/incomplete keywords + source-specific SERP status
 Cache statistics
 Ahrefs statistics
 Parser health
