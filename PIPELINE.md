@@ -122,11 +122,13 @@ overlap
 volume
 ```
 
-Support optional expansion:
+Support optional expansion with the canonical CLI flag:
 
 ```bash
---expand-surfer
+--expand
 ```
+
+`--expand-surfer` remains an implemented alias; operator examples use `--expand`.
 
 Configurable limits:
 
@@ -213,6 +215,12 @@ Write all run artifacts even if some keywords failed.
 
 A partial run must be inspectable.
 
+New discovery artifacts are written under
+`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/discovery`. The sibling research directory
+holds parser debug evidence under `debug/` and the atomically refreshed
+`results.zip`. Legacy `runs/<uuid>` directories are resume-compatible only; they
+are not created for new work.
+
 Generate:
 
 ```text
@@ -246,9 +254,9 @@ Utility Research Runner
 ✓ Keyword Surfer detected
 ✓ Surfer market: United States
 ✓ Google reachable
-✓ Ahrefs API key valid
+• Ahrefs DR: configured, or skipped honestly when no key is supplied
 ✓ Cache writable
-✓ Runs directory writable
+✓ Research output directory writable
 
 Input: 217 rows
 Unique keywords: 184
@@ -362,33 +370,33 @@ Debug:
 npm run research -- ... --json-status
 ```
 
-The final stdout line must be valid machine-readable JSON, for example:
+The final stdout line must be valid machine-readable JSON. Artifact paths point at
+the allocated discovery directory, for example:
 
 ```json
 {
   "status": "completed_with_errors",
-  "runId": "2026-08-14_231500",
+  "runId": "<run-id>",
   "keywords": 184,
   "processedKeywords": 184,
   "errors": 3,
-  "candidateReport": "runs/2026-08-14_231500/candidates.csv",
-  "report": "runs/2026-08-14_231500/report.md"
+  "candidateReport": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/candidates.csv",
+  "report": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/report.md",
+  "statusFile": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/status.json"
 }
 ```
 
 ## Exit codes
 
-Define stable exit behavior, e.g.:
+The research CLI has a stable exit-code contract:
 
 ```text
-0 success
-1 completed with fatal internal error
-2 invalid input/config
-3 environment/preflight failure
-4 manual intervention required and run not resumed
+0   success, including completed_with_errors
+1   unexpected internal failure
+2   invalid input/configuration
+3   preflight/infrastructure failure
+130 gracefully paused by Ctrl+C
 ```
-
-Exact numeric mapping may change, but it must be documented and stable.
 
 ---
 
@@ -603,12 +611,7 @@ Machine-readable final status.
 
 ## Historical behavior
 
-Never overwrite a completed run.
-
-A convenience pointer such as:
-
-```text
-runs/latest
-```
-
-may be maintained, but historical directories must remain immutable unless the user explicitly deletes them.
+Never overwrite a completed run. New runs use the durable research layout under
+`RESEARCH_OUTPUT_ROOT`; terminal discovery/enrichment directories are historical
+artifacts. Legacy `runs/<uuid>` / `enrichments/<uuid>` directories remain readable
+and resumable only where explicitly supported, but are not the layout for new work.
