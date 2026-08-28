@@ -148,7 +148,16 @@ export function writePagesJson(outputPath: string, options: PagesOutputOptions):
   return writeFileAtomic(outputPath, JSON.stringify(payload, null, 2) + '\n', 'pages.json');
 }
 
-export function writeSiteStructureCsv(outputPath: string, records: SiteStructureRecord[]): Promise<void> {
+export type SiteStructureOmittedDomain = {
+  domain: string;
+  reason: string;
+};
+
+export function writeSiteStructureCsv(
+  outputPath: string,
+  records: SiteStructureRecord[],
+  omitted: SiteStructureOmittedDomain[] = [],
+): Promise<void> {
   const header = [
     'domain',
     'homepage_status',
@@ -161,6 +170,8 @@ export function writeSiteStructureCsv(outputPath: string, records: SiteStructure
     'errors',
     'cache_status',
     'fetched_at',
+    'omitted',
+    'omit_reason',
   ];
   const rows: string[][] = [header];
   for (const record of records) {
@@ -176,6 +187,25 @@ export function writeSiteStructureCsv(outputPath: string, records: SiteStructure
       record.errors.map((e) => `${e.url}: ${e.error}`).join('; '),
       record.cacheStatus,
       record.fetchedAt,
+      'false',
+      '',
+    ]);
+  }
+  for (const item of omitted) {
+    rows.push([
+      item.domain,
+      'skipped',
+      '',
+      'none',
+      '0',
+      '0',
+      '0',
+      '',
+      '',
+      'none',
+      '',
+      'true',
+      item.reason,
     ]);
   }
   return writeFileAtomic(outputPath, renderCsv(rows), 'site-structure.csv');
@@ -185,15 +215,20 @@ export type SiteStructureOutputOptions = {
   enrichmentId: string;
   sourceRunId: string;
   records: SiteStructureRecord[];
+  omitted?: SiteStructureOmittedDomain[];
 };
 
 export function writeSiteStructureJson(outputPath: string, options: SiteStructureOutputOptions): Promise<void> {
+  const omitted = options.omitted ?? [];
   const payload = {
     enrichmentId: options.enrichmentId,
     sourceRunId: options.sourceRunId,
     generatedAt: new Date().toISOString(),
     domainCount: options.records.length,
+    omittedCount: omitted.length,
+    discoveredDomainCount: options.records.length + omitted.length,
     records: options.records,
+    omitted,
   };
   return writeFileAtomic(outputPath, JSON.stringify(payload, null, 2) + '\n', 'site-structure.json');
 }
