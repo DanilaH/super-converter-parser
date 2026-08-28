@@ -345,7 +345,7 @@ export async function collectRelatedKeyword(
           ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
           : rows.length > 0
             ? { status: 'ok', error: null, rows }
-            : { status: 'empty', error: null, rows },
+            : { status: 'empty', error: null, rows: [] },
         debugArtifactPath: null,
       };
     } catch (error) {
