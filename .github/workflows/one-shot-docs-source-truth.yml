@@ -59,12 +59,11 @@ jobs:
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
               raise SystemExit(f'unexpected AGENTS Research Chrome setup shape: {count} matches')
-          text = replace_once(
-              text,
-              """### CAPTCHA in background runs\n\n`pauseForManualCaptcha` waits for stdin when `process.stdin.isTTY`, otherwise polls for\nthe marker file `C:\\\\tmp\\\\captcha-done.txt` (override with `CAPTCHA_DONE_MARKER`). Create\nthe file after solving CAPTCHA in the Research Chrome window to let a background run resume.\n""",
-              """### CAPTCHA handling\n\n`pauseForManualCaptcha` polls the Research Chrome page directly. After the operator solves the challenge, the runner continues automatically; no Enter press or marker file is used. Ctrl+C sets the shared cancellation signal so the active keyword remains resumable.\n""",
-              'AGENTS CAPTCHA flow',
-          )
+          pattern = re.compile(r"### CAPTCHA in background runs\n.*\Z", re.S)
+          replacement = """### CAPTCHA handling\n\n`pauseForManualCaptcha` polls the Research Chrome page directly. After the operator solves the challenge, the runner continues automatically; no Enter press or marker file is used. Ctrl+C sets the shared cancellation signal so the active keyword remains resumable.\n"""
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'unexpected AGENTS CAPTCHA flow shape: {count} matches')
           agents.write_text(text, encoding='utf-8')
 
           readme = Path('README.md')
