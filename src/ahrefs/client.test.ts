@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAhrefsClient, backoffMs, type AhrefsClientConfig } from './client.js';
 
-type FetchInit = { signal?: unknown; headers?: Record<string, string> };
+type FetchInit = { signal?: AbortSignal; headers?: Record<string, string> };
 type FetchLike = (url: string, init?: FetchInit) => Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }>;
 
 function makeFetch(status: number, body: unknown, opts: { throwNetwork?: boolean } = {}): FetchLike {
@@ -45,7 +45,7 @@ test('falls back to a flat dr field when present', async () => {
 
 test('sends a bearer token when an api key is set', async () => {
   let captured: FetchInit | undefined;
-  const fetchImpl: FetchLike = async (url, init) => {
+  const fetchImpl: FetchLike = async (_url, init) => {
     captured = init;
     return { status: 200, ok: true, json: async () => ({ domain_rating: { domain_rating: 1 } }) };
   };
@@ -94,6 +94,40 @@ test('network failure yields error status after retries', async () => {
   const res = await client('x.com');
   assert.equal(res.status, 'error');
   assert.equal(res.error, 'network');
+});
+
+test('response body read remains covered by the request timeout', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async (_url, init) => {
+    calls += 1;
+    const signal = init?.signal;
+    return {
+      status: 200,
+      ok: true,
+      json: () => new Promise((_resolve, reject) => {
+        if (!signal) {
+          reject(new Error('missing abort signal'));
+          return;
+        }
+        if (signal.aborted) {
+          reject(new Error('aborted'));
+          return;
+        }
+        signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }),
+    };
+  };
+  const client = makeClient({
+    timeoutMs: 5,
+    minDelayMs: 0,
+    maxDelayMs: 0,
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+  });
+
+  const result = await client('stalled-body.example');
+  assert.equal(result.status, 'error');
+  assert.equal(result.error, 'network');
+  assert.equal(calls, 4, 'stalled body is aborted and bounded retries are exhausted');
 });
 
 test('backoff with jitter never exceeds maxDelayMs', () => {
