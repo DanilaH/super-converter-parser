@@ -64,7 +64,7 @@ npm run research -- --resume <run-id> --refresh-keyword "json diff"
 npm run research -- --microsoft input/microsoft.csv --json-status
 ```
 
-These examples reflect the implemented CLI. Use `npm run research -- --help` and `npm run enrich -- --help` for the current option surface.
+These examples reflect the implemented CLI. The `Implemented CLI` section below is authoritative for research commands; use `npm run enrich -- --help` for enrichment-specific options.
 
 ## Output location and names
 
