@@ -115,7 +115,7 @@ after(() => {
   });
 });
 
-const testConfig = { minDomainDelayMs: 0, maxDomainDelayMs: 0, ssrfChecker: allowAllSsrf };
+const testConfig = { minDomainDelayMs: 0, maxDomainDelayMs: 0, maxRetries: 0, ssrfChecker: allowAllSsrf };
 
 test('boundedFetch: fetches HTML successfully', async () => {
   const result = await boundedFetch(`${baseUrl}/ok`, testConfig);
