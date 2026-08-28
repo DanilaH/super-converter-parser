@@ -890,7 +890,8 @@ export class RunStore {
     // aliases for columns added after v1, then reconstruct only the missing
     // registrable-domain value from the immutable hostname/URL evidence.
     const columns = this.tableColumns('serp_rows');
-    const registrableDomainExpr = columns.has('registrable_domain')
+    const hasRegistrableDomainColumn = columns.has('registrable_domain');
+    const registrableDomainExpr = hasRegistrableDomainColumn
       ? 'registrable_domain'
       : "'' AS registrable_domain";
     const drExpr = columns.has('dr') ? 'dr' : 'NULL AS dr';
@@ -922,8 +923,9 @@ export class RunStore {
       title: row.title,
       url: row.url,
       hostname: row.hostname,
-      registrableDomain:
-        row.registrable_domain || deriveHistoricalRegistrableDomain(row.hostname, row.url),
+      registrableDomain: hasRegistrableDomainColumn
+        ? row.registrable_domain
+        : deriveHistoricalRegistrableDomain(row.hostname, row.url),
       dr: row.dr,
       drStatus: (row.dr_status as SerpResult['drStatus']) ?? null,
       drError: row.dr_error ?? null,
