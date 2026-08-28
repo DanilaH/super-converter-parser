@@ -102,6 +102,28 @@ test('--require-ahrefs without a key is rejected before a durable research direc
   });
 });
 
+test('cache open failure is rejected before a durable research directory is allocated', async () => {
+  await withSeedsCwd('keyword\njson diff\n', async (directory) => {
+    const outputRoot = join(directory, 'research-output');
+    const blockedParent = join(directory, 'cache-parent-is-a-file');
+    await writeFile(blockedParent, 'not a directory', 'utf8');
+
+    const code = await runCli(
+      [
+        '--seeds',
+        'input/seeds.csv',
+        '--output-root',
+        outputRoot,
+      ],
+      DEFAULT_CLI_DEPS,
+      { CACHE_DB_PATH: join(blockedParent, 'cache.sqlite') } as NodeJS.ProcessEnv,
+    );
+
+    assert.equal(code, EXIT_PREFLIGHT);
+    await assertMissing(outputRoot);
+  });
+});
+
 test('Microsoft CSV without a Keyword column exits 2', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cli-ms-'));
   await mkdir(join(directory, 'input'), { recursive: true });
