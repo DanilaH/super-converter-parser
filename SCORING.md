@@ -38,13 +38,13 @@ features are computed from its organic SERP rows (every `serp_rows` entry has
   in positions 1–3 / 1–5 that have a known DR.
 - `very_weak_domains_count`, `weak_domains_count`, `strong_domains_count`,
   `very_strong_domains_count` — counts over the **unique** domains with a known
-  DR, classified by the thresholds in §3.
+  DR, classified by the thresholds in §2.
 - `missing_dr_count` — number of unique domains whose DR is `null` (this
   includes `not_found` and `error` Ahrefs outcomes, which have no numeric DR).
 - `exact_match_domain_count` — number of unique domains that exactly match the
   normalized keyword.
 - `niche_domain_count` — number of unique non-exact-match domains that satisfy
-  the naming heuristic in §4.
+  the naming heuristic in §3.
 - `serp_diversity` — `unique_domains / organic_result_count` (0 when there are
   no organic results).
 
@@ -117,14 +117,19 @@ Normalization for both keyword and domain label:
 The arithmetic formula is unchanged from score v1.0. What changed in v1.1 is
 whether the formula is allowed to run.
 
-A candidate is score-eligible only when its persisted SERP observation is
-truthworthy:
+SERP trust is a **necessary** score-eligibility gate, not a sufficient condition.
+The existing keyword-status rule still also applies: only `completed` and
+`partial` keywords may receive a numeric score. Failed and non-terminal keywords
+remain unscored even if a sibling source produced trustworthy Google evidence.
+
+A candidate passes the SERP-evidence gate only when its persisted SERP observation
+is trustworthy:
 
 - `ok` with one or more stored organic rows; or
 - `empty` with zero stored rows, where zero was explicitly observed.
 
-The following states are **not score-eligible** and produce `score = null`,
-`tier = null`, blank SERP-derived numeric fields, and degraded completeness:
+The following SERP states fail that gate and produce `score = null`, `tier = null`,
+blank SERP-derived numeric fields, and degraded completeness:
 
 - `fetch_error`;
 - `parse_error`;
@@ -133,11 +138,13 @@ The following states are **not score-eligible** and produce `score = null`,
 - an internally inconsistent explicit state (for example `ok` with zero rows).
 
 This prevents an unavailable SERP from being interpreted as a weak/empty
-competitive set. A genuine observed zero-result SERP remains a real numeric zero
-and is score-eligible.
+competitive set. A genuine observed zero-result SERP remains real numeric-zero
+SERP evidence and passes the SERP gate; it receives a numeric score only when the
+keyword status is also `completed` or `partial`.
 
-For score-eligible candidates, `clamp(x, 0, 1)`. Missing numeric inputs contribute
-`0` to their feature; missing numeric data never increases a score.
+For candidates that pass both eligibility rules, `clamp(x, 0, 1)`. Missing
+numeric inputs contribute `0` to their feature; missing numeric data never
+increases a score.
 
 ### Demand — 0–30
 
@@ -263,12 +270,13 @@ Completeness metadata remains adjacent evidence; it never boosts a score.
 
 Each candidate carries a `scoring_completeness` field:
 
-- `complete` — the candidate is score-eligible and every SERP domain has numeric
-  DR (`missing_dr_count === 0` and at least one known domain). The score is fully
+- `complete` — the candidate passes the keyword-status and SERP-evidence
+  eligibility rules and every SERP domain has numeric DR
+  (`missing_dr_count === 0` and at least one known domain). The score is fully
   evidenced.
 - `degraded` — some domains have missing DR, Ahrefs was skipped/not-attempted,
-  there are no known domains, or the candidate is not score-eligible because
-  SERP evidence itself is unavailable/ambiguous.
+  there are no known domains, the keyword status is not score-eligible, or SERP
+  evidence itself is unavailable/ambiguous.
 
 Missing DR stays missing; it is never treated as `0`. A numeric score remains
 deterministic under the v1.1 formula but must not be presented as fully evidenced
