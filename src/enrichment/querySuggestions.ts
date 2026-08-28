@@ -338,24 +338,34 @@ export class BrowserSuggestionCollector implements SuggestionCollector {
     let xhrRequests = 0;
     const results: RawSourceCollection[] = [];
     let partialError: ResearchError | null = null;
-    try {
-      if (sources.includes('surfer_related')) {
-        results.push(await this.collectSurferRelated(page, parentKeyword, normalizedParent));
+    const collectSource = async (work: () => Promise<RawSourceCollection>): Promise<void> => {
+      try {
+        results.push(await work());
+      } catch (error) {
+        if (error instanceof EnrichmentCancelledError) throw error;
+        const sourceError = error instanceof ResearchError
+          ? error
+          : new ResearchError('ENRICHMENT_ERROR', error instanceof Error ? error.message : String(error));
+        partialError ??= sourceError;
       }
-      if (sources.includes('google_related_search')) {
-        results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
-      }
-      if (sources.includes('google_paa')) {
-        results.push(await this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
-      }
-      if (sources.includes('google_autocomplete')) {
-        xhrRequests += 1;
-        results.push(await this.collectAutocomplete(page, parentKeyword, normalizedParent));
-      }
-    } catch (error) {
-      partialError = error instanceof ResearchError
-        ? error
-        : new ResearchError('ENRICHMENT_ERROR', error instanceof Error ? error.message : String(error));
+    };
+
+    // Each source is isolated within the same SERP navigation. A failing source
+    // must not prevent later sources from being attempted; successful siblings
+    // are returned immediately and the retry wrapper will request only sources
+    // that produced no collection.
+    if (sources.includes('surfer_related')) {
+      await collectSource(() => this.collectSurferRelated(page, parentKeyword, normalizedParent));
+    }
+    if (sources.includes('google_related_search')) {
+      await collectSource(() => this.collectFromScript(page, parentKeyword, normalizedParent, 'google_related_search', RELATED_SEARCH_EXTRACT_SCRIPT, parseGoogleRelatedSearch));
+    }
+    if (sources.includes('google_paa')) {
+      await collectSource(() => this.collectFromScript(page, parentKeyword, normalizedParent, 'google_paa', PAA_EXTRACT_SCRIPT, parseGooglePaa));
+    }
+    if (sources.includes('google_autocomplete')) {
+      xhrRequests += 1;
+      await collectSource(() => this.collectAutocomplete(page, parentKeyword, normalizedParent));
     }
 
     return { collections: results, navigationRequests: 1, xhrRequests, partialError };
