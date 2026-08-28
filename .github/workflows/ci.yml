@@ -14,6 +14,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Refresh lockfile for branch validation
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          base64 -w 0 package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
