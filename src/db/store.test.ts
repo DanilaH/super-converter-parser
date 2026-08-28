@@ -345,6 +345,15 @@ test('openReadOnly reads a v1 discovery store without migrating it', async () =>
   raw.close();
 });
 
+
+test('writable stores do not hide missing current-schema related keyword tables', () => {
+  const store = RunStore.openInMemory();
+  const db = (store as unknown as { db: Database.Database }).db;
+  db.exec('DROP TABLE related_keywords');
+  assert.throws(() => store.loadRelatedKeywords('run-1'));
+  store.close();
+});
+
 test('openReadOnly refuses discovery stores from a newer schema version', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'run-readonly-future-'));
   const path = join(directory, 'run.sqlite');

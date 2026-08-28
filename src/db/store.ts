@@ -502,9 +502,11 @@ type KeywordRow = {
 
 export class RunStore {
   private readonly db: Database.Database;
+  private readonly readOnlySource: boolean;
 
-  private constructor(db: Database.Database) {
+  private constructor(db: Database.Database, readOnlySource = false) {
     this.db = db;
+    this.readOnlySource = readOnlySource;
   }
 
   static open(path: string): RunStore {
@@ -538,7 +540,7 @@ export class RunStore {
     let db: Database.Database | null = null;
     try {
       db = new Database(path, { readonly: true, fileMustExist: true });
-      const store = new RunStore(db);
+      const store = new RunStore(db, true);
       store.assertReadableDiscoverySchema();
       return store;
     } catch (error) {
@@ -889,14 +891,17 @@ export class RunStore {
     // migrated just to satisfy newer derived SERP columns. Select compatible
     // aliases for columns added after v1, then reconstruct only the missing
     // registrable-domain value from the immutable hostname/URL evidence.
-    const columns = this.tableColumns('serp_rows');
-    const hasRegistrableDomainColumn = columns.has('registrable_domain');
+    // Only immutable source stores may adapt missing historical columns.
+    // Writable/current stores keep the strict schema contract so corruption is
+    // not silently reinterpreted as historical data.
+    const columns = this.readOnlySource ? this.tableColumns('serp_rows') : null;
+    const hasRegistrableDomainColumn = columns === null || columns.has('registrable_domain');
     const registrableDomainExpr = hasRegistrableDomainColumn
       ? 'registrable_domain'
       : "'' AS registrable_domain";
-    const drExpr = columns.has('dr') ? 'dr' : 'NULL AS dr';
-    const drStatusExpr = columns.has('dr_status') ? 'dr_status' : 'NULL AS dr_status';
-    const drErrorExpr = columns.has('dr_error') ? 'dr_error' : 'NULL AS dr_error';
+    const drExpr = columns === null || columns.has('dr') ? 'dr' : 'NULL AS dr';
+    const drStatusExpr = columns === null || columns.has('dr_status') ? 'dr_status' : 'NULL AS dr_status';
+    const drErrorExpr = columns === null || columns.has('dr_error') ? 'dr_error' : 'NULL AS dr_error';
     const rows = this.db
       .prepare(
         `SELECT keyword_idx, position, keyword, title, url, hostname,
@@ -1132,7 +1137,11 @@ export class RunStore {
     // v1-v4 discovery stores predate persisted related-keyword provenance.
     // In read-only enrichment that absence means there is no reusable source-run
     // Surfer collection; callers may collect the source normally instead.
-    if (this.tableColumns('related_keywords').size === 0) return [];
+    if (
+      this.readOnlySource &&
+      this.version < 5 &&
+      this.tableColumns('related_keywords').size === 0
+    ) return [];
     return (
       this.db
         .prepare(
