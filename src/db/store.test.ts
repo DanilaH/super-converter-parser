@@ -326,6 +326,7 @@ test('openReadOnly reads a v1 discovery store without migrating it', async () =>
   assert.equal(run.forceRefresh, false);
   assert.deepEqual(run.refreshKeywords, []);
   assert.equal(source.loadKeywords('run-1')[0]?.cacheStatus, null);
+  assert.deepEqual(source.loadRelatedKeywords('run-1'), []);
   const serp = source.loadSerpRows('run-1');
   assert.equal(serp.length, 1);
   assert.equal(serp[0]?.registrableDomain, 'example.co.uk');

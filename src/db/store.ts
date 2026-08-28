@@ -556,7 +556,7 @@ export class RunStore {
     }
   }
 
-  private tableColumns(table: 'runs' | 'keywords' | 'serp_rows'): Set<string> {
+  private tableColumns(table: 'runs' | 'keywords' | 'serp_rows' | 'related_keywords'): Set<string> {
     const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     return new Set(rows.map((row) => row.name));
   }
@@ -1129,6 +1129,10 @@ export class RunStore {
   }
 
   loadRelatedKeywords(runId: string): StoredRelatedKeyword[] {
+    // v1-v4 discovery stores predate persisted related-keyword provenance.
+    // In read-only enrichment that absence means there is no reusable source-run
+    // Surfer collection; callers may collect the source normally instead.
+    if (this.tableColumns('related_keywords').size === 0) return [];
     return (
       this.db
         .prepare(
