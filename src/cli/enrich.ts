@@ -471,6 +471,14 @@ async function main(): Promise<void> {
       sourceStorePath = resolve(sourceLocation.discoveryDirectory, 'run.sqlite');
       researchDirectory = sourceLocation.researchDirectory;
       archivePath = sourceLocation.archivePath;
+      modules = args.modules;
+      shortlist = args.shortlist.length > 0
+        ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
+        : [];
+
+      // Validate all source-dependent input before allocating an enrichment
+      // directory or index entry. Invalid shortlist input must not leave an
+      // operator-visible failed run behind.
       enrichmentId = createRunId();
       enrichmentDirectory = await allocateEnrichmentDirectory(researchDirectory);
       await writeEnrichmentIndex(outputRoot, {
@@ -488,10 +496,6 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-      modules = args.modules;
-      shortlist = modules.includes('query_suggestions') || modules.includes('domain_age')
-        ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
-        : (args.shortlist && args.shortlist.length > 0 ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist) : []);
       if (modules.includes('domain_age')) {
         domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
       }
