@@ -438,7 +438,14 @@ export async function runCli(
       await ensureWritableDirectory(runDirectory);
       await ensureWritableDirectory(debugRoot);
       store = RunStore.open(join(runDirectory, 'run.sqlite'));
-      await writeRunIndex(outputRoot, { version: 1, runId, researchDirectory, discoveryDirectory: runDirectory });
+      await writeRunIndex(
+        outputRoot,
+        { version: 1, runId, researchDirectory, discoveryDirectory: runDirectory },
+        () => {
+          store?.close();
+          store = null;
+        },
+      );
       console.log(`  ✓ research directory: ${researchDirectory}`);
       console.log(`  ✓ run.sqlite initialized (schema v${store.version})`);
       console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
