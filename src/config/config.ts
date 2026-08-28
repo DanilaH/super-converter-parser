@@ -227,11 +227,11 @@ function readBoolean(name: string, value: string | undefined, fallback: boolean)
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig {
-  const topN = readPositiveNumber('TOP_N', env.TOP_N, DEFAULTS.research.topN);
-  if (topN < 1 || topN > 30) {
+  const topN = readPositiveInt('TOP_N', env.TOP_N, DEFAULTS.research.topN);
+  if (topN > 30) {
     throw new ResearchError(
       'INPUT_SCHEMA_ERROR',
-      `Invalid TOP_N: expected a number between 1 and 30, got "${topN}".`,
+      `Invalid TOP_N: expected an integer between 1 and 30, got "${topN}".`,
     );
   }
 
@@ -274,8 +274,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig
     minVolume: readPositiveNumber('EXPANSION_MIN_VOLUME', env.EXPANSION_MIN_VOLUME, DEFAULTS.expansion.minVolume),
   };
 
-  if (expansion.depth < 1) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', 'EXPANSION_DEPTH must be at least 1.');
+  if (expansion.depth !== 1) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Invalid EXPANSION_DEPTH: only depth 1 is currently supported, got "${expansion.depth}".`,
+    );
   }
 
   const cacheTtl = {

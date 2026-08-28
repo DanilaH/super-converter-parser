@@ -91,6 +91,25 @@ test('loadConfig rejects invalid TOP_N', () => {
     (error: unknown) =>
       error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
   );
+  assert.throws(
+    () => loadConfig({ TOP_N: '1.5' } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+  );
+});
+
+test('loadConfig rejects unsupported EXPANSION_DEPTH', () => {
+  assert.equal(
+    loadConfig({ EXPANSION_DEPTH: '1' } as NodeJS.ProcessEnv).expansion.depth,
+    1,
+  );
+  assert.throws(
+    () => loadConfig({ EXPANSION_DEPTH: '2' } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'INPUT_SCHEMA_ERROR' &&
+      error.message.includes('only depth 1 is currently supported'),
+  );
 });
 
 test('loadConfig rejects non-numeric timeouts', () => {
