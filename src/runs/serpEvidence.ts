@@ -133,6 +133,17 @@ export function resolveSerpEvidence(
   return unknownEvidence();
 }
 
+// Operator-facing rendering of the same resolved evidence. This helper keeps
+// terminal progress/cache logs aligned with CSV/JSON truth: unavailable SERP
+// evidence is `n/a`, while a genuinely observed empty SERP remains numeric 0.
+export function formatOrganicResultCount(
+  keyword: SerpEvidenceInput,
+  storedOrganicCount: number,
+): string {
+  const count = resolveSerpEvidence(keyword, storedOrganicCount).organicResultCount;
+  return count === null ? 'n/a' : String(count);
+}
+
 function unknownEvidence(): ResolvedSerpEvidence {
   return {
     status: 'unknown',
