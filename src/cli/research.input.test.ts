@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -121,6 +121,28 @@ test('cache open failure is rejected before a durable research directory is allo
 
     assert.equal(code, EXIT_PREFLIGHT);
     await assertMissing(outputRoot);
+  });
+});
+
+test('run-index failure closes run.sqlite and removes the unindexed research directory', async () => {
+  await withSeedsCwd('keyword\njson diff\n', async (directory) => {
+    const outputRoot = join(directory, 'research-output');
+    await mkdir(outputRoot, { recursive: true });
+    await writeFile(join(outputRoot, 'index'), 'blocks index directory creation', 'utf8');
+
+    const code = await runCli(
+      [
+        '--seeds',
+        'input/seeds.csv',
+        '--output-root',
+        outputRoot,
+      ],
+      DEFAULT_CLI_DEPS,
+      { CACHE_DB_PATH: join(directory, 'cache', 'cache.sqlite') } as NodeJS.ProcessEnv,
+    );
+
+    assert.equal(code, EXIT_PREFLIGHT);
+    assert.deepEqual((await readdir(outputRoot)).sort(), ['index']);
   });
 });
 

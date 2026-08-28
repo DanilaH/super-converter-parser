@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ResearchError } from '../shared/errors.js';
 import {
   allocateEnrichmentDirectory,
   allocateResearchLocation,
@@ -37,6 +38,35 @@ test('research and enrichment directories are human-readable and collision-safe'
   assert.equal(second.researchDirectory, join(root, '2026-08-25-compare-lists-02'));
   assert.equal(await allocateEnrichmentDirectory(first.researchDirectory), join(first.researchDirectory, 'enrichment'));
   assert.equal(await allocateEnrichmentDirectory(first.researchDirectory), join(first.researchDirectory, 'enrichment-02'));
+});
+
+test('research allocation filesystem failures are classified as OUTPUT_WRITE_ERROR', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'research-layout-blocked-'));
+  const outputRoot = join(parent, 'output-root-is-a-file');
+  await writeFile(outputRoot, 'not a directory', 'utf8');
+
+  await assert.rejects(
+    () => allocateResearchLocation(outputRoot, 'Blocked'),
+    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+  );
+});
+
+test('failed run-index publication removes the unindexed research directory when cleanup is requested', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-index-failure-'));
+  const location = await allocateResearchLocation(root, 'Index Failure', new Date('2026-08-25T00:00:00Z'));
+  await writeFile(join(location.discoveryDirectory, 'run.sqlite'), 'sqlite');
+  await writeFile(join(root, 'index'), 'blocks index directory creation', 'utf8');
+
+  await assert.rejects(
+    () => writeRunIndex(root, {
+      version: 1,
+      runId: 'run_index_failure',
+      researchDirectory: location.researchDirectory,
+      discoveryDirectory: location.discoveryDirectory,
+    }, () => {}),
+    (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
+  );
+  await assert.rejects(access(location.researchDirectory));
 });
 
 test('run index resolves independently from cwd', async () => {

@@ -56,27 +56,62 @@ export async function allocateResearchLocation(
   label: string,
   date: Date = new Date(),
 ): Promise<ResearchLocation> {
-  await mkdir(outputRoot, { recursive: true });
-  const datePrefix = date.toISOString().slice(0, 10);
-  const baseName = `${datePrefix}-${researchSlug(label)}`;
-  const researchDirectory = await allocateDirectory(outputRoot, baseName);
-  const discoveryDirectory = join(researchDirectory, 'discovery');
-  await mkdir(discoveryDirectory);
-  return {
-    researchDirectory,
-    discoveryDirectory,
-    archivePath: join(researchDirectory, 'results.zip'),
-    legacy: false,
-  };
+  let researchDirectory: string | null = null;
+  try {
+    await mkdir(outputRoot, { recursive: true });
+    const datePrefix = date.toISOString().slice(0, 10);
+    const baseName = `${datePrefix}-${researchSlug(label)}`;
+    researchDirectory = await allocateDirectory(outputRoot, baseName);
+    const discoveryDirectory = join(researchDirectory, 'discovery');
+    await mkdir(discoveryDirectory);
+    return {
+      researchDirectory,
+      discoveryDirectory,
+      archivePath: join(researchDirectory, 'results.zip'),
+      legacy: false,
+    };
+  } catch (error) {
+    if (researchDirectory !== null) {
+      await rm(researchDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (error instanceof ResearchError) throw error;
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to allocate a research directory under "${outputRoot}".`,
+      { cause: error },
+    );
+  }
 }
 
 export async function allocateEnrichmentDirectory(researchDirectory: string): Promise<string> {
   return allocateDirectory(researchDirectory, 'enrichment');
 }
 
-export async function writeRunIndex(outputRoot: string, record: RunIndexRecord): Promise<void> {
+export async function writeRunIndex(
+  outputRoot: string,
+  record: RunIndexRecord,
+  beforeCleanup?: () => void | Promise<void>,
+): Promise<void> {
   assertSafeId(record.runId, 'run');
-  await writeIndex(join(outputRoot, 'index', 'runs', `${record.runId}.json`), record);
+  assertIndexedPath(outputRoot, record.researchDirectory);
+  assertIndexedPath(record.researchDirectory, record.discoveryDirectory);
+  try {
+    await writeIndex(join(outputRoot, 'index', 'runs', `${record.runId}.json`), record);
+  } catch (error) {
+    // Destructive cleanup is opt-in and used only by fresh discovery. This keeps
+    // generic index callers from deleting an existing directory on write failure.
+    if (beforeCleanup) {
+      // Fresh discovery opens run.sqlite before publishing the index. Close any
+      // caller-owned handles first so Windows can delete the unindexed directory.
+      // The callback is best-effort because the original index failure is the
+      // operator-facing error that must be preserved.
+      await Promise.resolve(beforeCleanup()).catch(() => undefined);
+      // Index publication still precedes creation of the durable run row, so this
+      // directory is not resumable and must not survive as an orphan.
+      await rm(record.researchDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 export async function writeEnrichmentIndex(outputRoot: string, record: EnrichmentIndexRecord): Promise<void> {
@@ -169,20 +204,27 @@ async function allocateDirectory(parent: string, baseName: string): Promise<stri
       await mkdir(candidate);
       return candidate;
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') continue;
+      if (error instanceof ResearchError) throw error;
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Failed to allocate directory "${candidate}".`,
+        { cause: error },
+      );
     }
   }
   throw new ResearchError('OUTPUT_WRITE_ERROR', `Could not allocate a unique directory for "${baseName}" under "${parent}".`);
 }
 
 async function writeIndex(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
+    await mkdir(dirname(path), { recursive: true });
     await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     await rename(tempPath, path);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
+    if (error instanceof ResearchError) throw error;
     throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to write output index "${path}".`, { cause: error });
   }
 }
