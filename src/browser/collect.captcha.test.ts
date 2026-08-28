@@ -25,6 +25,7 @@ test('collectKeyword detects a captcha, waits for the page to clear, then comple
   let captchaChecks = 0;
 
   const page = {
+    isClosed: () => false,
     goto: async () => undefined,
     url: () => 'https://google.com/search?q=compare+lists',
     locator: (sel: string) => {

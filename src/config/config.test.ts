@@ -9,7 +9,7 @@ test('loadConfig returns defaults', () => {
   assert.equal(config.research.googleHl, 'en');
   assert.equal(config.research.googleGl, 'us');
   assert.equal(config.research.topN, 10);
-  assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9222');
+  assert.equal(config.browser.cdpUrl, 'http://127.0.0.1:9333');
   assert.equal(config.browser.surferWaitTimeoutMs, 60000);
   assert.equal(config.browser.surferPreflightTimeoutMs, 60000);
   assert.equal(config.browser.surferWidgetSelector, '.surfer-main-keyword-widget');

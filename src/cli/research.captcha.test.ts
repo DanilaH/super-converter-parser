@@ -5,7 +5,8 @@ import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Browser, BrowserContext, Page, Locator } from 'playwright-core';
-import { runCli, EXIT_PAUSED, EXIT_OK } from './research.js';
+import { EXIT_PAUSED, EXIT_OK } from './research.js';
+import { runCliInTestLayout as runCli } from './testCli.js';
 import { collectKeyword } from '../browser/collect.js';
 import type { CollectionResult, RelatedCollectionResult } from '../browser/collect.js';
 import type { ResearchConfig } from '../config/config.js';
@@ -38,6 +39,7 @@ function fakePage(captcha: boolean): Page {
     return '';
   };
   return {
+    isClosed: () => false,
     async goto(_url: string) {},
     url: () => 'https://www.google.com/search?q=k1&gl=us&hl=en',
     async screenshot(_opts?: unknown) {
@@ -213,11 +215,14 @@ test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { time
       AHREFS_API_KEY: undefined,
       EXPANSION_ENABLED: 'false',
     } as unknown as NodeJS.ProcessEnv);
-    const t1 = setTimeout(() => process.emit('SIGINT'), 400);
-    const t2 = setTimeout(() => process.emit('SIGINT'), 600);
+    const signalTimer = setTimeout(() => {
+      // Deliver both signals in one callback so the assertion does not depend
+      // on how quickly the first graceful pause unwinds the async collector.
+      process.emit('SIGINT');
+      process.emit('SIGINT');
+    }, 400);
     const code = await run;
-    clearTimeout(t1);
-    clearTimeout(t2);
+    clearTimeout(signalTimer);
 
     // First Ctrl+C paused the run; the second Ctrl+C must reach the force-quit
     // path (the CLI re-delivers a real SIGINT after dropping its own handler).

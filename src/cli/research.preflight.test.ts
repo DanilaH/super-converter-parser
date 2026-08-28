@@ -5,7 +5,8 @@ import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Browser, BrowserContext, Page, Locator } from 'playwright-core';
-import { runCli, EXIT_PAUSED, EXIT_OK } from './research.js';
+import { EXIT_PAUSED, EXIT_OK } from './research.js';
+import { runCliInTestLayout as runCli } from './testCli.js';
 import { preflightGoogleAndSurfer } from '../browser/preflight.js';
 import { collectKeyword } from '../browser/collect.js';
 import type { CollectionResult } from '../browser/collect.js';
@@ -32,6 +33,7 @@ function fakePage(captcha: boolean): Page {
     return '';
   };
   return {
+    isClosed: () => false,
     async goto(_url: string) {},
     url: () => 'https://www.google.com/search?q=preflight+probe&gl=us&hl=en',
     async screenshot(_opts?: unknown) {

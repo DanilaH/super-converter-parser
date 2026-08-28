@@ -27,6 +27,22 @@ test('buildOrganicResults builds organic rows in order', () => {
   assert.equal(results[0]!.resultType, 'organic');
 });
 
+test('buildOrganicResults applies PSL-aware registrable-domain semantics', () => {
+  const results = buildOrganicResults(
+    [
+      { href: 'https://shop.example.co.il/tool', title: 'Public suffix rule' },
+      { href: 'https://sub.user.github.io/tool', title: 'Private suffix rule' },
+    ],
+    'domain semantics',
+    10,
+  );
+
+  assert.deepEqual(
+    results.map((item) => item.registrableDomain),
+    ['example.co.il', 'user.github.io'],
+  );
+});
+
 test('buildOrganicResults excludes Google navigation and ad redirect links', () => {
   const results = buildOrganicResults(
     [
