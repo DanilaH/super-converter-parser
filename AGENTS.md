@@ -13,9 +13,28 @@ Read in order:
 1. `PRODUCT.md`
 2. `ARCHITECTURE.md`
 3. `PIPELINE.md`
-4. `README.md`
-5. `ACCEPTANCE.md`
-6. `IMPLEMENTATION_PLAN.md` — historical v1 delivery plan, not the current backlog
+4. `V2_1_IMPLEMENTATION_ROADMAP.md` — current V2.1 engineering backlog and implementation decisions
+5. `V2_1_BASELINE_GAP_MATRIX.md` — current-state reconciliation evidence; not a substitute for implemented behavior
+6. `README.md`
+7. `ACCEPTANCE.md`
+8. `IMPLEMENTATION_PLAN.md` — historical v1 delivery plan, not the current backlog
+
+Current-state documents (`ARCHITECTURE.md`, `PIPELINE.md`, `README.md`, `ACCEPTANCE.md`) must remain truthful about merged behavior. Do not document a roadmap target as already implemented. When a V2.1 PR changes runtime behavior, update the relevant current-state docs in that PR.
+
+## Current V2.1 implementation rule
+
+Follow `V2_1_IMPLEMENTATION_ROADMAP.md` instead of mechanically replaying proposal-era phases.
+
+The foundation order is deliberate:
+
+```text
+SERP truth semantics
+→ durable enrichment keyword ownership
+→ independent cold review
+→ larger clustering/cohort work
+```
+
+Do not start by rebuilding RDAP/Wayback, introducing a global keyword UUID migration, or adding Common Crawl/Certificate Transparency to the critical path. The roadmap records why those older proposals are superseded, deferred, or dropped.
 
 ## Critical fact
 
@@ -113,6 +132,20 @@ A 200-keyword run must survive:
 
 If parser health collapses, pause rather than silently generate junk.
 
+## Evidence truthfulness is required
+
+Never silently convert unavailable evidence into a valid-looking negative value.
+
+In particular:
+
+```text
+missing != zero != error != omitted/cap
+```
+
+A numeric zero is only valid when the corresponding source successfully observed and proved zero. Source-specific success/failure must survive persistence when aggregate keyword state is ambiguous.
+
+Relational keyword ownership must use the durable source-run keyword identity. Normalized text remains valid for intentional semantic dedupe/cache/user lookup/display, but not as a substitute for an available relational key.
+
 ## Scope discipline
 
 If a new abstraction or dependency is not required by these docs, justify it before introducing it.
@@ -123,11 +156,25 @@ Prefer explicit code over a premature generic "provider/plugin framework".
 
 v1 acceptance status is recorded in `ACCEPTANCE.md`. New work must preserve its mandatory PASS contracts and keep that document truthful.
 
+V2.1 work is complete only according to the current roadmap gates. Each roadmap PR follows:
+
+```text
+task
+→ implementation
+→ independent review
+→ fix
+→ review
+→ Ubuntu + Windows CI
+→ merge
+```
+
+Do not skip the independent review gate because the first implementation passes tests.
+
 ---
 
 ## Implementation plan and acceptance
 
-The phase descriptions below are a historical capability map. `IMPLEMENTATION_PLAN.md` records the completed v1 delivery sequence; it is not the current backlog. Current behavior and verification contracts come from the code, `README.md`, `PIPELINE.md`, and `ACCEPTANCE.md`.
+The phase descriptions below are a historical capability map. `IMPLEMENTATION_PLAN.md` records the completed v1 delivery sequence; it is not the current backlog. Current behavior and verification contracts come from the code, `README.md`, `PIPELINE.md`, and `ACCEPTANCE.md`. Current V2.1 work comes from `V2_1_IMPLEMENTATION_ROADMAP.md`.
 
 The browser integration spike is already successful.
 
@@ -265,6 +312,8 @@ Verify:
 Prefer focused PRs/phases rather than one enormous change.
 
 However, the end deliverable is the complete v1. Do not stop after Phase 1 and call the project finished.
+
+For V2.1, the focused PR sequence and dependencies in `V2_1_IMPLEMENTATION_ROADMAP.md` supersede using these historical phase headings as a backlog.
 
 ## Final end-to-end acceptance
 
