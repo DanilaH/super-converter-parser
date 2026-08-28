@@ -187,7 +187,7 @@ The shapes below describe logical runtime records. SQLite schemas/migrations are
 
 ## Keyword identity
 
-The browser/discovery runtime works with `KeywordRecord`; SQLite loads the persisted form as `StoredKeyword`, which adds the stable numeric `idx` used to own SERP rows and checkpoints.
+The browser/discovery runtime works with `KeywordRecord`; SQLite loads the persisted form as `StoredKeyword`, which has the stable numeric `idx` used to own SERP rows and checkpoints. The persisted shape is related to, but is not literally a TypeScript extension of, `KeywordRecord`.
 
 ```ts
 type KeywordRecord = {
@@ -199,9 +199,15 @@ type KeywordRecord = {
   // microsoft / surfer / google / error fields omitted here for brevity
 };
 
-type StoredKeyword = KeywordRecord & {
+type StoredKeyword = {
   idx: number;                 // durable per-run ownership key
+  id: string;
+  keyword: string;
+  normalizedKeyword: string;
+  sources: KeywordSource[];
+  status: "pending" | "running" | "completed" | "partial" | "failed";
   cacheStatus: "hit" | "miss" | "expired" | "refreshed" | null;
+  // persisted surfer / google / error / collectedAt fields omitted here
 };
 ```
 
