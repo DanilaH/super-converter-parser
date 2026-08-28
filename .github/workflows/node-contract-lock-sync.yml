@@ -1,0 +1,45 @@
+name: Node contract lock sync
+
+on:
+  push:
+    branches: [chore/node-toolchain-contract]
+
+permissions:
+  contents: write
+
+jobs:
+  sync-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: chore/node-toolchain-contract
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Regenerate lock metadata only
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Verify narrow dependency contract
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const root = lock.packages[''];
+          const nodeTypes = lock.packages['node_modules/@types/node'];
+          const undici = lock.packages['node_modules/undici'];
+          if (root.devDependencies['@types/node'] !== '^20.19.43') throw new Error('root @types/node spec drift');
+          if (!String(nodeTypes.version).startsWith('20.')) throw new Error(`expected Node 20 typings, got ${nodeTypes.version}`);
+          if (root.dependencies.undici !== '^6.28.0' || undici.version !== '6.28.0') throw new Error('undici drifted');
+          NODE
+          git diff --exit-code -- package.json
+      - name: Commit lock and remove helper
+        shell: bash
+        run: |
+          rm .github/workflows/node-contract-lock-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json .github/workflows/node-contract-lock-sync.yml
+          git commit -m "chore: sync Node 20 lockfile"
+          git push origin HEAD:chore/node-toolchain-contract
