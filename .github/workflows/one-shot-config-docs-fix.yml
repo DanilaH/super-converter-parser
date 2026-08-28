@@ -1,0 +1,63 @@
+name: One-shot config docs fix
+
+on:
+  push:
+    branches: [fix/config-truthfulness]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/config-truthfulness
+          fetch-depth: 0
+
+      - name: Sync user-facing config contract
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cli = Path('src/cli/research.ts')
+          text = cli.read_text(encoding='utf-8')
+          old = "  console.log('  TOP_N                        Max organic results per keyword (default 10, max 30)');"
+          new = "  console.log('  TOP_N                        Integer organic results per keyword (default 10, range 1..30)');"
+          if text.count(old) != 1:
+              raise SystemExit('unexpected TOP_N help shape')
+          text = text.replace(old, new)
+          old = "  console.log('  EXPANSION_DEPTH              Expansion depth (default 1)');"
+          new = "  console.log('  EXPANSION_DEPTH              Expansion depth (only 1 is currently supported)');"
+          if text.count(old) != 1:
+              raise SystemExit('unexpected EXPANSION_DEPTH help shape')
+          text = text.replace(old, new)
+          cli.write_text(text, encoding='utf-8')
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          old = '| `TOP_N` | `10` | Max organic results per keyword (1–30) |'
+          new = '| `TOP_N` | `10` | Integer max organic results per keyword (1–30) |'
+          if text.count(old) != 1:
+              raise SystemExit('unexpected README TOP_N shape')
+          text = text.replace(old, new)
+          anchor = '| `SURFER_WIDGET_SELECTOR` | `.surfer-main-keyword-widget` | Surfer widget selector (parser debug hook) |'
+          replacement = anchor + "\n| `EXPANSION_ENABLED` | `false` | Enable depth-one Surfer related-keyword expansion |\n| `EXPANSION_DEPTH` | `1` | Expansion depth; only `1` is currently implemented |"
+          if text.count(anchor) != 1:
+              raise SystemExit('unexpected README expansion insertion point')
+          text = text.replace(anchor, replacement)
+          readme.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/one-shot-config-docs-fix.yml').unlink()
+
+      - name: Commit review fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cli/research.ts README.md .github/workflows/one-shot-config-docs-fix.yml
+          git diff --cached --check
+          git commit -m "docs(config): state supported value ranges"
+          git push origin HEAD:fix/config-truthfulness
