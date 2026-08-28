@@ -225,6 +225,8 @@ Generate:
 
 ```text
 manifest.json
+keywords.json
+serp.json
 keywords.csv
 related-keywords.csv
 serp.csv
