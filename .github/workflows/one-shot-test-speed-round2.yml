@@ -1,0 +1,68 @@
+name: One-shot test speed round 2
+
+on:
+  push:
+    branches: [perf/test-suite-runtime]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/test-suite-runtime
+          fetch-depth: 0
+
+      - name: Apply focused test-only timing reductions
+        shell: python
+        run: |
+          from pathlib import Path
+
+          qs = Path('src/enrichment/querySuggestions.test.ts')
+          text = qs.read_text(encoding='utf-8')
+          start = text.index("test('autocomplete HTTP 429/500 does not become empty via real HTTP path'")
+          end = text.index("\ntest('primitive/null occurrence element fails with DB_ERROR'", start)
+          block = text[start:end]
+          if block.count('shortlistKeywords: testShortlist(),') != 1 or block.count('shortlist: testShortlist(),') != 1:
+              raise SystemExit('unexpected HTTP-error shortlist shape')
+          block = block.replace('shortlistKeywords: testShortlist(),', "shortlistKeywords: ['json diff'],")
+          block = block.replace('shortlist: testShortlist(),', "shortlist: ['json diff'],")
+          text = text[:start] + block + text[end:]
+          qs.write_text(text, encoding='utf-8')
+
+          fetcher = Path('src/enrichment/http/fetcher.test.ts')
+          text = fetcher.read_text(encoding='utf-8')
+          test_names = [
+              "boundedFetch: stalled redirect body does not hang",
+              "boundedFetch: stalled final 429 body does not hang with pinned agent",
+              "boundedFetch: stalled redirect body does not hang with pinned agent",
+          ]
+          for i, name in enumerate(test_names):
+              marker = f"test('{name}'"
+              start = text.index(marker)
+              next_test = text.find("\ntest('", start + len(marker))
+              end = len(text) if next_test == -1 else next_test
+              block = text[start:end]
+              if block.count('timeoutMs: 2000,') != 1:
+                  raise SystemExit(f'unexpected timeout shape in {name}')
+              block = block.replace('timeoutMs: 2000,', 'timeoutMs: 500,')
+              if block.count('elapsed < 5000') == 1:
+                  block = block.replace('elapsed < 5000', 'elapsed < 2000')
+              text = text[:start] + block + text[end:]
+          fetcher.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/one-shot-test-speed-round2.yml').unlink()
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/enrichment/querySuggestions.test.ts src/enrichment/http/fetcher.test.ts .github/workflows/one-shot-test-speed-round2.yml
+          git diff --cached --check
+          git commit -m "perf(tests): shrink bounded timing scenarios"
+          git push origin HEAD:perf/test-suite-runtime
