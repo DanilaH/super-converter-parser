@@ -615,7 +615,10 @@ export class RunStore {
         `Run store is at schema version ${current}, newer than this build supports (${MIGRATIONS.length}). Refusing to open it.`,
       );
     }
-    if (current === MIGRATIONS.length) return;
+    // `user_version` only records the ordered migration sequence. The dynamic
+    // repair phase below is deliberately idempotent and must still run when the
+    // version is already current: a previous open may have advanced user_version
+    // before a later repair step was interrupted or failed.
     for (let version = current; version < MIGRATIONS.length; version += 1) {
       try {
         const apply = this.db.transaction(() => {

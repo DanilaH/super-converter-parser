@@ -502,6 +502,33 @@ test('a failed run-store migration rolls back atomically and leaves the old vers
   raw.close();
 });
 
+
+test('a current-version store repairs missing dynamic columns on reopen', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-repair-current-'));
+  const path = join(directory, 'run.sqlite');
+
+  const created = RunStore.open(path);
+  assert.equal(created.version, SCHEMA_VERSION);
+  created.close();
+
+  const damaged = new Database(path);
+  assert.equal(damaged.pragma('user_version', { simple: true }), SCHEMA_VERSION);
+  damaged.exec('ALTER TABLE serp_rows DROP COLUMN dr_error');
+  const beforeColumns = damaged.prepare('PRAGMA table_info(serp_rows)').all() as Array<{ name: string }>;
+  assert.ok(!beforeColumns.some((column) => column.name === 'dr_error'));
+  // Simulate an interrupted post-migration repair: schema version is already
+  // current even though one idempotently repairable column is missing.
+  assert.equal(damaged.pragma('user_version', { simple: true }), SCHEMA_VERSION);
+  damaged.close();
+
+  const repaired = RunStore.open(path);
+  assert.equal(repaired.version, SCHEMA_VERSION);
+  const db = (repaired as unknown as { db: Database.Database }).db;
+  const afterColumns = db.prepare('PRAGMA table_info(serp_rows)').all() as Array<{ name: string }>;
+  assert.ok(afterColumns.some((column) => column.name === 'dr_error'));
+  repaired.close();
+});
+
 test('a run store from a newer schema version is refused', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'run-migrate-future-'));
   const path = join(directory, 'run.sqlite');
