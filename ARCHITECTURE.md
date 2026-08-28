@@ -185,27 +185,46 @@ An agent should not need to parse ANSI terminal progress output to determine whe
 
 The shapes below describe logical runtime records. SQLite schemas/migrations are authoritative for persisted identifiers and checkpoints.
 
-## Keyword
+## Keyword identity
+
+The browser/discovery runtime works with `KeywordRecord`; SQLite loads the persisted form as `StoredKeyword`, which adds the stable numeric `idx` used to own SERP rows and checkpoints.
 
 ```ts
 type KeywordRecord = {
   id: string;
-  idx: number;                 // stable persisted keyword ownership key
   keyword: string;             // original display text
   normalizedKeyword: string;   // normalized lookup/cache identity
-
-  sources: Array<
-    | { type: "seed"; rowNumbers?: number[] }
-    | { type: "microsoft"; rowNumbers?: number[] }
-    | {
-        type: "surfer_related";
-        parentKeyword: string;
-        overlap?: number | null;
-      }
-  >;
-
+  sources: KeywordSource[];
   status: "pending" | "running" | "completed" | "partial" | "failed";
+  // microsoft / surfer / google / error fields omitted here for brevity
 };
+
+type StoredKeyword = KeywordRecord & {
+  idx: number;                 // durable per-run ownership key
+  cacheStatus: "hit" | "miss" | "expired" | "refreshed" | null;
+};
+```
+
+Conceptually, keyword provenance has these source variants:
+
+```ts
+type KeywordSource =
+  | { type: "seed"; rowNumbers: number[] }
+  | {
+      type: "microsoft";
+      sourceRow: number;
+      adGroup: string;
+      volumeBucket: string | null;
+      volumeRaw: number | null;
+      competition: string | null;
+      cpc: number | null;
+    }
+  | {
+      type: "surfer_related";
+      parentKeyword: string;
+      overlap?: number | null;
+      rowNumbers?: number[];
+    };
 ```
 
 Text normalization is not a relational key. SERP ownership, scoring, clustering, and other persisted joins must use the durable keyword index/ID rather than comparing raw keyword strings.
