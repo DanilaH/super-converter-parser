@@ -1,5 +1,6 @@
 import type { SerpResult } from '../google/serp.js';
-import type { KeywordStatus } from '../runs/run.js';
+import type { KeywordRecord, KeywordStatus, SerpObservationStatus } from '../runs/run.js';
+import { resolveSerpEvidence } from '../runs/serpEvidence.js';
 
 export const SCORING_VERSION = '1.0.0';
 
@@ -60,22 +61,25 @@ export type Candidate = {
   status: KeywordStatus;
   errorCode: string | null;
   errorMessage: string | null;
-  organicResultCount: number;
-  uniqueDomains: number;
-  knownUniqueDomains: number;
+  serpStatus: SerpObservationStatus;
+  serpErrorCode: string | null;
+  serpErrorMessage: string | null;
+  organicResultCount: number | null;
+  uniqueDomains: number | null;
+  knownUniqueDomains: number | null;
   minDr: number | null;
   maxDr: number | null;
   medianDr: number | null;
   top3MedianDr: number | null;
   top5MedianDr: number | null;
-  veryWeakDomainsCount: number;
-  weakDomainsCount: number;
-  strongDomainsCount: number;
-  veryStrongDomainsCount: number;
-  missingDrCount: number;
-  exactMatchDomainCount: number;
-  nicheDomainCount: number;
-  serpDiversity: number;
+  veryWeakDomainsCount: number | null;
+  weakDomainsCount: number | null;
+  strongDomainsCount: number | null;
+  veryStrongDomainsCount: number | null;
+  missingDrCount: number | null;
+  exactMatchDomainCount: number | null;
+  nicheDomainCount: number | null;
+  serpDiversity: number | null;
   surferVolume: number | null;
   surferCpc: number | null;
   score: number | null;
@@ -310,6 +314,7 @@ export function buildCandidates(
     status: KeywordStatus;
     error: { code: string; message: string } | null;
     surfer: { volume: number | null; cpc: number | null } | null;
+    google?: KeywordRecord['google'];
   }>,
   serpRows: SerpResult[],
   thresholds: DrThresholds,
@@ -324,6 +329,14 @@ export function buildCandidates(
 
   const candidates: Candidate[] = keywords.map((keyword) => {
     const rows = byKeywordIdx.get(keyword.idx) ?? [];
+    const evidence = resolveSerpEvidence(
+      {
+        status: keyword.status,
+        error: keyword.error,
+        google: keyword.google ?? null,
+      },
+      rows.length,
+    );
     const features = aggregate(
       {
         keyword: keyword.keyword,
@@ -333,19 +346,40 @@ export function buildCandidates(
       },
       thresholds,
     );
-    const result = score(
-      features,
-      keyword.status,
-      keyword.surfer?.volume ?? null,
-      keyword.surfer?.cpc ?? null,
-    );
+    const result = evidence.trustworthy
+      ? score(
+          features,
+          keyword.status,
+          keyword.surfer?.volume ?? null,
+          keyword.surfer?.cpc ?? null,
+        )
+      : { score: null, tier: null, rationale: '', scoringCompleteness: 'degraded' as const };
+
     return {
       keyword: keyword.keyword,
       normalizedKeyword: keyword.normalizedKeyword,
       status: keyword.status,
       errorCode: keyword.error?.code ?? null,
       errorMessage: keyword.error?.message ?? null,
-      ...features,
+      serpStatus: evidence.status,
+      serpErrorCode: evidence.errorCode,
+      serpErrorMessage: evidence.errorMessage,
+      organicResultCount: evidence.organicResultCount,
+      uniqueDomains: evidence.trustworthy ? features.uniqueDomains : null,
+      knownUniqueDomains: evidence.trustworthy ? features.knownUniqueDomains : null,
+      minDr: evidence.trustworthy ? features.minDr : null,
+      maxDr: evidence.trustworthy ? features.maxDr : null,
+      medianDr: evidence.trustworthy ? features.medianDr : null,
+      top3MedianDr: evidence.trustworthy ? features.top3MedianDr : null,
+      top5MedianDr: evidence.trustworthy ? features.top5MedianDr : null,
+      veryWeakDomainsCount: evidence.trustworthy ? features.veryWeakDomainsCount : null,
+      weakDomainsCount: evidence.trustworthy ? features.weakDomainsCount : null,
+      strongDomainsCount: evidence.trustworthy ? features.strongDomainsCount : null,
+      veryStrongDomainsCount: evidence.trustworthy ? features.veryStrongDomainsCount : null,
+      missingDrCount: evidence.trustworthy ? features.missingDrCount : null,
+      exactMatchDomainCount: evidence.trustworthy ? features.exactMatchDomainCount : null,
+      nicheDomainCount: evidence.trustworthy ? features.nicheDomainCount : null,
+      serpDiversity: evidence.trustworthy ? features.serpDiversity : null,
       surferVolume: keyword.surfer?.volume ?? null,
       surferCpc: keyword.surfer?.cpc ?? null,
       score: result.score,
