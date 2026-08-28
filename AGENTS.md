@@ -14,7 +14,8 @@ Read in order:
 2. `ARCHITECTURE.md`
 3. `PIPELINE.md`
 4. `README.md`
-5. `IMPLEMENTATION_PLAN.md`
+5. `ACCEPTANCE.md`
+6. `IMPLEMENTATION_PLAN.md` — historical v1 delivery plan, not the current backlog
 
 ## Critical fact
 
@@ -120,13 +121,13 @@ Prefer explicit code over a premature generic "provider/plugin framework".
 
 ## Completion rule
 
-Do not declare v1 complete until the end-to-end acceptance in `IMPLEMENTATION_PLAN.md` passes.
+v1 acceptance status is recorded in `ACCEPTANCE.md`. New work must preserve its mandatory PASS contracts and keep that document truthful.
 
 ---
 
 ## Implementation plan and acceptance
 
-The phase descriptions below define capability requirements. `IMPLEMENTATION_PLAN.md` defines the current PR delivery order and takes precedence when sequencing differs.
+The phase descriptions below are a historical capability map. `IMPLEMENTATION_PLAN.md` records the completed v1 delivery sequence; it is not the current backlog. Current behavior and verification contracts come from the code, `README.md`, `PIPELINE.md`, and `ACCEPTANCE.md`.
 
 The browser integration spike is already successful.
 
@@ -293,41 +294,12 @@ The operator should not manually open every Google/Ahrefs page.
 
 ## Live research run (Chrome + Keyword Surfer)
 
-The runner connects to a running Chrome over CDP (`CDP_URL`, default `http://127.0.0.1:9222`).
-Surfer must be installed in that Chrome (`hasSurfer` preflight check).
+The runner connects to a running Chrome over CDP (`CDP_URL`, default `http://127.0.0.1:9333`).
+Surfer must be installed in that dedicated Research Chrome (`hasSurfer` preflight check).
 
-### Critical: user-data-dir must not contain spaces
+### Research Chrome setup
 
-The operator's real profile lives at a path with a space
-(`C:\Users\Biba Bobovich\AppData\Local\Google\Chrome\User Data`). Chrome does **not**
-open the DevTools port when launched with `--user-data-dir` containing a space
-(every launch method — cmd/bat/PowerShell `&`/Node spawn — reports `CDP: DOWN`).
-
-Workaround that works (proven live):
-
-1. Copy the real `Default` profile to a space-free path, e.g. `C:\tmp\research-profile`
-   (robocopy, exclude caches; keep `Local Extension Settings` so Surfer carries over).
-2. Launch Chrome on that copy:
-
-   ```bat
-   @echo off
-   start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-     --remote-debugging-port=9333 ^
-     --user-data-dir=C:\tmp\research-profile ^
-     --profile-directory=Default ^
-     --remote-allow-origins=*
-   ```
-
-3. In `chrome://extensions`, enable / re-install Keyword Surfer (a copied profile is
-   treated as non-standard, so Chrome may disable extensions on first launch).
-4. Run the research against the copy:
-
-   ```text
-   CDP_URL=http://127.0.0.1:9333 npm run research -- --seeds input/seeds.csv --expand
-   ```
-
-CDP on the space-free copy works and Surfer injects (proven: live returned
-`compare lists -> volume 49,500 | cpc $7.90 | organic 9`, identical to the spike).
+Use `npm run chrome:setup` once to prepare the isolated profile and `npm run chrome:start` to launch it. The canonical operator setup and live-acceptance procedure is maintained in `ACCEPTANCE.md` §1; do not duplicate a second machine-specific runbook here.
 
 ### Known live limitation: related-keywords widget
 
@@ -340,8 +312,6 @@ keyword still completes with its main volume/cpc/organic data. This is an enviro
 limitation observed with that Surfer account/extension state. Parser errors retain
 HTML/screenshot/context evidence so the distinction can be verified per run.
 
-### CAPTCHA in background runs
+### CAPTCHA handling
 
-`pauseForManualCaptcha` waits for stdin when `process.stdin.isTTY`, otherwise polls for
-the marker file `C:\tmp\captcha-done.txt` (override with `CAPTCHA_DONE_MARKER`). Create
-the file after solving CAPTCHA in the Research Chrome window to let a background run resume.
+`pauseForManualCaptcha` polls the Research Chrome page directly. After the operator solves the challenge, the runner continues automatically; no Enter press or marker file is used. Ctrl+C sets the shared cancellation signal so the active keyword remains resumable.

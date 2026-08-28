@@ -2,6 +2,8 @@
 
 ## Status
 
+**Historical/completed v1 delivery plan.** PRs 1–8 describe how v1 was built; this file is retained for design history and is not the current backlog. Current operator behavior is documented in `README.md` / `PIPELINE.md`, and reproducible v1 verification lives in `ACCEPTANCE.md`.
+
 The browser integration spike is complete and accepted.
 
 Observed for `compare lists`:

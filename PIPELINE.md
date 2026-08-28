@@ -306,14 +306,13 @@ retry 1/3 in 4s
 ```text
 ⚠ Google CAPTCHA detected.
 
-Run paused safely.
 Solve the CAPTCHA in Research Chrome.
+The runner polls the page and continues automatically after the challenge disappears.
 
-Press Enter to continue
-or Ctrl+C to save checkpoint and exit.
+Ctrl+C pauses safely and leaves the active keyword resumable.
 ```
 
-No CAPTCHA bypass.
+No CAPTCHA bypass, Enter prompt, or marker-file handshake.
 
 ## Geo warning
 
