@@ -627,9 +627,13 @@ export class RunStore {
         });
         apply();
       } catch (error) {
+        // Migrations commit one version at a time. Earlier versions in this open
+        // may already be durable, so report the actual persisted version rather
+        // than the version observed before the migration loop started.
+        const persistedVersion = this.db.pragma('user_version', { simple: true }) as number;
         throw new ResearchError(
           'DB_ERROR',
-          `Run store schema migration v${version + 1} failed; the database was left at v${current}.`,
+          `Run store schema migration v${version + 1} failed; the database was left at v${persistedVersion}.`,
           { cause: error },
         );
       }
