@@ -6,9 +6,17 @@ import type { KeywordStatus } from '../runs/run.js';
 
 const THRESHOLDS: DrThresholds = { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 };
 
-function serp(keyword: string, position: number, domain: string, dr: number | null, drStatus: SerpResult['drStatus']): SerpResult {
+function serp(
+  keyword: string,
+  position: number,
+  domain: string,
+  dr: number | null,
+  drStatus: SerpResult['drStatus'],
+  keywordIdx?: number,
+): SerpResult {
   return {
     keyword,
+    keywordIdx,
     position,
     title: 't',
     url: `https://${domain}/${position}`,
@@ -199,17 +207,36 @@ test('missing DR never inflates accessibility (no fake zero)', () => {
   assert.equal(result.tier, 'C');
 });
 
+test('buildCandidates binds SERP rows by keyword index, not raw keyword text', () => {
+  const keywords = [
+    {
+      idx: 7,
+      keyword: 'JSON   Diff',
+      normalizedKeyword: 'json diff',
+      status: 'completed' as KeywordStatus,
+      error: null,
+      surfer: { volume: 100, cpc: 1 },
+    },
+  ];
+  const serpRows = [serp('json diff', 1, 'example.com', 12, 'ok', 7)];
+
+  const [candidate] = buildCandidates(keywords, serpRows, THRESHOLDS);
+  assert.equal(candidate?.organicResultCount, 1);
+  assert.equal(candidate?.uniqueDomains, 1);
+  assert.equal(candidate?.minDr, 12);
+});
+
 test('buildCandidates sorts by score desc, volume desc, normalized keyword asc, nulls last', () => {
   const keywords = [
-    { keyword: 'aaa', normalizedKeyword: 'aaa', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 100, cpc: 1 } },
-    { keyword: 'bbb', normalizedKeyword: 'bbb', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 100, cpc: 1 } },
-    { keyword: 'ccc', normalizedKeyword: 'ccc', status: 'failed' as KeywordStatus, error: { code: 'X', message: 'm' }, surfer: null },
-    { keyword: 'ddd', normalizedKeyword: 'ddd', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 500, cpc: 1 } },
+    { idx: 0, keyword: 'aaa', normalizedKeyword: 'aaa', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 100, cpc: 1 } },
+    { idx: 1, keyword: 'bbb', normalizedKeyword: 'bbb', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 100, cpc: 1 } },
+    { idx: 2, keyword: 'ccc', normalizedKeyword: 'ccc', status: 'failed' as KeywordStatus, error: { code: 'X', message: 'm' }, surfer: null },
+    { idx: 3, keyword: 'ddd', normalizedKeyword: 'ddd', status: 'completed' as KeywordStatus, error: null, surfer: { volume: 500, cpc: 1 } },
   ];
   const serpRows: SerpResult[] = [
-    serp('aaa', 1, 'a.com', 10, 'ok'),
-    serp('bbb', 1, 'b.com', 10, 'ok'),
-    serp('ddd', 1, 'd.com', 10, 'ok'),
+    serp('aaa', 1, 'a.com', 10, 'ok', 0),
+    serp('bbb', 1, 'b.com', 10, 'ok', 1),
+    serp('ddd', 1, 'd.com', 10, 'ok', 3),
     // ccc has no serp rows
   ];
   const candidates = buildCandidates(keywords, serpRows, THRESHOLDS);
