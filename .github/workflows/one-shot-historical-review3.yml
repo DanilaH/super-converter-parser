@@ -1,0 +1,33 @@
+name: One-shot historical source isolation fix
+
+on:
+  push:
+    branches: [fix/historical-source-schema]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/historical-source-schema
+          fetch-depth: 0
+
+      - name: Apply source isolation fix
+        run: python .github/apply-historical-review3.py
+
+      - name: Remove temporary patch machinery
+        run: rm .github/apply-historical-review3.py .github/workflows/one-shot-historical-review3.yml
+
+      - name: Commit source isolation fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/db/store.ts src/db/store.test.ts .github/apply-historical-review3.py .github/workflows/one-shot-historical-review3.yml
+          git diff --cached --check
+          git commit -m "fix(db): isolate historical fallbacks to read-only sources"
+          git push origin HEAD:fix/historical-source-schema
