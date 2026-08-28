@@ -1,0 +1,88 @@
+name: One-shot config truthfulness
+
+on:
+  push:
+    branches: [fix/config-truthfulness]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/config-truthfulness
+          fetch-depth: 0
+
+      - name: Apply config contract fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          config = Path('src/config/config.ts')
+          text = config.read_text(encoding='utf-8')
+          old = """  const topN = readPositiveNumber('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN < 1 || topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected a number between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"""
+          new = """  const topN = readPositiveInt('TOP_N', env.TOP_N, DEFAULTS.research.topN);\n  if (topN > 30) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid TOP_N: expected an integer between 1 and 30, got \"${topN}\".`,\n    );\n  }\n"""
+          if text.count(old) != 1:
+              raise SystemExit('unexpected TOP_N config shape')
+          text = text.replace(old, new)
+
+          old = """  if (expansion.depth < 1) {\n    throw new ResearchError('INPUT_SCHEMA_ERROR', 'EXPANSION_DEPTH must be at least 1.');\n  }\n"""
+          new = """  if (expansion.depth !== 1) {\n    throw new ResearchError(\n      'INPUT_SCHEMA_ERROR',\n      `Invalid EXPANSION_DEPTH: only depth 1 is currently supported, got \"${expansion.depth}\".`,\n    );\n  }\n"""
+          if text.count(old) != 1:
+              raise SystemExit('unexpected EXPANSION_DEPTH config shape')
+          text = text.replace(old, new)
+          config.write_text(text, encoding='utf-8')
+
+          tests = Path('src/config/config.test.ts')
+          text = tests.read_text(encoding='utf-8')
+          marker = """  assert.throws(\n    () => loadConfig({ TOP_N: '31' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"""
+          replacement = marker + """  assert.throws(\n    () => loadConfig({ TOP_N: '1.5' } as NodeJS.ProcessEnv),\n    (error: unknown) =>\n      error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',\n  );\n"""
+          if text.count(marker) != 1:
+              raise SystemExit('unexpected TOP_N test shape')
+          text = text.replace(marker, replacement)
+
+          insertion_point = "\ntest('loadConfig rejects non-numeric timeouts', () => {"
+          expansion_test = """
+
+test('loadConfig rejects unsupported EXPANSION_DEPTH', () => {
+  assert.equal(
+    loadConfig({ EXPANSION_DEPTH: '1' } as NodeJS.ProcessEnv).expansion.depth,
+    1,
+  );
+  assert.throws(
+    () => loadConfig({ EXPANSION_DEPTH: '2' } as NodeJS.ProcessEnv),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'INPUT_SCHEMA_ERROR' &&
+      error.message.includes('only depth 1 is currently supported'),
+  );
+});
+"""
+          if text.count(insertion_point) != 1:
+              raise SystemExit('unexpected config test insertion point')
+          text = text.replace(insertion_point, expansion_test + insertion_point)
+          tests.write_text(text, encoding='utf-8')
+
+          env = Path('.env.example')
+          text = env.read_text(encoding='utf-8')
+          if text.count('TOP_N=10') != 1 or text.count('EXPANSION_DEPTH=1') != 1:
+              raise SystemExit('unexpected env example shape')
+          text = text.replace('TOP_N=10', '# Integer number of organic Google results to retain (1..30).\nTOP_N=10')
+          text = text.replace('EXPANSION_DEPTH=1', '# Only depth 1 (root -> related child) is currently implemented.\nEXPANSION_DEPTH=1')
+          env.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/one-shot-config-truthfulness.yml').unlink()
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/config/config.ts src/config/config.test.ts .env.example .github/workflows/one-shot-config-truthfulness.yml
+          git diff --cached --check
+          git commit -m "fix(config): enforce implemented value ranges"
+          git push origin HEAD:fix/config-truthfulness
