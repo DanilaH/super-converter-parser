@@ -93,19 +93,23 @@ export async function writeRunIndex(
   beforeCleanup?: () => void | Promise<void>,
 ): Promise<void> {
   assertSafeId(record.runId, 'run');
+  assertIndexedPath(outputRoot, record.researchDirectory);
+  assertIndexedPath(record.researchDirectory, record.discoveryDirectory);
   try {
     await writeIndex(join(outputRoot, 'index', 'runs', `${record.runId}.json`), record);
   } catch (error) {
-    // Fresh discovery opens run.sqlite before publishing the index. Close any
-    // caller-owned handles first so Windows can delete the unindexed directory.
-    // The callback is best-effort because the original index failure is the
-    // operator-facing error that must be preserved.
+    // Destructive cleanup is opt-in and used only by fresh discovery. This keeps
+    // generic index callers from deleting an existing directory on write failure.
     if (beforeCleanup) {
+      // Fresh discovery opens run.sqlite before publishing the index. Close any
+      // caller-owned handles first so Windows can delete the unindexed directory.
+      // The callback is best-effort because the original index failure is the
+      // operator-facing error that must be preserved.
       await Promise.resolve(beforeCleanup()).catch(() => undefined);
+      // Index publication still precedes creation of the durable run row, so this
+      // directory is not resumable and must not survive as an orphan.
+      await rm(record.researchDirectory, { recursive: true, force: true }).catch(() => undefined);
     }
-    // Index publication still precedes creation of the durable run row, so this
-    // directory is not resumable and must not survive as an orphan.
-    await rm(record.researchDirectory, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 }
