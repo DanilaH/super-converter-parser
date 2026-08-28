@@ -766,10 +766,14 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       await writeSiteStructureCsv(csvPath, result.siteStructure, omitted);
       await writeSiteStructureJson(jsonPath, { enrichmentId, sourceRunId, records: result.siteStructure, omitted });
 
-      summary.domainCount = result.siteStructure.length;
+      const siteStructureDomainCount = result.siteStructure.length;
+      summary.siteStructureDomainCount = siteStructureDomainCount;
       summary.domainCacheHitCount = result.siteStructure.filter((r) => r.cacheStatus === 'hit').length;
       summary.siteStructureOmittedCount = omitted.length;
-      summary.siteStructureDiscoveredDomainCount = result.siteStructure.length + omitted.length;
+      summary.siteStructureDiscoveredDomainCount = siteStructureDomainCount + omitted.length;
+      // Keep the historical generic key for single-module consumers, but never
+      // let combined domain modules overwrite one another in status/manifest.
+      if (!domainAgeRecords) summary.domainCount = siteStructureDomainCount;
 
       artifacts.push('site-structure.csv', 'site-structure.json');
     }
@@ -830,12 +834,19 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       const records = [...domainAgeRecords.values()].sort((a, b) => a.domain.localeCompare(b.domain));
       await writeTextAtomic(domainAgeCsvPath, renderDomainAgeCsv(records), 'domain age CSV');
       await writeTextAtomic(domainAgeJsonPath, renderDomainAgeJson(records) + '\n', 'domain age JSON');
-      summary.domainCount = records.filter((r) => !r.omitted).length;
-      summary.domainOmitted = records.filter((r) => r.omitted).length;
-      summary.domainsDiscovered = records.length;
+      const domainAgeDomainCount = records.filter((r) => !r.omitted).length;
+      const domainAgeOmittedCount = records.filter((r) => r.omitted).length;
+      summary.domainAgeDomainCount = domainAgeDomainCount;
+      summary.domainAgeOmittedCount = domainAgeOmittedCount;
+      summary.domainAgeDiscoveredDomainCount = records.length;
       summary.domainsWithRegistration = records.filter((r) => r.registrationDate !== null && !r.omitted).length;
       summary.domainsWithFirstSeen = records.filter((r) => r.firstSeenDate !== null && !r.omitted).length;
       summary.domainErrors = records.filter((r) => r.error !== null && !r.omitted).length;
+      if (!result.siteStructure) {
+        summary.domainCount = domainAgeDomainCount;
+        summary.domainOmitted = domainAgeOmittedCount;
+        summary.domainsDiscovered = records.length;
+      }
       artifacts.push('domain-age.csv', 'domain-age.json');
     }
     const manifestContent = JSON.stringify({
@@ -895,10 +906,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     if (queryResult) parts.push(`${queryResult.suggestions.length} query suggestions from ${queryResult.inputCount} keywords (${queryResult.emptyCount} empty, ${queryResult.errorCount} errors)`);
     if (domainAgeRecords) {
       const records = [...domainAgeRecords.values()];
-      const resolvedCount = records.filter((r) => !r.omitted && r.error === null).length;
+      const processedCount = records.filter((r) => !r.omitted).length;
       const errorCount = records.filter((r) => !r.omitted && r.error !== null).length;
       const omittedCount = records.filter((r) => r.omitted).length;
-      parts.push(`${resolvedCount} domain ages resolved (${errorCount} errors${omittedCount > 0 ? `, ${omittedCount} omitted` : ''})`);
+      parts.push(`${processedCount} domain-age records processed (${errorCount} errors${omittedCount > 0 ? `, ${omittedCount} omitted` : ''})`);
     }
     logger(`Enrichment completed: ${parts.join('; ')}`);
     return {
