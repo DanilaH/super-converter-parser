@@ -108,6 +108,11 @@ Legacy `runs/<uuid>` and `enrichments/<uuid>` directories remain resumable when
 the CLI is launched from the checkout that contains them; they are not migrated
 automatically.
 
+Enrichment never migrates a source discovery database. Its read-only loader accepts
+the v1 base discovery schema through the current schema, supplies null/default values
+for later optional columns, and derives a missing registrable domain from the stored
+hostname/URL. Source stores from a newer schema version are refused explicitly.
+
 ## Implemented CLI
 
 Currently implemented commands:

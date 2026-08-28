@@ -287,6 +287,80 @@ const V1_SCHEMA = `
   );
 `;
 
+
+test('openReadOnly reads a v1 discovery store without migrating it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-readonly-v1-'));
+  const path = join(directory, 'run.sqlite');
+  const v1 = new Database(path);
+  v1.pragma('user_version = 1');
+  v1.exec(V1_SCHEMA);
+  v1.prepare(
+    `INSERT INTO runs (run_id, state, created_at, updated_at, input_kind, input_path, config_snapshot, parser_versions, lookups, pause_reason)
+     VALUES (?, 'completed', ?, ?, 'seeds', 'input/seeds.csv', ?, ?, 1, NULL)`,
+  ).run(
+    'run-1',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z',
+    JSON.stringify(CONFIG),
+    JSON.stringify({ surfer: '1.0.0', google: '1.0.0' }),
+  );
+  v1.prepare(
+    `INSERT INTO keywords (run_id, idx, id, keyword, normalized_keyword, sources, status, surfer, google, error, collected_at)
+     VALUES ('run-1', 0, 'kw-0001', 'compare lists', 'compare lists', ?, 'completed', ?, ?, NULL, ?)`,
+  ).run(
+    JSON.stringify([{ type: 'seed', rowNumbers: [1] }]),
+    JSON.stringify({ volume: 49500, cpc: 7.9, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' }),
+    JSON.stringify({ hl: 'en', gl: 'us' }),
+    '2026-01-01T00:00:00.000Z',
+  );
+  v1.prepare(
+    `INSERT INTO serp_rows (run_id, keyword_idx, position, keyword, title, url, hostname, result_type)
+     VALUES ('run-1', 0, 1, 'compare lists', 'title', 'https://tools.example.co.uk/a', 'tools.example.co.uk', 'organic')`,
+  ).run();
+  v1.close();
+
+  const source = RunStore.openReadOnly(path);
+  assert.equal(source.version, 1);
+  const run = source.loadRun('run-1');
+  assert.ok(run);
+  assert.equal(run.forceRefresh, false);
+  assert.deepEqual(run.refreshKeywords, []);
+  assert.equal(source.loadKeywords('run-1')[0]?.cacheStatus, null);
+  const serp = source.loadSerpRows('run-1');
+  assert.equal(serp.length, 1);
+  assert.equal(serp[0]?.registrableDomain, 'example.co.uk');
+  assert.equal(serp[0]?.dr, null);
+  assert.equal(serp[0]?.drStatus, null);
+  assert.equal(serp[0]?.drError, null);
+  source.close();
+
+  // Read-only compatibility must never mutate a historical source run.
+  const raw = new Database(path, { readonly: true });
+  assert.equal(raw.pragma('user_version', { simple: true }), 1);
+  const keywordColumns = raw.prepare('PRAGMA table_info(keywords)').all() as Array<{ name: string }>;
+  const serpColumns = raw.prepare('PRAGMA table_info(serp_rows)').all() as Array<{ name: string }>;
+  assert.ok(!keywordColumns.some((column) => column.name === 'cache_status'));
+  assert.ok(!serpColumns.some((column) => column.name === 'registrable_domain'));
+  raw.close();
+});
+
+test('openReadOnly refuses discovery stores from a newer schema version', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'run-readonly-future-'));
+  const path = join(directory, 'run.sqlite');
+  const newer = new Database(path);
+  newer.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+  newer.close();
+
+  assert.throws(
+    () => RunStore.openReadOnly(path),
+    (error: unknown) =>
+      error instanceof ResearchError &&
+      error.code === 'DB_ERROR' &&
+      error.message.includes('newer than this build supports'),
+  );
+});
+
+
 test('a v1 run store migrates to the current schema with its data intact', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'run-migrate-v1-'));
   const path = join(directory, 'run.sqlite');
