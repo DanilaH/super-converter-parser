@@ -168,11 +168,11 @@ function printUsage(): void {
   console.log('  RESEARCH_MARKET              Surfer market label (default US)');
   console.log('  GOOGLE_HL                    Google interface language (default en)');
   console.log('  GOOGLE_GL                    Google country parameter (default us)');
-  console.log('  TOP_N                        Max organic results per keyword (default 10, max 30)');
+  console.log('  TOP_N                        Integer organic results per keyword (default 10, range 1..30)');
   console.log('  SURFER_WIDGET_SELECTOR       Override Surfer main widget selector (testing hook)');
   console.log('  SURFER_RELATED_WIDGET_SELECTOR Override Surfer related-keywords widget selector');
   console.log('  EXPANSION_ENABLED            Enable Surfer related-keyword expansion (true/false)');
-  console.log('  EXPANSION_DEPTH              Expansion depth (default 1)');
+  console.log('  EXPANSION_DEPTH              Expansion depth (only 1 is currently supported)');
   console.log('  EXPANSION_MAX_CANDIDATES     Max related candidates per keyword (default 20)');
   console.log('  EXPANSION_MIN_OVERLAP        Drop candidates with lower overlap (default 0)');
   console.log('  EXPANSION_MIN_VOLUME         Drop candidates with lower volume (default 0)');

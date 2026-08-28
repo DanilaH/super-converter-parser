@@ -156,8 +156,10 @@ Configuration via environment variables (all optional):
 | `RESEARCH_MARKET` | `US` | Expected Surfer market label |
 | `GOOGLE_HL` | `en` | Google interface language |
 | `GOOGLE_GL` | `us` | Google geolocation parameter |
-| `TOP_N` | `10` | Max organic results per keyword (1–30) |
+| `TOP_N` | `10` | Integer max organic results per keyword (1–30) |
 | `SURFER_WIDGET_SELECTOR` | `.surfer-main-keyword-widget` | Surfer widget selector (parser debug hook) |
+| `EXPANSION_ENABLED` | `false` | Enable depth-one Surfer related-keyword expansion |
+| `EXPANSION_DEPTH` | `1` | Expansion depth; only `1` is currently implemented |
 | `RETRY_MAX_ATTEMPTS` | `3` | Max collection attempts per keyword |
 | `RETRY_BASE_DELAY_MS` | `1000` | Initial retry backoff |
 | `RETRY_MAX_DELAY_MS` | `15000` | Retry backoff cap |
