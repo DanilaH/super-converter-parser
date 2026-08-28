@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
-import { runCli, EXIT_INVALID_INPUT, DEFAULT_CLI_DEPS } from './research.js';
+import { runCli, EXIT_INVALID_INPUT, EXIT_PREFLIGHT, DEFAULT_CLI_DEPS } from './research.js';
 
 async function withSeedsCwd(csv: string, run: (dir: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'cli-input-'));
@@ -17,6 +17,10 @@ async function withSeedsCwd(csv: string, run: (dir: string) => Promise<void>): P
   } finally {
     process.chdir(previousCwd);
   }
+}
+
+async function assertMissing(path: string): Promise<void> {
+  await assert.rejects(access(path));
 }
 
 test('missing seeds file exits 2', async () => {
@@ -56,6 +60,45 @@ test('seeds CSV with an empty keyword value exits 2', async () => {
   await withSeedsCwd('keyword\n', async () => {
     const code = await runCli(['--seeds', 'input/seeds.csv'], DEFAULT_CLI_DEPS, {} as NodeJS.ProcessEnv);
     assert.equal(code, EXIT_INVALID_INPUT);
+  });
+});
+
+test('unknown --refresh-keyword is rejected before a durable research directory is allocated', async () => {
+  await withSeedsCwd('keyword\njson diff\n', async (directory) => {
+    const outputRoot = join(directory, 'research-output');
+    const code = await runCli(
+      [
+        '--seeds',
+        'input/seeds.csv',
+        '--output-root',
+        outputRoot,
+        '--refresh-keyword',
+        'not in input',
+      ],
+      DEFAULT_CLI_DEPS,
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_INVALID_INPUT);
+    await assertMissing(outputRoot);
+  });
+});
+
+test('--require-ahrefs without a key is rejected before a durable research directory is allocated', async () => {
+  await withSeedsCwd('keyword\njson diff\n', async (directory) => {
+    const outputRoot = join(directory, 'research-output');
+    const code = await runCli(
+      [
+        '--seeds',
+        'input/seeds.csv',
+        '--output-root',
+        outputRoot,
+        '--require-ahrefs',
+      ],
+      DEFAULT_CLI_DEPS,
+      {} as NodeJS.ProcessEnv,
+    );
+    assert.equal(code, EXIT_PREFLIGHT);
+    await assertMissing(outputRoot);
   });
 });
 
