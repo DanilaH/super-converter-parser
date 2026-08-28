@@ -51,7 +51,7 @@ test('research allocation filesystem failures are classified as OUTPUT_WRITE_ERR
   );
 });
 
-test('failed run-index publication removes the unindexed research directory', async () => {
+test('failed run-index publication removes the unindexed research directory when cleanup is requested', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-index-failure-'));
   const location = await allocateResearchLocation(root, 'Index Failure', new Date('2026-08-25T00:00:00Z'));
   await writeFile(join(location.discoveryDirectory, 'run.sqlite'), 'sqlite');
@@ -63,7 +63,7 @@ test('failed run-index publication removes the unindexed research directory', as
       runId: 'run_index_failure',
       researchDirectory: location.researchDirectory,
       discoveryDirectory: location.discoveryDirectory,
-    }),
+    }, () => {}),
     (error: unknown) => error instanceof ResearchError && error.code === 'OUTPUT_WRITE_ERROR',
   );
   await assert.rejects(access(location.researchDirectory));
