@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { boundedFetch, parseRetryAfter, type DnsResolver, type SsrfChecker, type IpPolicy } from './fetcher.js';
+import { boundedFetch, parseRetryAfter, resolveRetryDelayMs, type DnsResolver, type SsrfChecker, type IpPolicy } from './fetcher.js';
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -233,6 +233,13 @@ test('parseRetryAfter: parses HTTP-date', () => {
 test('parseRetryAfter: returns null for invalid', () => {
   assert.equal(parseRetryAfter(null), null);
   assert.equal(parseRetryAfter('invalid'), null);
+});
+
+test('resolveRetryDelayMs: caps server and fallback delays at the request timeout', () => {
+  assert.equal(resolveRetryDelayMs('86400', 1000, 15000), 15000);
+  assert.equal(resolveRetryDelayMs(null, 20000, 15000), 15000);
+  assert.equal(resolveRetryDelayMs('2', 1000, 15000), 2000);
+  assert.equal(resolveRetryDelayMs('0', 1000, 15000), 0);
 });
 
 test('boundedFetch: timeout covers body read (stalled body after headers)', async () => {

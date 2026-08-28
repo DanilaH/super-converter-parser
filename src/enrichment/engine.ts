@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { RunStore } from '../db/store.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
@@ -309,7 +309,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     let queryResult: QuerySuggestionResult | undefined;
 
     const networkModules = modules.filter((m) => m === 'pages' || m === 'site_structure');
-    if (networkModules.length > 0 && !resume) {
+    if (networkModules.length > 0) {
       if (!shortlist || shortlist.length === 0) {
         throw new Error(`Modules ${networkModules.join(', ')} require a --shortlist of 5–200 keywords (deep selection). Got no shortlist.`);
       }
@@ -833,46 +833,49 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       summary.domainErrors = records.filter((r) => r.error !== null && !r.omitted).length;
       artifacts.push('domain-age.csv', 'domain-age.json');
     }
-    await writeTextAtomic(
-      manifestPath,
-      JSON.stringify({
-        enrichmentId,
-        sourceRunId,
-        modules,
-        config: persistedConfig,
-        shortlist: shortlist ?? [],
-        artifacts,
-        summary,
-        state: 'completed',
-        capabilities: {
-          implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
-          blocked: [
-            { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
-            { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
-          ],
-        },
-      }, null, 2) + '\n',
-      'enrichment manifest',
-    );
-    await writeTextAtomic(
-      statusPath,
-      JSON.stringify({
-        enrichmentId,
-        sourceRunId,
-        status: 'completed',
-        modules,
-        summary,
-        artifacts,
-        capabilities: {
-          implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
-          blocked: [
-            { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
-            { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
-          ],
-        },
-      }, null, 2) + '\n',
-      'enrichment status',
-    );
+    const manifestContent = JSON.stringify({
+      enrichmentId,
+      sourceRunId,
+      modules,
+      config: persistedConfig,
+      shortlist: shortlist ?? [],
+      artifacts,
+      summary,
+      state: 'completed',
+      capabilities: {
+        implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
+        blocked: [
+          { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+          { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+        ],
+      },
+    }, null, 2) + '\n';
+    const statusContent = JSON.stringify({
+      enrichmentId,
+      sourceRunId,
+      status: 'completed',
+      modules,
+      summary,
+      artifacts,
+      capabilities: {
+        implemented: ['clusters', 'query_suggestions', 'domain_age', 'pages', 'site_structure'],
+        blocked: [
+          { module: 'page_backlinks', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+          { module: 'organic_snapshot', reason: 'BLOCKED_BY_PROVIDER — paid SEO API unavailable' },
+        ],
+      },
+    }, null, 2) + '\n';
+
+    // `manifest.json` is the final publication marker, matching discovery runs.
+    // If that final write fails, remove the already-published status so callers
+    // never observe a terminal status without its matching manifest.
+    await writeTextAtomic(statusPath, statusContent, 'enrichment status');
+    try {
+      await writeTextAtomic(manifestPath, manifestContent, 'enrichment manifest');
+    } catch (error) {
+      await unlink(statusPath).catch(() => undefined);
+      throw error;
+    }
 
     enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
     const parts: string[] = [];
@@ -1131,6 +1134,8 @@ async function runPagesModule(
     respectRetryAfter: httpConfig.respectRetryAfter,
     minDomainDelayMs: httpConfig.minDelayMs,
     maxDomainDelayMs: httpConfig.maxDelayMs,
+    maxRetries: httpConfig.maxRetries,
+    baseRetryDelayMs: httpConfig.baseRetryDelayMs,
   };
   if (ssrfChecker) fetcherCfg.ssrfChecker = ssrfChecker;
 
@@ -1500,6 +1505,8 @@ async function runSiteStructureModule(
     respectRetryAfter: httpConfig.respectRetryAfter,
     minDomainDelayMs: httpConfig.minDelayMs,
     maxDomainDelayMs: httpConfig.maxDelayMs,
+    maxRetries: httpConfig.maxRetries,
+    baseRetryDelayMs: httpConfig.baseRetryDelayMs,
   };
   if (ssrfChecker) fetcherCfg.ssrfChecker = ssrfChecker;
 

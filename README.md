@@ -141,10 +141,10 @@ npm run research -- --seeds input/seeds.csv --refresh-keyword "json diff"
 # Continue a paused or interrupted run (original input file not required)
 npm run research -- --resume <run-id>
 
-# Enrich a completed discovery run (clustering, query-language suggestions, or both)
+# Enrich a completed discovery run. Deep modules use a 5-200 keyword shortlist.
 npm run enrich -- --run <source-run-id> --modules clusters
-npm run enrich -- --run <source-run-id> --modules query_suggestions
-npm run enrich -- --run <source-run-id> --modules query_suggestions --sources google_autocomplete,google_related_search,google_paa --max-suggestions-per-source 20
+npm run enrich -- --run <source-run-id> --modules query_suggestions --shortlist-file input/shortlist.txt
+npm run enrich -- --run <source-run-id> --modules query_suggestions --shortlist-file input/shortlist.txt --sources google_autocomplete,google_related_search,google_paa --max-suggestions-per-source 20
 npm run enrich -- --resume <enrichment-id>
 
 # Show modules, shortlist formats and common options

@@ -71,6 +71,13 @@ const DEFAULT_SITE_STRUCTURE_CONFIG: EnrichmentSiteStructureConfig = {
 
 const DEFAULT_CACHE_DB_PATH = 'data/cache/enrichment_http_cache.sqlite';
 
+const SHORTLIST_REQUIRED_MODULES: readonly EnrichmentModuleId[] = [
+  'query_suggestions',
+  'domain_age',
+  'pages',
+  'site_structure',
+];
+
 interface ParsedArgs {
   help: boolean;
   sourceRunId: string;
@@ -267,6 +274,7 @@ function printUsage(): void {
   console.log('Options:');
   console.log('  --shortlist <a,b,...>       Inline shortlist of 5-200 keywords.');
   console.log('  --shortlist-file <path>     TXT (one per line) or CSV with a keyword column.');
+  console.log('                              Required by query_suggestions, domain_age, pages, site_structure.');
   console.log('  --sources <a,b,...>         Query-suggestion sources.');
   console.log('  --max-parents <5-200>       Query-suggestion parent cap (default 200).');
   console.log('  --output-root <path>        Durable output root.');
@@ -370,6 +378,16 @@ async function main(): Promise<void> {
       args.shortlist = loadShortlistFile(args.shortlistFile);
     }
 
+    if (!args.resumeEnrichmentId) {
+      const requiredBy = args.modules.filter((module) => SHORTLIST_REQUIRED_MODULES.includes(module));
+      if (requiredBy.length > 0 && args.shortlist.length === 0) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `Modules ${requiredBy.join(', ')} require --shortlist or --shortlist-file with 5-200 keywords.`,
+        );
+      }
+    }
+
     const config: ResearchConfig = loadConfig(process.env);
     const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
 
@@ -417,10 +435,16 @@ async function main(): Promise<void> {
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
       shortlist = existingRun.shortlistKeywords;
-      if (existingRun.modules.includes('query_suggestions') && (shortlist.length < 5 || shortlist.length > 200)) {
+      const persistedShortlistRequiredBy = existingRun.modules.filter((module) =>
+        SHORTLIST_REQUIRED_MODULES.includes(module),
+      );
+      if (
+        persistedShortlistRequiredBy.length > 0 &&
+        (shortlist.length < 5 || shortlist.length > 200)
+      ) {
         throw new ResearchError(
           'INPUT_SCHEMA_ERROR',
-          `Persisted shortlist has ${shortlist.length} keywords; required 5-200. Cannot resume.`,
+          `Persisted shortlist has ${shortlist.length} keywords; modules ${persistedShortlistRequiredBy.join(', ')} require 5-200. Cannot resume.`,
         );
       }
       modules = existingRun.modules;
@@ -448,6 +472,14 @@ async function main(): Promise<void> {
       sourceStorePath = resolve(sourceLocation.discoveryDirectory, 'run.sqlite');
       researchDirectory = sourceLocation.researchDirectory;
       archivePath = sourceLocation.archivePath;
+      modules = args.modules;
+      shortlist = args.shortlist.length > 0
+        ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
+        : [];
+
+      // Validate all source-dependent input before allocating an enrichment
+      // directory or index entry. Invalid shortlist input must not leave an
+      // operator-visible failed run behind.
       enrichmentId = createRunId();
       enrichmentDirectory = await allocateEnrichmentDirectory(researchDirectory);
       await writeEnrichmentIndex(outputRoot, {
@@ -465,10 +497,6 @@ async function main(): Promise<void> {
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
       };
-      modules = args.modules;
-      shortlist = modules.includes('query_suggestions') || modules.includes('domain_age')
-        ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist)
-        : (args.shortlist && args.shortlist.length > 0 ? validateShortlist(sourceStorePath, sourceRunId, args.shortlist) : []);
       if (modules.includes('domain_age')) {
         domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
       }
