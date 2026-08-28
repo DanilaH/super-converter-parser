@@ -5,26 +5,30 @@ output suite (TASK-007 / issue #14). The implementation in `src/scoring/` and
 `src/runs/` must match it exactly. The shared version is:
 
 ```ts
-export const SCORING_VERSION = '1.0.0';
+export const SCORING_VERSION = '1.1.0';
 ```
 
 Code and this document use the same `SCORING_VERSION`. Any change to a formula,
-threshold, or tier boundary must bump the version **and** update this file in
-the same change.
+threshold, tier boundary, or score-eligibility rule must bump the version **and**
+update this file in the same change.
 
 ## Principles
 
 - Every candidate number is derived only from persisted run records
   (`run.sqlite`, never from the mutable cross-run cache state).
 - No LLM scoring. No automatic BUILD/KILL verdicts.
-- Missing data never makes a candidate look stronger; it lowers evidence and
-  completeness (it can only add `0` to a feature).
+- Missing numeric data never makes a candidate look stronger; it lowers evidence
+  and completeness (it can only add `0` to a feature).
+- Missing, failed, or ambiguous **SERP observation** is different from a missing
+  numeric feature: the candidate remains observable but is not assigned a numeric
+  score until the SERP evidence itself is trustworthy.
 - Output ordering is fully deterministic.
 
 ## 1. Aggregation (per canonical keyword)
 
-For every canonical keyword the following features are computed from its organic
-SERP rows (every `serp_rows` entry has `result_type = 'organic'`):
+For every canonical keyword with trustworthy SERP evidence, the following
+features are computed from its organic SERP rows (every `serp_rows` entry has
+`result_type = 'organic'`):
 
 - `organic_result_count` — number of organic SERP rows.
 - `unique_domains` — number of distinct `registrable_domain` values.
@@ -43,6 +47,9 @@ SERP rows (every `serp_rows` entry has `result_type = 'organic'`):
   the naming heuristic in §4.
 - `serp_diversity` — `unique_domains / organic_result_count` (0 when there are
   no organic results).
+
+If SERP evidence is unavailable or ambiguous, SERP-derived candidate fields are
+published as missing rather than as synthetic zeros.
 
 ### Domain representative occurrence
 
@@ -103,10 +110,34 @@ Normalization for both keyword and domain label:
   the normalized domain label. This is documented as a heuristic so it is never
   mistaken for a semantic niche signal.
 
-## 4. Score v1 (0–100)
+## 4. Score v1.1 (0–100)
 
-`clamp(x, 0, 1)`. Missing inputs contribute `0` to their feature; missing data
-never increases a score.
+### SERP evidence eligibility gate
+
+The arithmetic formula is unchanged from score v1.0. What changed in v1.1 is
+whether the formula is allowed to run.
+
+A candidate is score-eligible only when its persisted SERP observation is
+truthworthy:
+
+- `ok` with one or more stored organic rows; or
+- `empty` with zero stored rows, where zero was explicitly observed.
+
+The following states are **not score-eligible** and produce `score = null`,
+`tier = null`, blank SERP-derived numeric fields, and degraded completeness:
+
+- `fetch_error`;
+- `parse_error`;
+- `not_fetched`;
+- `unknown` / ambiguous legacy evidence;
+- an internally inconsistent explicit state (for example `ok` with zero rows).
+
+This prevents an unavailable SERP from being interpreted as a weak/empty
+competitive set. A genuine observed zero-result SERP remains a real numeric zero
+and is score-eligible.
+
+For score-eligible candidates, `clamp(x, 0, 1)`. Missing numeric inputs contribute
+`0` to their feature; missing numeric data never increases a score.
 
 ### Demand — 0–30
 
@@ -160,8 +191,10 @@ Sum the unrounded components, then round the final score to two decimal places.
 | D    | `score < 35`           | probably saturated / low-demand |
 
 Failed / non-terminal keywords remain observable in outputs but have
-`score = null` and `tier = null`. Partial (terminal) keywords may be scored using
-the missing-data rules above.
+`score = null` and `tier = null`. Partial terminal keywords may be scored only
+when their SERP evidence is trustworthy; for example a Surfer failure may coexist
+with successfully observed Google rows, while a Google parse/fetch failure is
+not score-eligible.
 
 ## 6. Deterministic ordering
 
@@ -201,7 +234,9 @@ Every publishable snapshot contains:
 `domains.csv`: `domain, dr, status, error, source, fetched_at, first_seen_keyword, first_seen_position`.
 
 `candidates.csv`: all aggregation features, `score`, `tier`, `scoring_version`,
-keyword `status`/`error`, and a deterministic `rationale`.
+keyword `status`/`error`, and a deterministic `rationale`. When SERP evidence is
+not trustworthy, SERP-derived numeric cells and score/tier are blank rather than
+synthetic zero values.
 
 `status.json`: stable machine-readable run status, counts, error total, scoring
 version, and paths to every artifact.
@@ -222,20 +257,23 @@ JSON, no ANSI / surrounding prose).
 
 ## 10. Scoring completeness metadata (TASK-009)
 
-Score v1 formulas, weights, thresholds, tiers, and `SCORING_VERSION` are unchanged.
-Completeness metadata is **adjacent evidence only** — it never changes a score.
+Score v1.1 keeps the v1.0 arithmetic formula, weights, thresholds, and tier
+boundaries. The version bump records the new SERP-evidence eligibility rule.
+Completeness metadata remains adjacent evidence; it never boosts a score.
 
 Each candidate carries a `scoring_completeness` field:
 
-- `complete` — every SERP domain has numeric DR (`missing_dr_count === 0` and at
-  least one known domain). The score is fully evidenced.
-- `degraded` — some domains have missing DR (Ahrefs `not_found`, `error`, or
-  skipped/not_attempted). The score is deterministic under the v1 formula but is
-  based on incomplete evidence.
+- `complete` — the candidate is score-eligible and every SERP domain has numeric
+  DR (`missing_dr_count === 0` and at least one known domain). The score is fully
+  evidenced.
+- `degraded` — some domains have missing DR, Ahrefs was skipped/not-attempted,
+  there are no known domains, or the candidate is not score-eligible because
+  SERP evidence itself is unavailable/ambiguous.
 
 Missing DR stays missing; it is never treated as `0`. A numeric score remains
-deterministic under v1 but must not be presented as fully evidenced without the
-adjacent `scoring_completeness` status.
+deterministic under the v1.1 formula but must not be presented as fully evidenced
+without the adjacent `scoring_completeness` status. Untrustworthy SERP evidence
+produces no numeric score at all.
 
 ### Per Ahrefs summary
 
@@ -270,4 +308,4 @@ resume correctly.
 
 ### Output updates
 
-`candidates.csv` adds a `scoring_completeness` column (complete | degraded).
+`candidates.csv` contains a `scoring_completeness` column (`complete | degraded`).
