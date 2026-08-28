@@ -2,7 +2,7 @@ import type { SerpResult } from '../google/serp.js';
 import type { KeywordRecord, KeywordStatus, SerpObservationStatus } from '../runs/run.js';
 import { resolveSerpEvidence } from '../runs/serpEvidence.js';
 
-export const SCORING_VERSION = '1.0.0';
+export const SCORING_VERSION = '1.1.0';
 
 export type DrThresholds = {
   veryWeakMax: number;
@@ -346,6 +346,9 @@ export function buildCandidates(
       },
       thresholds,
     );
+    // Score v1.1 keeps the v1.0 formula unchanged but only applies it when the
+    // SERP observation is trustworthy. Missing/failed/ambiguous SERP evidence
+    // stays unscored instead of being interpreted as an empty competitive set.
     const result = evidence.trustworthy
       ? score(
           features,
