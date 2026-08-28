@@ -15,12 +15,13 @@ export async function runCliInTestLayout(
   deps: CliDeps = DEFAULT_CLI_DEPS,
   env: NodeJS.ProcessEnv = {},
 ): Promise<number> {
+  // Tests that explicitly exercise --output-root must observe production layout
+  // directly rather than going through the compatibility view below.
+  if (argv.includes('--output-root')) return runCliRaw(argv, deps, env);
+
   const cwd = process.cwd();
   const outputRoot = join(cwd, '.test-output');
-  const effectiveArgv = argv.includes('--output-root')
-    ? argv
-    : [...argv, '--output-root', outputRoot];
-  const code = await runCliRaw(effectiveArgv, deps, env);
+  const code = await runCliRaw([...argv, '--output-root', outputRoot], deps, env);
   await exposeLegacyTestViews(outputRoot, cwd);
   return code;
 }
