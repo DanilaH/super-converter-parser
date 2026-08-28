@@ -133,9 +133,9 @@ Configurable limits:
 - max related keywords per seed;
 - minimum volume;
 - minimum/maximum overlap if desired;
-- maximum expansion depth.
+- expansion depth (v1 supports only depth `1`; deeper recursion is not implemented).
 
-v1 default depth must be `1`.
+v1 depth is fixed at `1`.
 
 Do not recursively explode related keywords indefinitely.
 
