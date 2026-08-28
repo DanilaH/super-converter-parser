@@ -193,7 +193,7 @@ The browser/discovery runtime works with `KeywordRecord`; SQLite loads the persi
 type KeywordRecord = {
   id: string;
   keyword: string;             // original display text
-  normalizedKeyword: string;   // normalized lookup/cache identity
+  normalizedKeyword: string;   // normalized semantic/cache lookup text
   sources: KeywordSource[];
   status: "pending" | "running" | "completed" | "partial" | "failed";
   // microsoft / surfer / google / error fields omitted here for brevity
@@ -233,7 +233,47 @@ type KeywordSource =
     };
 ```
 
-Text normalization is not a relational key. SERP ownership, scoring, clustering, and other persisted joins must use the durable keyword index/ID rather than comparing raw keyword strings.
+Text normalization is not a relational ownership key. Discovery SERP ownership and scoring already use the durable per-run keyword index. Some deep-enrichment relations still use normalized parent/member text in the current implementation; replacing those relational uses with source keyword identity is the explicit PR-01B work in `V2_1_IMPLEMENTATION_ROADMAP.md`. Normalized text remains intentional for semantic dedupe, cache identity, user shortlist lookup, and display.
+
+## Google SERP observation
+
+Google organic evidence is persisted independently from the aggregate keyword status because Surfer and Google can succeed or fail independently.
+
+Fresh collection writes a source-specific Google observation under the persisted `google` JSON:
+
+```ts
+type SerpObservationStatus =
+  | "ok"
+  | "empty"
+  | "fetch_error"
+  | "parse_error"
+  | "not_fetched"
+  | "unknown"; // compatibility projection for ambiguous historical rows
+
+type GoogleObservation = {
+  hl: string;
+  gl: string;
+  pageUrl: string;
+  detectedLocation: string | null;
+  geoWarning: boolean;
+  serpStatus: SerpObservationStatus;
+  serpError: { code: string; message: string } | null;
+};
+```
+
+Truth invariant:
+
+```text
+serpStatus=ok    + persisted rows → organic_result_count=N
+serpStatus=empty + zero rows      → organic_result_count=0
+fetch/parse/not_fetched/unknown   → organic_result_count missing
+```
+
+An aggregate keyword may therefore be `failed` because Surfer failed while its Google SERP observation is truthfully `empty`, or `partial` because Surfer succeeded while Google parsing failed. Candidate scoring requires trustworthy SERP evidence; a Google parse/fetch failure cannot be interpreted as an easy zero-result SERP.
+
+Historical rows that predate `serpStatus` are interpreted conservatively from durable state. Positive stored SERP rows prove `ok`; a clean historical `completed` zero-row keyword proves the old collector's confirmed zero-results path; ambiguous terminal zero-row records remain `unknown` instead of becoming zero.
+
+The Google parser version is part of keyword cache/resume identity. Changes to this observation contract therefore require a parser-version bump instead of silently reusing old cached semantics.
 
 ## Related keyword
 
@@ -486,6 +526,7 @@ The user must be able to tell why a parser/provider failed without immediately r
 Examples:
 
 - missing SERP is not `organic_result_count = 0` unless zero was actually observed;
+- source-specific Google status/error is preserved even when the aggregate keyword error belongs to Surfer;
 - omitted domains are explicitly marked `omitted` / `domain_cap`;
 - unavailable first-seen data is distinct from registration data;
 - successful suggestion sources are retained even if another source fails.
