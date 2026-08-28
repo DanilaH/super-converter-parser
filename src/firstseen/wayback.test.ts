@@ -131,6 +131,29 @@ test('429 then 200 succeeds after retry', async () => {
   assert.equal(result.requestCount, 2);
 });
 
+test('Retry-After cannot exceed configured maxDelayMs', async () => {
+  let calls = 0;
+  const slept: number[] = [];
+  const fetchImpl = (async () => {
+    calls += 1;
+    return calls === 1
+      ? cdxResponse({}, { status: 429, headers: { 'Retry-After': '86400' } })
+      : cdxResponse([['timestamp'], ['20050101000000']]);
+  }) as unknown as typeof fetch;
+  const config = baseConfig(fetchImpl);
+  config.maxAttempts = 2;
+  config.maxDelayMs = 250;
+  config.sleep = (ms: number) => {
+    slept.push(ms);
+    return Promise.resolve();
+  };
+
+  const result = await createWaybackClient(config, () => Date.UTC(2026, 0, 1))('example.com');
+  assert.equal(result.status, 'ok');
+  assert.equal(calls, 2);
+  assert.deepEqual(slept, [250]);
+});
+
 test('no provider configured -> factory returns null', () => {
   assert.equal(createFirstSeenClient({ ...baseConfig(fetch as unknown as typeof fetch), provider: '' }), null);
   assert.equal(createFirstSeenClient({ ...baseConfig(fetch as unknown as typeof fetch), provider: 'unconfigured' }), null);

@@ -25,7 +25,6 @@ export const WAYBACK_SOURCE = 'wayback';
 export const WAYBACK_DEFAULT_ENDPOINT = 'https://web.archive.org/cdx/search/cdx';
 
 const MAX_ATTEMPTS = 3;
-const DEFAULT_TIMEOUT_MS = 15_000;
 
 export function parseWaybackTimestamp(ts: string): string | null {
   const digits = ts.replace(/[^0-9]/g, '');
@@ -86,13 +85,16 @@ function backoffMs(attempt: number, min: number, max: number, random: () => numb
   return Math.floor(Math.min(max, base + jitter));
 }
 
-function parseRetryAfter(header: string | null): number {
+function parseRetryAfter(header: string | null, maxDelayMs: number, nowMs: number): number {
   if (!header) return 0;
   const seconds = Number(header.trim());
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const parsed = Date.parse(header);
-  if (Number.isFinite(parsed)) return Math.max(0, parsed - Date.now());
-  return 0;
+  const delayMs = Number.isFinite(seconds) && seconds >= 0
+    ? seconds * 1000
+    : (() => {
+        const parsed = Date.parse(header);
+        return Number.isFinite(parsed) ? Math.max(0, parsed - nowMs) : 0;
+      })();
+  return Math.min(maxDelayMs, delayMs);
 }
 
 function errorResult(
@@ -163,8 +165,12 @@ export function createWaybackClient(
         }
         if (!response.ok) {
           if (response.status === 429 && attempt < attempts) {
-            const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
-            await sleep(retryAfter > 0 ? retryAfter : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
+            const retryAfter = parseRetryAfter(response.headers.get('Retry-After'), config.maxDelayMs, now());
+            await sleep(
+              retryAfter > 0
+                ? retryAfter
+                : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random),
+            );
             continue;
           }
           return errorResult(

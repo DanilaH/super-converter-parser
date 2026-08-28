@@ -61,63 +61,70 @@ export function createAhrefsClient(
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-      let response: Response;
       try {
-        response = await fetchImpl(
+        const response = await fetchImpl(
           `${config.endpoint}?target=${encodeURIComponent(domain)}`,
           { signal: controller.signal, headers },
         );
-      } catch {
+
+        if (response.status === 404) {
+          return { domain, dr: null, fetchedAt, source: 'ahrefs', status: 'not_found', error: null };
+        }
+        if (response.status === 429) {
+          if (attempt < MAX_ATTEMPTS) {
+            // The timeout governs the network operation itself. Retry pacing is
+            // separately bounded by maxDelayMs.
+            clearTimeout(timer);
+            await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
+            continue;
+          }
+          throw new ResearchError('AHREFS_RATE_LIMIT', `Ahrefs rate limit hit for "${domain}".`, { httpStatus: 429 });
+        }
+        if (response.status >= 500) {
+          if (attempt < MAX_ATTEMPTS) {
+            clearTimeout(timer);
+            await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
+            continue;
+          }
+          throw new ResearchError('AHREFS_ERROR', `Ahrefs server error ${response.status} for "${domain}".`, { httpStatus: response.status });
+        }
+        // 401/403 are auth/systemic failures: unusable key. Throw (don't return a
+        // plain error result) so the stage can be marked failed and no doomed
+        // fan-out occurs for the remaining domains.
+        if (response.status === 401 || response.status === 403) {
+          throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (${response.status}) for "${domain}".`, { httpStatus: response.status });
+        }
+        if (!response.ok) {
+          return {
+            domain,
+            dr: null,
+            fetchedAt,
+            source: 'ahrefs',
+            status: 'error',
+            error: `status ${response.status}`,
+          };
+        }
+
+        // Keep the abort timer active through body consumption. A server that
+        // sends headers and then stalls the JSON body must not hang the run.
+        const payload = (await response.json()) as {
+          domain_rating?: { domain_rating?: number | null } | null;
+          dr?: number | null;
+        };
+        const dr = payload.domain_rating?.domain_rating ?? payload.dr ?? null;
+        return { domain, dr, fetchedAt, source: 'ahrefs', status: 'ok', error: null };
+      } catch (error) {
+        if (error instanceof ResearchError) throw error;
         if (attempt < MAX_ATTEMPTS) {
           await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
           continue;
         }
         return { domain, dr: null, fetchedAt, source: 'ahrefs', status: 'error', error: 'network' };
       } finally {
-        // Always release the abort timer, including on network/abort throws.
+        // Release the timer after both headers and any required body have been
+        // consumed (or after an abort/error).
         clearTimeout(timer);
       }
-
-      if (response.status === 404) {
-        return { domain, dr: null, fetchedAt, source: 'ahrefs', status: 'not_found', error: null };
-      }
-      if (response.status === 429) {
-        if (attempt < MAX_ATTEMPTS) {
-          await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
-          continue;
-        }
-        throw new ResearchError('AHREFS_RATE_LIMIT', `Ahrefs rate limit hit for "${domain}".`, { httpStatus: 429 });
-      }
-      if (response.status >= 500) {
-        if (attempt < MAX_ATTEMPTS) {
-          await sleep(backoffMs(attempt, config.minDelayMs, config.maxDelayMs, Math.random));
-          continue;
-        }
-        throw new ResearchError('AHREFS_ERROR', `Ahrefs server error ${response.status} for "${domain}".`, { httpStatus: response.status });
-      }
-      // 401/403 are auth/systemic failures: unusable key. Throw (don't return a
-      // plain error result) so the stage can be marked failed and no doomed
-      // fan-out occurs for the remaining domains.
-      if (response.status === 401 || response.status === 403) {
-        throw new ResearchError('AHREFS_ERROR', `Ahrefs auth rejected (${response.status}) for "${domain}".`, { httpStatus: response.status });
-      }
-      if (!response.ok) {
-        return {
-          domain,
-          dr: null,
-          fetchedAt,
-          source: 'ahrefs',
-          status: 'error',
-          error: `status ${response.status}`,
-        };
-      }
-
-      const payload = (await response.json()) as {
-        domain_rating?: { domain_rating?: number | null } | null;
-        dr?: number | null;
-      };
-      const dr = payload.domain_rating?.domain_rating ?? payload.dr ?? null;
-      return { domain, dr, fetchedAt, source: 'ahrefs', status: 'ok', error: null };
     }
     return { domain, dr: null, fetchedAt, source: 'ahrefs', status: 'error', error: 'unreachable' };
   };
