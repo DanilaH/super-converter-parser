@@ -71,6 +71,13 @@ const DEFAULT_SITE_STRUCTURE_CONFIG: EnrichmentSiteStructureConfig = {
 
 const DEFAULT_CACHE_DB_PATH = 'data/cache/enrichment_http_cache.sqlite';
 
+const SHORTLIST_REQUIRED_MODULES: readonly EnrichmentModuleId[] = [
+  'query_suggestions',
+  'domain_age',
+  'pages',
+  'site_structure',
+];
+
 interface ParsedArgs {
   help: boolean;
   sourceRunId: string;
@@ -368,6 +375,16 @@ async function main(): Promise<void> {
 
     if (args.shortlistFile) {
       args.shortlist = loadShortlistFile(args.shortlistFile);
+    }
+
+    if (!args.resumeEnrichmentId) {
+      const requiredBy = args.modules.filter((module) => SHORTLIST_REQUIRED_MODULES.includes(module));
+      if (requiredBy.length > 0 && args.shortlist.length === 0) {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `Modules ${requiredBy.join(', ')} require --shortlist or --shortlist-file with 5-200 keywords.`,
+        );
+      }
     }
 
     const config: ResearchConfig = loadConfig(process.env);

@@ -102,6 +102,15 @@ export function parseRetryAfter(header: string | null): number | null {
   return null;
 }
 
+export function resolveRetryDelayMs(
+  retryAfter: string | null,
+  fallbackMs: number,
+  maxDelayMs: number,
+): number {
+  const requestedMs = parseRetryAfter(retryAfter) ?? fallbackMs;
+  return Math.min(requestedMs, Math.max(0, maxDelayMs));
+}
+
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
@@ -336,7 +345,11 @@ export async function boundedFetch(
           if (retry < cfg.maxRetries) {
             await drainBody(response, attemptController);
             clearTimeout(attemptTimer);
-            const delayMs = parseRetryAfter(retryAfter) ?? (cfg.baseRetryDelayMs * (retry + 1));
+            const delayMs = resolveRetryDelayMs(
+              retryAfter,
+              cfg.baseRetryDelayMs * (retry + 1),
+              cfg.timeoutMs,
+            );
             await new Promise((resolve) => setTimeout(resolve, delayMs));
             continue;
           }
