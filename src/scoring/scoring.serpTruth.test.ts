@@ -59,7 +59,7 @@ test('partial keyword with Surfer demand but Google parse error is unscored and 
   assert.equal(candidate?.tier, null);
 });
 
-test('genuine empty SERP keeps numeric zero and remains trustworthy for scoring', () => {
+test('genuine empty SERP keeps numeric zero and can be scored for an eligible keyword status', () => {
   const [candidate] = buildCandidates(
     [{
       idx: 0,
@@ -81,7 +81,29 @@ test('genuine empty SERP keeps numeric zero and remains trustworthy for scoring'
   assert.notEqual(candidate?.score, null);
 });
 
-test('trustworthy Google rows remain scoreable even when Surfer failed first', () => {
+test('trustworthy empty SERP does not override the existing failed-keyword scoring gate', () => {
+  const [candidate] = buildCandidates(
+    [{
+      idx: 1,
+      keyword: 'k',
+      normalizedKeyword: 'k',
+      status: 'failed',
+      error: { code: 'SURFER_PARSE_ERROR', message: 'bad surfer' },
+      surfer: null,
+      google: google('empty'),
+    }],
+    [],
+    THRESHOLDS,
+  );
+
+  assert.equal(candidate?.serpStatus, 'empty');
+  assert.equal(candidate?.organicResultCount, 0);
+  assert.equal(candidate?.score, null);
+  assert.equal(candidate?.tier, null);
+  assert.equal(candidate?.scoringCompleteness, 'degraded');
+});
+
+test('trustworthy Google rows remain scoreable when the aggregate keyword is partial from a Surfer failure', () => {
   const [candidate] = buildCandidates(
     [{
       idx: 3,
