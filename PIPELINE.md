@@ -240,7 +240,7 @@ These are research heuristics, not SEO laws.
 
 See `SCORING.md`.
 
-The existing formula/version is unchanged by the SERP truth contract, but a candidate is only scored when its SERP observation is trustworthy. A partial keyword with valid Surfer demand and a Google parse/fetch failure remains visible but receives `score=null` rather than being scored as an empty/easy SERP.
+The arithmetic formula, weights, thresholds, and tier boundaries are unchanged, but `SCORING_VERSION` is `1.1.0` because score eligibility now requires trustworthy SERP evidence. A partial keyword with valid Surfer demand and a Google parse/fetch failure remains visible but receives `score=null` rather than being scored as an empty/easy SERP. Trustworthy SERP evidence is necessary but the existing keyword-status rule still applies: failed/non-terminal keywords remain unscored.
 
 ## Stage 9 — Output
 
