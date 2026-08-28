@@ -8,7 +8,7 @@ import { ResearchError } from '../shared/errors.js';
 import {
   runQuerySuggestionsModule,
   buildQueryResultFromStore,
-  defaultQuerySuggestionsConfig,
+  defaultQuerySuggestionsConfig as productionDefaultQuerySuggestionsConfig,
   dedupSuggestions,
   classifyHttpResponse,
   type SuggestionCollector,
@@ -17,6 +17,16 @@ import {
   type RawSuggestionOccurrence,
 } from './querySuggestions.js';
 import type { QuerySuggestionSource } from './types.js';
+
+// These tests exercise source, cache, persistence, and retry semantics, not
+// production wall-clock pacing between parent keywords.
+function defaultQuerySuggestionsConfig(): ReturnType<typeof productionDefaultQuerySuggestionsConfig> {
+  return {
+    ...productionDefaultQuerySuggestionsConfig(),
+    rateLimitMinDelayMs: 0,
+    rateLimitMaxDelayMs: 0,
+  };
+}
 
 function occ(
   parent: string,

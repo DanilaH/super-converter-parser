@@ -115,7 +115,7 @@ after(() => {
   });
 });
 
-const testConfig = { minDomainDelayMs: 0, maxDomainDelayMs: 0, ssrfChecker: allowAllSsrf };
+const testConfig = { minDomainDelayMs: 0, maxDomainDelayMs: 0, maxRetries: 0, ssrfChecker: allowAllSsrf };
 
 test('boundedFetch: fetches HTML successfully', async () => {
   const result = await boundedFetch(`${baseUrl}/ok`, testConfig);
@@ -337,14 +337,14 @@ test('boundedFetch: stalled redirect body does not hang', async () => {
     const startTime = Date.now();
     const result = await boundedFetch(`http://127.0.0.1:${serverPort}/stall-redirect`, {
       ...testConfig,
-      timeoutMs: 2000,
+      timeoutMs: 500,
       ssrfChecker: async () => ({ allowed: true, ip: '127.0.0.1' }),
     });
     const elapsed = Date.now() - startTime;
 
     assert.equal(result.status, 200);
     assert.match(result.body ?? '', /destination/);
-    assert.ok(elapsed < 5000, `Should not hang on stalled body, took ${elapsed}ms`);
+    assert.ok(elapsed < 2000, `Should not hang on stalled body, took ${elapsed}ms`);
   } finally {
     server.close();
   }
@@ -368,7 +368,7 @@ test('boundedFetch: stalled final 429 body does not hang with pinned agent', asy
     const startTime = Date.now();
     const result = await boundedFetch(`http://127.0.0.1:${serverPort}/stall-429`, {
       ...testConfig,
-      timeoutMs: 2000,
+      timeoutMs: 500,
       maxRetries: 1,
       baseRetryDelayMs: 10,
       ssrfChecker: async () => ({ allowed: true, ip: '127.0.0.1' }),
@@ -376,7 +376,7 @@ test('boundedFetch: stalled final 429 body does not hang with pinned agent', asy
     const elapsed = Date.now() - startTime;
 
     assert.equal(result.status, 429);
-    assert.ok(elapsed < 5000, `Should not hang on stalled 429 body with pinned agent, took ${elapsed}ms`);
+    assert.ok(elapsed < 2000, `Should not hang on stalled 429 body with pinned agent, took ${elapsed}ms`);
   } finally {
     server.close();
   }
@@ -403,14 +403,14 @@ test('boundedFetch: stalled redirect body does not hang with pinned agent', asyn
     const startTime = Date.now();
     const result = await boundedFetch(`http://127.0.0.1:${serverPort}/stall-redirect`, {
       ...testConfig,
-      timeoutMs: 2000,
+      timeoutMs: 500,
       ssrfChecker: async () => ({ allowed: true, ip: '127.0.0.1' }),
     });
     const elapsed = Date.now() - startTime;
 
     assert.equal(result.status, 200);
     assert.match(result.body ?? '', /destination/);
-    assert.ok(elapsed < 5000, `Should not hang on stalled redirect body with pinned agent, took ${elapsed}ms`);
+    assert.ok(elapsed < 2000, `Should not hang on stalled redirect body with pinned agent, took ${elapsed}ms`);
   } finally {
     server.close();
   }
