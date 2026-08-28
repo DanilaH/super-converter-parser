@@ -555,7 +555,7 @@ test('autocomplete HTTP 429/500 does not become empty via real HTTP path', async
     config: JSON.stringify({ query_suggestions: { ...defaultQuerySuggestionsConfig(), sources: ['google_autocomplete'] } }),
     sourceRunDirectory: `runs/${sourceRunId}`,
     enrichmentDirectory: '/tmp/enr-http',
-    shortlistKeywords: ['json diff'],
+    shortlistKeywords: testShortlist(),
   });
 
   let callCount = 0;
@@ -590,7 +590,7 @@ test('autocomplete HTTP 429/500 does not become empty via real HTTP path', async
     enrichmentStore,
     sourceRunId,
     config: { ...defaultQuerySuggestionsConfig(), sources: ['google_autocomplete'] },
-    shortlist: ['json diff'],
+    shortlist: testShortlist(),
     logger: () => {},
     signal: { cancelled: false },
     collector,
