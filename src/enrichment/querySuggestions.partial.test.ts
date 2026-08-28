@@ -177,6 +177,5 @@ test('partial source failure preserves completed sources and retries only missin
   } finally {
     sourceStore.close();
     enrichmentStore.close();
-    cache.close();
   }
 });
