@@ -274,6 +274,7 @@ function printUsage(): void {
   console.log('Options:');
   console.log('  --shortlist <a,b,...>       Inline shortlist of 5-200 keywords.');
   console.log('  --shortlist-file <path>     TXT (one per line) or CSV with a keyword column.');
+  console.log('                              Required by query_suggestions, domain_age, pages, site_structure.');
   console.log('  --sources <a,b,...>         Query-suggestion sources.');
   console.log('  --max-parents <5-200>       Query-suggestion parent cap (default 200).');
   console.log('  --output-root <path>        Durable output root.');
