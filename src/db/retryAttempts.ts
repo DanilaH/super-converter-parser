@@ -88,11 +88,6 @@ function applyKeywordRetrySchema(db: Database.Database): void {
   `);
 }
 
-export function ensureKeywordRetrySchema(store: RunStore): void {
-  const db = dbOf(store);
-  db.transaction(() => applyKeywordRetrySchema(db))();
-}
-
 function assertRetrySchemaReadable(store: RunStore): boolean {
   if (!retrySchemaExists(store)) return false;
   const row = dbOf(store)
