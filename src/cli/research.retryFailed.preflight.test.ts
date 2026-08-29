@@ -47,7 +47,7 @@ function failedResult(record: KeywordRecord): CollectionResult {
   };
 }
 
-test('resume config rejection rolls back prepared failed-keyword repair completely', async () => {
+test('resume config rejection leaves failed-keyword repair unapplied', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cli-retry-preflight-'));
   await mkdir(join(directory, 'input'), { recursive: true });
   await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nfailed keyword', 'utf8');
@@ -86,8 +86,8 @@ test('resume config rejection rolls back prepared failed-keyword repair complete
     assert.deepEqual(before.loadSerpRows(runId).map((row) => row.registrableDomain), ['old.example']);
     before.close();
 
-    // prepareFailedKeywordRetry() is reached first, but its transaction must not
-    // become durable because effectiveConfigForResume rejects this selector.
+    // The retry plan is read-only. effectiveConfigForResume rejects the changed
+    // selector before applyFailedKeywordRetryPreparation() can mutate run.sqlite.
     const rejected = await runCli(
       ['--resume', runId, '--retry-failed'],
       deps,
