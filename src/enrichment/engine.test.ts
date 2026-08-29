@@ -410,10 +410,14 @@ test('runEnrichment: clusters keywords from source run', async () => {
 
   const clusters = enrichmentStore.loadKeywordClusters('test-enrichment');
   assert.equal(clusters.length, 1);
+  assert.equal(clusters[0]!.canonicalKeywordIdx, 0);
+  assert.deepEqual(clusters[0]!.members.map((member) => member.keywordIdx).sort(), [0, 1]);
 
   const pairs = enrichmentStore.loadEnrichmentPairs('test-enrichment');
   assert.ok(pairs.length >= 1);
-  assert.ok(pairs[0]!.keywordA < pairs[0]!.keywordB);
+  assert.deepEqual([pairs[0]!.keywordAIdx, pairs[0]!.keywordBIdx], [0, 1]);
+  assert.equal(pairs[0]!.keywordA, 'json diff');
+  assert.equal(pairs[0]!.keywordB, 'json compare');
 
   const exclusions = enrichmentStore.loadEnrichmentExclusions('test-enrichment');
   assert.equal(exclusions.length, 0);
@@ -507,6 +511,7 @@ test('runEnrichment: persists exclusions for keywords without SERP', async () =>
 
   const exclusions = enrichmentStore.loadEnrichmentExclusions('test-excl');
   assert.equal(exclusions.length, 1);
+  assert.equal(exclusions[0]!.keywordIdx, 1);
   assert.equal(exclusions[0]!.normalizedKeyword, 'no serp');
   assert.equal(exclusions[0]!.reason, 'no_serp');
 
@@ -816,4 +821,3 @@ test('runEnrichment: domain_age resume reuses the cache and makes no fresh calls
   cacheStore.close();
   await rm(enrichmentDir, { recursive: true, force: true });
 });
-
