@@ -100,11 +100,11 @@ export type RunQuality = {
   bounds: {
     organicSerpTopN: number;
     relatedExpansion: {
-      enabled: boolean;
-      depth: number;
-      maxCandidatesPerKeyword: number;
-      minOverlap: number;
-      minVolume: number;
+      enabled: boolean | null;
+      depth: number | null;
+      maxCandidatesPerKeyword: number | null;
+      minOverlap: number | null;
+      minVolume: number | null;
       selectedRows: number;
       explicitOmissionCount: null;
       omissionAccounting: 'not_persisted';
@@ -362,6 +362,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
 
+  const expansion = run.configSnapshot.expansion;
   return {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
@@ -400,7 +401,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
         resolvedCoveragePercent: coveragePercent(ahrefsResolved, domains.length),
         numeric: ahrefsNumeric,
         numericCoveragePercent: coveragePercent(ahrefsNumeric, domains.length),
-        mode: ahrefs?.mode ?? (run.configSnapshot.ahrefs.requireAhrefs ? 'required' : 'optional'),
+        mode: ahrefs?.mode ?? (run.configSnapshot.ahrefs?.requireAhrefs ? 'required' : 'optional'),
         summaryState: ahrefs?.state ?? null,
         statuses: ahrefsStatuses,
       },
@@ -417,11 +418,11 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     bounds: {
       organicSerpTopN: run.configSnapshot.research.topN,
       relatedExpansion: {
-        enabled: run.configSnapshot.expansion.enabled,
-        depth: run.configSnapshot.expansion.depth,
-        maxCandidatesPerKeyword: run.configSnapshot.expansion.maxCandidatesPerKeyword,
-        minOverlap: run.configSnapshot.expansion.minOverlap,
-        minVolume: run.configSnapshot.expansion.minVolume,
+        enabled: expansion?.enabled ?? null,
+        depth: expansion?.depth ?? null,
+        maxCandidatesPerKeyword: expansion?.maxCandidatesPerKeyword ?? null,
+        minOverlap: expansion?.minOverlap ?? null,
+        minVolume: expansion?.minVolume ?? null,
         selectedRows: relatedKeywords.filter((row) => row.selectedForExpansion).length,
         explicitOmissionCount: null,
         omissionAccounting: 'not_persisted',
