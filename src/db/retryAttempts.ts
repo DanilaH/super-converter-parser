@@ -39,6 +39,12 @@ function dbOf(store: RunStore): Database.Database {
   return (store as unknown as StoreWithDb).db;
 }
 
+function retrySchemaExists(store: RunStore): boolean {
+  return Boolean(dbOf(store)
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'keyword_retry_schema'")
+    .get());
+}
+
 export function ensureKeywordRetrySchema(store: RunStore): void {
   const db = dbOf(store);
   const apply = db.transaction(() => {
@@ -85,6 +91,20 @@ export function ensureKeywordRetrySchema(store: RunStore): void {
   apply();
 }
 
+function assertRetrySchemaReadable(store: RunStore): boolean {
+  if (!retrySchemaExists(store)) return false;
+  const row = dbOf(store)
+    .prepare('SELECT version FROM keyword_retry_schema WHERE singleton = 1')
+    .get() as { version: number } | undefined;
+  if (!row || row.version < 1 || row.version > KEYWORD_RETRY_SCHEMA_VERSION) {
+    throw new ResearchError(
+      'DB_ERROR',
+      `Unsupported keyword retry schema version ${row?.version ?? 'missing'}.`,
+    );
+  }
+  return true;
+}
+
 function mapAttemptRow(row: RetryAttemptRow): KeywordRetryAttempt {
   return {
     runId: row.run_id,
@@ -100,7 +120,7 @@ function mapAttemptRow(row: RetryAttemptRow): KeywordRetryAttempt {
 }
 
 export function loadKeywordRetryAttempts(store: RunStore, runId: string): KeywordRetryAttempt[] {
-  ensureKeywordRetrySchema(store);
+  if (!assertRetrySchemaReadable(store)) return [];
   return (dbOf(store)
     .prepare(
       `SELECT * FROM keyword_retry_attempts
@@ -111,7 +131,7 @@ export function loadKeywordRetryAttempts(store: RunStore, runId: string): Keywor
 }
 
 export function loadOpenKeywordRetryIndexes(store: RunStore, runId: string): number[] {
-  ensureKeywordRetrySchema(store);
+  if (!assertRetrySchemaReadable(store)) return [];
   return (dbOf(store)
     .prepare(
       `SELECT keyword_idx FROM keyword_retry_attempts
@@ -246,7 +266,7 @@ export function reconcileCompletedKeywordRetries(
   runId: string,
   completedAt: string = new Date().toISOString(),
 ): number[] {
-  ensureKeywordRetrySchema(store);
+  if (!assertRetrySchemaReadable(store)) return [];
   const db = dbOf(store);
   const open = loadOpenKeywordRetryIndexes(store, runId);
   if (open.length === 0) return [];
