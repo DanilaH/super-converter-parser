@@ -154,6 +154,7 @@ function buildClusteringInputs(
       .map((r) => r.registrableDomain)
       .filter((d) => d !== ''))];
     inputs.push({
+      keywordIdx: kw.keywordIdx,
       keyword: kw.keyword,
       normalizedKeyword: kw.normalizedKeyword,
       volume: kw.volume,
@@ -802,6 +803,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         perSourceStatus: queryResult.perSourceStatus,
         sourceStats: queryResult.sourceStats,
         sourceRecords: sourceRecords.map((r) => ({
+          parentKeywordIdx: r.parentKeywordIdx,
           normalizedParent: r.normalizedParent,
           source: r.source,
           status: r.status,
@@ -1026,6 +1028,7 @@ async function runClustersModule(
   result.excludedCount += keywordsWithoutSerp.length;
   for (const kw of keywordsWithoutSerp) {
     result.exclusions.push({
+      keywordIdx: kw.keywordIdx,
       keyword: kw.keyword,
       normalizedKeyword: kw.normalizedKeyword,
       reason: 'no_serp',
@@ -1035,16 +1038,28 @@ async function runClustersModule(
 
   enrichmentStore.saveKeywordClusters(
     enrichmentId,
-    result.clusters.map((c) => ({
-      clusterId: c.clusterId,
-      canonicalKeyword: c.canonicalKeyword,
-      members: c.members,
-      representativeDomains: c.representativeDomains,
-      medianVolume: c.medianVolume,
-      averageVolume: c.averageVolume,
-      algorithmVersion: result.algorithmVersion,
-      config: result.config,
-    })),
+    result.clusters.map((c) => {
+      if (c.canonicalKeywordIdx === null) {
+        throw new Error(`Fresh cluster ${c.clusterId} is missing canonical source keyword identity.`);
+      }
+      const members = c.members.map((member) => {
+        if (member.keywordIdx === null) {
+          throw new Error(`Fresh cluster ${c.clusterId} contains a member without source keyword identity.`);
+        }
+        return { ...member, keywordIdx: member.keywordIdx };
+      });
+      return {
+        clusterId: c.clusterId,
+        canonicalKeywordIdx: c.canonicalKeywordIdx,
+        canonicalKeyword: c.canonicalKeyword,
+        members,
+        representativeDomains: c.representativeDomains,
+        medianVolume: c.medianVolume,
+        averageVolume: c.averageVolume,
+        algorithmVersion: result.algorithmVersion,
+        config: result.config,
+      };
+    }),
   );
 
   enrichmentStore.saveEnrichmentPairs(enrichmentId, result.pairs);
