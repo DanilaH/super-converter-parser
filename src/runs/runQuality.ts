@@ -32,7 +32,7 @@ export type RunQuality = {
   version: typeof RUN_QUALITY_VERSION;
   runId: string;
   state: RunState;
-  sourceUpdatedAt: string;
+  runStateUpdatedAt: string;
   sources: {
     googleSerp: {
       denominator: number;
@@ -261,6 +261,11 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     if (domain.dr !== null) ahrefsNumeric += 1;
   }
   const ahrefsResolved = ahrefsStatuses.ok + ahrefsStatuses.notFound + ahrefsStatuses.error;
+  // writeSnapshots can project old/resumed runs without a live Ahrefs tracker.
+  // Only expose the tracker-level summary verdict when its discovered-domain
+  // denominator agrees with the durable domain set; the per-domain projection
+  // above remains authoritative either way.
+  const ahrefsSummaryState = ahrefs && ahrefs.discovered === domains.length ? ahrefs.state : null;
 
   const detectedLocations = Array.from(
     new Set(
@@ -374,7 +379,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
     state,
-    sourceUpdatedAt: run.updatedAt,
+    runStateUpdatedAt: run.updatedAt,
     sources: {
       googleSerp: {
         denominator: keywords.length,
@@ -409,7 +414,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
         numeric: ahrefsNumeric,
         numericCoveragePercent: coveragePercent(ahrefsNumeric, domains.length),
         mode: ahrefs?.mode ?? (run.configSnapshot.ahrefs?.requireAhrefs ? 'required' : 'optional'),
-        summaryState: ahrefs?.state ?? null,
+        summaryState: ahrefsSummaryState,
         statuses: ahrefsStatuses,
       },
     },
