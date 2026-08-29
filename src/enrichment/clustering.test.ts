@@ -170,6 +170,37 @@ test('topN truncates domain and URL comparison windows', () => {
   assert.equal(top5.clusters.length, 2);
 });
 
+test('topN is applied to raw ranked rows before domain and URL dedupe', () => {
+  const inputs: ClusteringInput[] = [
+    {
+      keywordIdx: 1,
+      keyword: 'a',
+      normalizedKeyword: 'a',
+      volume: 100,
+      domains: ['dup.com', 'dup.com', 'only-a.com', 'late.com'],
+      urls: ['https://dup.com/tool', 'https://dup.com/tool', 'https://only-a.com/tool', 'https://late.com/shared'],
+    },
+    {
+      keywordIdx: 2,
+      keyword: 'b',
+      normalizedKeyword: 'b',
+      volume: 100,
+      domains: ['late.com', 'only-b-1.com', 'only-b-2.com'],
+      urls: ['https://late.com/shared', 'https://only-b-1.com/tool', 'https://only-b-2.com/tool'],
+    },
+  ];
+  const result = clusterKeywords(inputs, {
+    topN: 3,
+    edgeRule: { minSharedDomains: 1, minJaccard: 0, minSharedUrls: 1, minUrlJaccard: 0 },
+    algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+  });
+
+  assert.deepEqual(result.pairs[0]?.sharedDomains, []);
+  assert.deepEqual(result.pairs[0]?.sharedUrls, []);
+  assert.equal(result.pairs[0]?.classification, 'none');
+  assert.equal(result.edgeCount, 0);
+});
+
 test('result is byte-stable for same input/config', () => {
   const inputs = withIds([
     { keyword: 'json diff', normalizedKeyword: 'json diff', volume: 800, domains: ['a.com', 'b.com', 'c.com'] },
