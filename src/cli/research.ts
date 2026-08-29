@@ -15,8 +15,13 @@ import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsof
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
+import { prepareFailedKeywordRetry } from '../runs/retryFailed.js';
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
+import {
+  loadOpenKeywordRetryIndexes,
+  reconcileCompletedKeywordRetries,
+} from '../db/retryAttempts.js';
 import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { allocateResearchLocation, archiveResearchDirectory, resolveOutputRoot, resolveRunLocation, writeRunIndex } from '../outputs/researchLayout.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
@@ -38,6 +43,7 @@ type CliOptions = {
   seedsPath: string | null;
   microsoftPath: string | null;
   resumeRunId: string | null;
+  retryFailed: boolean;
   forceRefresh: boolean;
   refreshKeywords: string[];
   expand: boolean;
@@ -92,6 +98,7 @@ function parseArgs(argv: string[]): CliOptions {
     seedsPath: null,
     microsoftPath: null,
     resumeRunId: null,
+    retryFailed: false,
     forceRefresh: false,
     refreshKeywords: [],
     expand: false,
@@ -111,6 +118,8 @@ function parseArgs(argv: string[]): CliOptions {
     } else if (arg === '--resume') {
       options.resumeRunId = optionValue(argv, index, '--resume');
       index += 1;
+    } else if (arg === '--retry-failed') {
+      options.retryFailed = true;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
     } else if (arg === '--expand' || arg === '--expand-surfer') {
@@ -145,11 +154,13 @@ function printUsage(): void {
   console.log('  npm run research -- --seeds <path> --refresh-keyword "json diff"');
   console.log('  npm run research -- --microsoft <path>');
   console.log('  npm run research -- --resume <run-id>');
+  console.log('  npm run research -- --resume <run-id> --retry-failed');
   console.log('');
   console.log('Options:');
   console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
   console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
+  console.log('  --retry-failed       With --resume, reopen only failed keyword checkpoints and preserve their attempt history.');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --expand-surfer      Alias for --expand (clarity flag).');
@@ -299,6 +310,10 @@ export async function runCli(
     console.error('--seeds and --microsoft are mutually exclusive.');
     return EXIT_INVALID_INPUT;
   }
+  if (options.retryFailed && !options.resumeRunId) {
+    console.error('--retry-failed requires --resume <run-id>.');
+    return EXIT_INVALID_INPUT;
+  }
   if (!options.seedsPath && !options.microsoftPath && !options.resumeRunId) {
     printUsage();
     return EXIT_INVALID_INPUT;
@@ -375,6 +390,16 @@ export async function runCli(
 
       const storePath = join(runDirectory, 'run.sqlite');
       store = RunStore.open(storePath);
+
+      // Recover the narrow crash window where the normal keyword checkpoint was
+      // already committed but its retry journal row was not closed yet. This is
+      // schema-neutral for runs that have never used --retry-failed.
+      const recoveredRetryIdxs = reconcileCompletedKeywordRetries(store, runId);
+      let reopenedRetryIdxs: number[] = [];
+      if (options.retryFailed) {
+        reopenedRetryIdxs = prepareFailedKeywordRetry(store, runId).reopenedKeywordIdxs;
+      }
+
       const run = validateResume(store, runId);
       runConfig = effectiveConfigForResume(config, run.configSnapshot, runId);
       input = run.input;
@@ -388,6 +413,12 @@ export async function runCli(
       console.log('Utility Research Runner');
       console.log('');
       console.log(`[resume] ${runId} (state: ${run.state}, parser ${run.parserVersions.surfer}/${run.parserVersions.google})`);
+      if (recoveredRetryIdxs.length > 0) {
+        console.log(`  ✓ recovered ${recoveredRetryIdxs.length} completed retry journal checkpoint(s)`);
+      }
+      if (reopenedRetryIdxs.length > 0) {
+        console.log(`  ↻ reopened ${reopenedRetryIdxs.length} failed keyword checkpoint(s)`);
+      }
       await ensureWritableDirectory(runDirectory);
       console.log(`  ✓ ${runDirectory} writable`);
       await ensureWritableDirectory(debugRoot);
@@ -500,6 +531,22 @@ export async function runCli(
     );
     const refreshSet = new Set(effective.refreshKeywords);
 
+    // An open repair attempt is its own durable reason to bypass a stale failed
+    // keyword cache entry. Keep this transient: do not persist it into the run's
+    // ordinary refresh_keywords, or a one-time repair would become permanent.
+    const retryOpenIdxs = mode === 'resume' ? loadOpenKeywordRetryIndexes(store, runId) : [];
+    const retryOpenIdxSet = new Set(retryOpenIdxs);
+    const retryRefreshKeywords = mode === 'resume'
+      ? store
+          .loadKeywords(runId)
+          .filter((item) => retryOpenIdxSet.has(item.idx))
+          .map((item) => item.normalizedKeyword)
+      : [];
+    const planningRefreshSet = new Set([...refreshSet, ...retryRefreshKeywords]);
+    if (retryOpenIdxs.length > 0) {
+      console.log(`  ↻ ${retryOpenIdxs.length} retry attempt(s) in progress; stale keyword cache bypassed`);
+    }
+
     // Expansion has an independent cache decision. A keyword-cache hit still
     // needs Chrome when its root keyword has no fresh successful/empty related
     // lookup. Related children are intentionally excluded (depth is fixed at 1).
@@ -518,7 +565,7 @@ export async function runCli(
 
     const plan = planRunCache(
       pendingNormalized,
-      { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
+      { identity, forceRefresh: effective.forceRefresh, refreshKeywords: planningRefreshSet },
       cacheStore,
       Date.now(),
       {
@@ -606,6 +653,8 @@ export async function runCli(
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
+        // Persisted refresh semantics stay unchanged; the retry bypass is
+        // already frozen into plan.resolutions for this invocation.
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
         relatedResolutions: plan.relatedResolutions,
@@ -613,6 +662,21 @@ export async function runCli(
       ...(ahrefs ? { ahrefs } : {}),
       requireAhrefs: runConfig.ahrefs.requireAhrefs,
     });
+
+    // Close any repair attempts that reached a terminal current checkpoint and
+    // republish from reconciled SQLite state. This also repairs domain aggregate
+    // ownership after a SERP replacement.
+    const closedRetryIdxs = reconcileCompletedKeywordRetries(store, runId);
+    if (closedRetryIdxs.length > 0) {
+      await writeSnapshots(
+        store,
+        runId,
+        runDirectory,
+        outcome.kind === 'paused' ? 'paused' : outcome.state,
+        outcome.ahrefs ?? undefined,
+        outcome.scoringCompleteness ?? undefined,
+      );
+    }
 
     if (outcome.kind === 'paused') {
       console.log('');
