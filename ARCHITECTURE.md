@@ -43,7 +43,7 @@ src/
 ├── ahrefs/          # Domain Rating provider adapter
 ├── browser/         # CDP connection, collection, CAPTCHA/preflight
 ├── cache/           # Persistent cross-run cache + identities/TTL
-├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history
+├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history / traffic-evidence
 ├── config/          # typed runtime configuration
 ├── db/              # SQLite schema, migrations, RunStore
 ├── diagnostics/     # parser-failure evidence
@@ -54,7 +54,8 @@ src/
 ├── google/          # SERP, autocomplete, PAA, related-search parsing
 ├── input/
 │   ├── seeds/
-│   └── microsoft/
+│   ├── microsoft/
+│   └── traffic/
 ├── outputs/         # research layout, archive/publication paths
 ├── rdap/            # registration-date provider adapter
 ├── runs/            # discovery engine, snapshots, domain-age enrichment
@@ -119,9 +120,15 @@ representative top-10 registrable-domain cohort
 cohort-history CLI
         ↓
 coverage-aware RDAP / first-seen history projection
+        ↓
+traffic-evidence CLI
+        ↓
+provider-neutral domain / URL traffic snapshots
+        ↓
+current target validation + compatible history / velocity projection
 ```
 
-Each child projection pins its current parent and invalidates when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, and cohort-history CSV/JSON files are published derivatives. History interpretation thresholds are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
+Each child projection pins its current parent and invalidates when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, cohort-history, and traffic-evidence CSV/JSON files are published derivatives. Historical traffic imports remain durable raw facts and are revalidated against the current entrant generation rather than being deleted when finalist evidence changes. History interpretation thresholds and traffic low-base policy are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
 
 ## Browser architecture
 

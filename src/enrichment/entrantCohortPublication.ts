@@ -3,11 +3,17 @@ import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
 import type { ResearchConfig } from '../config/config.js';
 import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
+import { TRAFFIC_EVIDENCE_ARTIFACTS } from './trafficEvidencePublication.js';
 
 export const ENTRANT_COHORT_ARTIFACTS = [
   'entrant-cohort.csv',
   'entrant-cohort-occurrences.csv',
   'entrant-cohort.json',
+] as const;
+
+const ENTRANT_DEPENDENT_ARTIFACTS = [
+  ...COHORT_HISTORY_ARTIFACTS,
+  ...TRAFFIC_EVIDENCE_ARTIFACTS,
 ] as const;
 
 export type EntrantCohortPublicationSummary = {
@@ -47,17 +53,17 @@ export async function publishEntrantCohortMetadata(input: {
   assertRepresentativeRevision(manifest, input.summary.representativeRevision, 'manifest.json');
   assertRepresentativeRevision(status, input.summary.representativeRevision, 'status.json');
 
-  const manifestBase = input.summary.changed ? withoutCohortHistory(manifest) : manifest;
-  const statusBase = input.summary.changed ? withoutCohortHistory(status) : status;
+  const manifestBase = input.summary.changed ? withoutEntrantDependents(manifest) : manifest;
+  const statusBase = input.summary.changed ? withoutEntrantDependents(status) : status;
   const manifestArtifacts = uniqueStrings([
-    ...filterInvalidatedHistoryArtifacts(
+    ...filterInvalidatedDependentArtifacts(
       readStringArray(manifestBase.artifacts, 'manifest.json artifacts'),
       input.summary.changed,
     ),
     ...ENTRANT_COHORT_ARTIFACTS,
   ]);
   const statusArtifacts = uniqueStrings([
-    ...filterInvalidatedHistoryArtifacts(
+    ...filterInvalidatedDependentArtifacts(
       readStringArray(statusBase.artifacts, 'status.json artifacts'),
       input.summary.changed,
     ),
@@ -93,20 +99,24 @@ export async function publishEntrantCohortMetadata(input: {
 
   if (input.summary.changed) {
     await Promise.all(
-      COHORT_HISTORY_ARTIFACTS.map((artifact) =>
+      ENTRANT_DEPENDENT_ARTIFACTS.map((artifact) =>
         rm(join(input.enrichmentDirectory, artifact), { force: true })),
     );
   }
 }
 
-function withoutCohortHistory(value: Record<string, unknown>): Record<string, unknown> {
-  const { cohortHistory: _cohortHistory, ...rest } = value;
+function withoutEntrantDependents(value: Record<string, unknown>): Record<string, unknown> {
+  const {
+    cohortHistory: _cohortHistory,
+    trafficEvidence: _trafficEvidence,
+    ...rest
+  } = value;
   return rest;
 }
 
-function filterInvalidatedHistoryArtifacts(values: string[], changed: boolean): string[] {
+function filterInvalidatedDependentArtifacts(values: string[], changed: boolean): string[] {
   if (!changed) return values;
-  const invalid = new Set<string>(COHORT_HISTORY_ARTIFACTS);
+  const invalid = new Set<string>(ENTRANT_DEPENDENT_ARTIFACTS);
   return values.filter((value) => !invalid.has(value));
 }
 

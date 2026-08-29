@@ -27,10 +27,13 @@ type EnrichmentIndexRecord = {
   enrichmentDirectory: string;
 };
 
-const MANIFEST_GATED_HISTORY_ARTIFACTS = new Set([
+const MANIFEST_GATED_ENRICHMENT_ARTIFACTS = new Set([
   'cohort-history.csv',
   'cohort-history-summary.csv',
   'cohort-history.json',
+  'traffic-evidence.csv',
+  'traffic-velocity.csv',
+  'traffic-evidence.json',
 ]);
 
 export function resolveOutputRoot(
@@ -277,7 +280,7 @@ async function collectArchiveFiles(root: string): Promise<Array<{ absolutePath: 
       if (entry.isDirectory()) await visit(absolutePath);
       else if (entry.isFile()) {
         if (
-          MANIFEST_GATED_HISTORY_ARTIFACTS.has(entry.name)
+          MANIFEST_GATED_ENRICHMENT_ARTIFACTS.has(entry.name)
           && !publishedArtifacts.has(entry.name)
         ) continue;
         output.push({ absolutePath, relativePath });

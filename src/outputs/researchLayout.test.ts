@@ -131,3 +131,32 @@ test('results.zip excludes stale cohort-history files unless the local manifest 
     assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), true);
   }
 });
+
+test('results.zip excludes stale traffic files unless the local manifest advertises them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-traffic-zip-'));
+  const location = await allocateResearchLocation(root, 'Traffic Zip Test', new Date('2026-08-29T00:00:00Z'));
+  const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
+  const trafficArtifacts = [
+    'traffic-evidence.csv',
+    'traffic-velocity.csv',
+    'traffic-evidence.json',
+  ];
+  for (const artifact of trafficArtifacts) {
+    await writeFile(join(enrichmentDirectory, artifact), `stale ${artifact}`);
+  }
+  const manifestPath = join(enrichmentDirectory, 'manifest.json');
+  await writeFile(manifestPath, JSON.stringify({ artifacts: [] }, null, 2) + '\n');
+
+  let archive = await archiveResearchDirectory(location.researchDirectory);
+  let zip = await readFile(archive);
+  for (const artifact of trafficArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), false);
+  }
+
+  await writeFile(manifestPath, JSON.stringify({ artifacts: trafficArtifacts }, null, 2) + '\n');
+  archive = await archiveResearchDirectory(location.researchDirectory);
+  zip = await readFile(archive);
+  for (const artifact of trafficArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), true);
+  }
+});

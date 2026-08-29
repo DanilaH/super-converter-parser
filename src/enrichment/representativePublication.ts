@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
 import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
 import { ENTRANT_COHORT_ARTIFACTS } from './entrantCohortPublication.js';
+import { TRAFFIC_EVIDENCE_ARTIFACTS } from './trafficEvidencePublication.js';
 import type { RepresentativeQueryRunConfigSnapshot } from './types.js';
 
 export type RepresentativePublicationSummary = {
@@ -44,6 +45,7 @@ export async function publishRepresentativeMetadata(input: {
   const invalidatedDownstreamArtifacts = new Set<string>([
     ...ENTRANT_COHORT_ARTIFACTS,
     ...COHORT_HISTORY_ARTIFACTS,
+    ...TRAFFIC_EVIDENCE_ARTIFACTS,
   ]);
   const filterStaleDownstreamArtifacts = (names: string[]) => keepEntrantPublication
     ? names
@@ -79,6 +81,8 @@ export async function publishRepresentativeMetadata(input: {
     delete nextStatus.entrantCohort;
     delete nextManifest.cohortHistory;
     delete nextStatus.cohortHistory;
+    delete nextManifest.trafficEvidence;
+    delete nextStatus.trafficEvidence;
   }
 
   await writeTextAtomic(

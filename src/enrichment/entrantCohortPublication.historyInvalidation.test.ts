@@ -8,6 +8,18 @@ import {
   type EntrantCohortPublicationSummary,
 } from './entrantCohortPublication.js';
 
+const HISTORY_ARTIFACTS = [
+  'cohort-history.csv',
+  'cohort-history-summary.csv',
+  'cohort-history.json',
+];
+const TRAFFIC_ARTIFACTS = [
+  'traffic-evidence.csv',
+  'traffic-velocity.csv',
+  'traffic-evidence.json',
+];
+const DEPENDENT_ARTIFACTS = [...HISTORY_ARTIFACTS, ...TRAFFIC_ARTIFACTS];
+
 function summary(changed: boolean): EntrantCohortPublicationSummary {
   return {
     changed,
@@ -30,9 +42,7 @@ async function seed(directory: string): Promise<void> {
   const artifacts = [
     'representative-queries.json',
     'entrant-cohort.json',
-    'cohort-history.csv',
-    'cohort-history-summary.csv',
-    'cohort-history.json',
+    ...DEPENDENT_ARTIFACTS,
     'manifest.json',
     'status.json',
   ];
@@ -43,10 +53,11 @@ async function seed(directory: string): Promise<void> {
     artifacts,
     representativeQueries: { revision: 2 },
     cohortHistory: { entrantFingerprint: 'old' },
+    trafficEvidence: { currentEntrantFingerprint: 'old' },
   };
   await writeFile(join(directory, 'manifest.json'), JSON.stringify({ ...common, state: 'completed' }, null, 2) + '\n');
   await writeFile(join(directory, 'status.json'), JSON.stringify({ ...common, status: 'completed' }, null, 2) + '\n');
-  for (const file of ['cohort-history.csv', 'cohort-history-summary.csv', 'cohort-history.json']) {
+  for (const file of DEPENDENT_ARTIFACTS) {
     await writeFile(join(directory, file), 'stale');
   }
 }
@@ -60,8 +71,8 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-test('changed entrant publication invalidates cohort history metadata, artifact names and files', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'entrant-history-invalidation-'));
+test('changed entrant publication invalidates cohort history and traffic publication', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'entrant-dependent-invalidation-'));
   try {
     await seed(directory);
     await publishEntrantCohortMetadata({
@@ -74,9 +85,11 @@ test('changed entrant publication invalidates cohort history metadata, artifact 
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as {
       artifacts: string[];
       cohortHistory?: unknown;
+      trafficEvidence?: unknown;
     };
     assert.equal('cohortHistory' in manifest, false);
-    for (const file of ['cohort-history.csv', 'cohort-history-summary.csv', 'cohort-history.json']) {
+    assert.equal('trafficEvidence' in manifest, false);
+    for (const file of DEPENDENT_ARTIFACTS) {
       assert.equal(manifest.artifacts.includes(file), false);
       assert.equal(await exists(join(directory, file)), false);
     }
@@ -85,8 +98,8 @@ test('changed entrant publication invalidates cohort history metadata, artifact 
   }
 });
 
-test('identical entrant rerun preserves valid cohort history publication', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'entrant-history-preserve-'));
+test('identical entrant rerun preserves valid history and traffic publication', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'entrant-dependent-preserve-'));
   try {
     await seed(directory);
     await publishEntrantCohortMetadata({
@@ -99,9 +112,11 @@ test('identical entrant rerun preserves valid cohort history publication', async
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as {
       artifacts: string[];
       cohortHistory?: unknown;
+      trafficEvidence?: unknown;
     };
     assert.equal('cohortHistory' in manifest, true);
-    for (const file of ['cohort-history.csv', 'cohort-history-summary.csv', 'cohort-history.json']) {
+    assert.equal('trafficEvidence' in manifest, true);
+    for (const file of DEPENDENT_ARTIFACTS) {
       assert.equal(manifest.artifacts.includes(file), true);
       assert.equal(await exists(join(directory, file)), true);
     }
