@@ -7,7 +7,7 @@ import type { SerpResult } from '../google/serp.js';
 import { RunStore } from './store.js';
 import {
   KEYWORD_RETRY_SCHEMA_VERSION,
-  beginFailedKeywordRetries,
+  applyFailedKeywordRetries,
   loadKeywordRetryAttempts,
   loadOpenKeywordRetryIndexes,
   reconcileCompletedKeywordRetries,
@@ -98,7 +98,7 @@ test('explicit repair snapshots failed checkpoint, clears only its current evide
   const { store, runId } = setup();
   seedCompletedAndFailed(store, runId);
 
-  const reopened = beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  const reopened = applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z');
   assert.deepEqual(reopened, [1]);
   assert.equal(store.loadRun(runId)?.state, 'paused');
   assert.equal(store.loadKeyword(runId, 0)?.status, 'completed');
@@ -131,7 +131,7 @@ test('explicit repair snapshots failed checkpoint, clears only its current evide
 test('terminal repair checkpoint is recoverably journaled without another retry and replaces stale domain evidence', () => {
   const { store, runId } = setup();
   seedCompletedAndFailed(store, runId);
-  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z');
 
   const pending = store.loadKeyword(runId, 1)!;
   const repairedRows = [row('failed keyword', 1, 'fresh.example')];
@@ -176,7 +176,7 @@ test('domain first-seen owner is preserved while that owner still has current SE
   store.setRunState(runId, 'completed_with_errors');
 
   assert.equal(store.loadDomains(runId)[0]?.firstSeenKeywordIdx, 1);
-  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  applyFailedKeywordRetries(store, runId, [0], '2026-08-29T09:00:00.000Z');
   const shared = store.loadDomains(runId).find((domain) => domain.domain === 'shared.example');
   assert.equal(shared?.firstSeenKeywordIdx, 1);
   assert.equal(shared?.firstSeenPosition, 2);
@@ -202,7 +202,7 @@ test('domain first-seen owner moves only when the previous owner SERP is removed
   store.setRunState(runId, 'completed_with_errors');
 
   assert.equal(store.loadDomains(runId)[0]?.firstSeenKeywordIdx, 1);
-  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z');
   const shared = store.loadDomains(runId).find((domain) => domain.domain === 'shared.example');
   assert.equal(shared?.firstSeenKeywordIdx, 0);
   assert.equal(shared?.firstSeenKeyword, 'healthy keyword');
@@ -213,7 +213,7 @@ test('domain first-seen owner moves only when the previous owner SERP is removed
 test('failed repair closes attempt and the next explicit repair gets a monotonic retry number', () => {
   const { store, runId } = setup();
   seedCompletedAndFailed(store, runId);
-  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z');
 
   const pending = store.loadKeyword(runId, 1)!;
   store.commitKeyword(runId, {
@@ -224,12 +224,27 @@ test('failed repair closes attempt and the next explicit repair gets a monotonic
   }, [], 'refreshed');
   assert.deepEqual(reconcileCompletedKeywordRetries(store, runId, '2026-08-29T09:06:00.000Z'), [1]);
 
-  assert.deepEqual(beginFailedKeywordRetries(store, runId, '2026-08-29T09:10:00.000Z'), [1]);
+  assert.deepEqual(applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:10:00.000Z'), [1]);
   const attempts = loadKeywordRetryAttempts(store, runId);
   assert.deepEqual(attempts.map((attempt) => attempt.retryNo), [1, 2]);
   assert.equal(attempts[0]?.resultRecord?.status, 'failed');
   assert.equal(attempts[1]?.previousRecord.status, 'failed');
   assert.equal(attempts[1]?.previousRecord.error?.message, 'repair failed too');
   assert.equal(attempts[1]?.completedAt, null);
+  store.close();
+});
+
+test('stale repair plan rolls back without creating a partial retry generation', () => {
+  const { store, runId } = setup();
+  seedCompletedAndFailed(store, runId);
+  const failed = store.loadKeyword(runId, 1)!;
+  store.updateKeyword(runId, { ...failed, status: 'completed', error: null });
+
+  assert.throws(
+    () => applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z'),
+    (error: unknown) => error instanceof Error && error.message.includes('stale repair plan'),
+  );
+  assert.equal(store.loadKeyword(runId, 1)?.status, 'completed');
+  assert.equal(loadKeywordRetryAttempts(store, runId).length, 0);
   store.close();
 });
