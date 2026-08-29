@@ -8,8 +8,17 @@ import type { SerpResult } from '../google/serp.js';
 import { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
-import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
+import {
+  clusterKeywords,
+  CLUSTERING_ALGORITHM_VERSION,
+  DEFAULT_CLUSTER_MIN_SHARED_URLS,
+  DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  type ClusteringConfig,
+  type ClusteringInput,
+  type ClusteringResult,
+} from './clustering.js';
 import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
+import { CLUSTER_URL_IDENTITY_VERSION } from './urlIdentity.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson, writePagesCsv, writePagesJson, writeSiteStructureCsv, writeSiteStructureJson } from './outputs.js';
 import {
   runDomainAgeModule,
@@ -163,6 +172,16 @@ function buildClusteringInputs(
   return inputs;
 }
 
+function compareClusterIds(a: string, b: string): number {
+  const aMatch = /^cluster-(\d+)$/.exec(a);
+  const bMatch = /^cluster-(\d+)$/.exec(b);
+  if (aMatch && bMatch) {
+    const numeric = Number(aMatch[1]) - Number(bMatch[1]);
+    if (numeric !== 0) return numeric;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 // Collects the bounded, deduplicated set of registrable domains from a source run's
 // organic SERP rows, restricted to the shortlist (TASK-014 is shortlist-only deep
 // enrichment). Every keyword a domain was observed in is recorded in
@@ -266,8 +285,12 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       cache = EnrichmentCache.open(cacheConfig);
     }
 
+    const clusteringConfig = modules.includes('clusters')
+      ? (config.clusters ?? defaultClusteringConfig())
+      : config.clusters;
     const persistedConfig: EnrichmentModuleConfig = {
       ...config,
+      ...(clusteringConfig ? { clusters: clusteringConfig } : {}),
       http: httpConfig,
       pages: pagesConfig,
       site_structure: siteStructureConfig,
@@ -326,7 +349,9 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       );
       if (existingItem?.status === 'completed') {
         logger('Skipping completed clusters module');
-        const clusters = enrichmentStore.loadKeywordClusters(enrichmentId);
+        const clusters = enrichmentStore
+          .loadKeywordClusters(enrichmentId)
+          .sort((a, b) => compareClusterIds(a.clusterId, b.clusterId));
         const { pairs, exclusions } = loadPersistedClusteringRelations(
           enrichmentStore,
           enrichmentId,
@@ -335,8 +360,11 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           clusters,
           pairs,
           exclusions: exclusions as ClusteringResult['exclusions'],
-          config: config.clusters ?? defaultClusteringConfig(),
-          algorithmVersion: clusters[0]?.algorithmVersion ?? CLUSTERING_ALGORITHM_VERSION,
+          config: clusteringConfig ?? defaultClusteringConfig(),
+          algorithmVersion:
+            clusters[0]?.algorithmVersion
+            ?? clusteringConfig?.algorithmVersion
+            ?? CLUSTERING_ALGORITHM_VERSION,
           inputCount: clusters.reduce((sum, c) => sum + c.memberCount, 0) + exclusions.length,
           excludedCount: exclusions.length,
           edgeCount: pairs.filter((p) => p.isEdge).length,
@@ -346,7 +374,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           enrichmentId,
           sourceConn.store,
           sourceRunId,
-          config.clusters ?? defaultClusteringConfig(),
+          clusteringConfig ?? defaultClusteringConfig(),
           enrichmentStore,
           shortlist,
           logger,
@@ -1043,6 +1071,9 @@ async function runClustersModule(
       if (c.canonicalKeywordIdx === null) {
         throw new Error(`Fresh cluster ${c.clusterId} is missing canonical source keyword identity.`);
       }
+      if (c.cohesion === undefined || c.cohesion === null) {
+        throw new Error(`Fresh cluster ${c.clusterId} is missing clustering-v2 cohesion evidence.`);
+      }
       const members = c.members.map((member) => {
         if (member.keywordIdx === null) {
           throw new Error(`Fresh cluster ${c.clusterId} contains a member without source keyword identity.`);
@@ -1057,6 +1088,7 @@ async function runClustersModule(
         representativeDomains: c.representativeDomains,
         medianVolume: c.medianVolume,
         averageVolume: c.averageVolume,
+        cohesion: c.cohesion,
         algorithmVersion: result.algorithmVersion,
         config: result.config,
       };
@@ -1902,8 +1934,15 @@ function rebuildSiteStructureFromTargets(enrichmentStore: RunStore, enrichmentId
 function defaultClusteringConfig(): ClusteringConfig {
   return {
     topN: 10,
-    edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+    edgeRule: {
+      minSharedDomains: 3,
+      minJaccard: 0.3,
+      minSharedUrls: DEFAULT_CLUSTER_MIN_SHARED_URLS,
+      minUrlJaccard: DEFAULT_CLUSTER_MIN_URL_JACCARD,
+    },
     algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+    urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+    groupingRule: 'complete_link',
   };
 }
 
