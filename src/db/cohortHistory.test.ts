@@ -65,7 +65,7 @@ function seedParent(store: RunStore): EntrantCohortSnapshot {
           normalizedKeyword: 'audio test',
           volume: 200,
           selectionReason: 'high_demand',
-          coverageGain: 1,
+          coverageGain: 0,
         },
       ],
       targetCount: 2,

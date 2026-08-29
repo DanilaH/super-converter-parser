@@ -1075,6 +1075,6 @@ test('keywordCacheIdentity comes from config and parser versions', () => {
     gl: 'us',
     topN: 10,
     surferParserVersion: '1.0.0',
-    googleParserVersion: '1.3.0',
+    googleParserVersion: '1.4.0',
   });
 });

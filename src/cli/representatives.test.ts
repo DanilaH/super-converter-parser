@@ -126,6 +126,7 @@ async function prepareFixture(root: string): Promise<{
   sourceStore.replaceSerpRows(sourceRunId, 0, serpRows(0, 'q0', 'd.test'));
   sourceStore.replaceSerpRows(sourceRunId, 1, serpRows(1, 'q1', 'e.test'));
   sourceStore.replaceSerpRows(sourceRunId, 2, serpRows(2, 'q2', 'f.test'));
+  sourceStore.setRunState(sourceRunId, 'completed', { updatedAt: '2026-08-29T10:00:00.000Z' });
   sourceStore.close();
 
   const enrichmentStore = RunStore.open(join(enrichmentDirectory, 'enrichment.sqlite'));
@@ -163,6 +164,14 @@ async function prepareFixture(root: string): Promise<{
     strongPair(0, 2),
     strongPair(1, 2),
   ]);
+  enrichmentStore.upsertEnrichmentItem({
+    enrichmentId,
+    itemId: 'clusters',
+    module: 'clusters',
+    status: 'completed',
+    source: 'serp_overlap',
+    cacheStatus: 'none',
+  });
   enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
   enrichmentStore.close();
 

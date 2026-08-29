@@ -2,12 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { RunStore } from '../db/store.js';
+import {
+  CLUSTERING_ALGORITHM_VERSION,
+  DEFAULT_CLUSTER_MIN_SHARED_URLS,
+  DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  type ClusteringConfig,
+} from './clustering.js';
 import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
+import { CLUSTER_URL_IDENTITY_VERSION } from './urlIdentity.js';
 
-const CLUSTER_CONFIG = {
+const CLUSTER_CONFIG: ClusteringConfig = {
   topN: 10,
-  edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
-  algorithmVersion: '1.0.0',
+  edgeRule: {
+    minSharedDomains: 3,
+    minJaccard: 0.3,
+    minSharedUrls: DEFAULT_CLUSTER_MIN_SHARED_URLS,
+    minUrlJaccard: DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  },
+  algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+  urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+  groupingRule: 'complete_link',
 };
 
 function createEnrichment(store: RunStore, enrichmentId: string): void {
@@ -59,7 +73,7 @@ function saveCurrentSingletonCluster(store: RunStore, enrichmentId: string): voi
     representativeDomains: ['a.com', 'b.com', 'c.com'],
     medianVolume: 100,
     averageVolume: 100,
-    algorithmVersion: '1.0.0',
+    algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
     config: CLUSTER_CONFIG,
   }]);
 }
@@ -126,6 +140,14 @@ test('idx-owned snapshot preserves non-empty current relations', () => {
     unionCount: 4,
     jaccard: 1,
     sharedDomains: ['a.com', 'b.com', 'c.com', 'd.com'],
+    sharedUrls: ['a.com/tool', 'b.com/tool', 'c.com/tool', 'd.com/tool'],
+    urlIntersectionCount: 4,
+    urlUnionCount: 4,
+    urlJaccard: 1,
+    domainIntersectionCount: 4,
+    domainUnionCount: 4,
+    domainJaccard: 1,
+    classification: 'strong',
     isEdge: true,
   }]);
   store.saveEnrichmentExclusions(enrichmentId, [{

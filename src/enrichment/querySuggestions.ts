@@ -697,7 +697,7 @@ export async function runQuerySuggestionsModule(
 
   const perSourceStatus = new Map<QuerySuggestionSource, QuerySuggestionPerSourceStatus>();
   for (const source of config.sources) {
-    perSourceStatus.set(source, { source, status: 'empty', collected: 0, error: null });
+    perSourceStatus.set(source, { source, status: 'unavailable', collected: 0, error: null });
   }
   const sourceStats = emptySourceStats();
   const seenSuggestionKeys = new Set(occurrences.map(occurrenceIdentityKey));
@@ -969,10 +969,10 @@ export async function runQuerySuggestionsModule(
           status.collected += cappedOccurrences.length;
           sourceStats[collection.source].ok += 1;
         } else if (collection.status === 'empty') {
-          if (status.status === 'empty') status.status = 'empty';
+          if (status.status === 'unavailable' || status.status === 'empty') status.status = 'empty';
           sourceStats[collection.source].empty += 1;
         } else if (collection.status === 'unavailable') {
-          status.status = 'unavailable';
+          if (status.status !== 'ok') status.status = 'unavailable';
           sourceStats[collection.source].unavailable += 1;
         } else {
           status.status = 'error';
@@ -1096,7 +1096,7 @@ export function buildQueryResultFromStore(
 
   const bySource = new Map<QuerySuggestionSource, QuerySuggestionPerSourceStatus>();
   for (const source of config.sources) {
-    bySource.set(source, { source, status: 'empty', collected: 0, error: null });
+    bySource.set(source, { source, status: 'unavailable', collected: 0, error: null });
   }
   const sourceStats = emptySourceStats();
 
@@ -1106,19 +1106,32 @@ export function buildQueryResultFromStore(
     const status = bySource.get(source);
     if (!status) continue;
     if (record.status === 'ok') {
-      status.status = 'ok';
       sourceStats[source].ok += 1;
     } else if (record.status === 'empty') {
-      if (status.status !== 'ok') status.status = 'empty';
       sourceStats[source].empty += 1;
     } else if (record.status === 'unavailable') {
-      if (status.status !== 'ok') status.status = 'unavailable';
       sourceStats[source].unavailable += 1;
     } else {
-      status.status = 'error';
-      status.error = record.error;
+      status.error ??= record.error;
       sourceStats[source].error += 1;
     }
+  }
+
+  // Aggregate across parent keywords by evidence severity, not row order.
+  // Any failed/incomplete parent keeps the source visibly incomplete instead
+  // of allowing a later empty/ok row to make coverage look complete.
+  for (const [source, status] of bySource) {
+    const stats = sourceStats[source];
+    status.status = stats.error > 0
+      ? 'error'
+      : stats.unavailable > 0
+        ? 'unavailable'
+        : stats.ok > 0
+          ? 'ok'
+          : stats.empty > 0
+            ? 'empty'
+            : 'unavailable';
+    if (status.status !== 'error') status.error = null;
   }
 
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {

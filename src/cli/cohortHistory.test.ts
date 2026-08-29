@@ -34,7 +34,7 @@ async function runCli(args: string[]): Promise<{ code: number | null; stdout: st
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
-    child.on('exit', (code) => resolvePromise({ code, stdout, stderr }));
+    child.on('close', (code) => resolvePromise({ code, stdout, stderr }));
   });
 }
 
@@ -119,7 +119,7 @@ async function prepareFixture(root: string) {
           normalizedKeyword: 'audio test',
           volume: 200,
           selectionReason: 'high_demand',
-          coverageGain: 1,
+          coverageGain: 0,
         },
       ],
       targetCount: 2,
