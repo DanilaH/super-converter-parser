@@ -2,7 +2,6 @@ import type {
   ClusterCohesion,
   ClusterCohesionSummary,
   ClusterEdgeRule,
-  ClusterEvidence,
   ClusterMember,
   ClusterPairClassification,
   KeywordCluster,
@@ -23,18 +22,10 @@ export type ClusteringInput = {
   keyword: string;
   normalizedKeyword: string;
   volume: number | null;
+  // Ranked organic evidence. `domains` and `urls` are parallel arrays from the
+  // same SERP rows; topN is applied before set deduplication.
   domains: string[];
-  // Raw ranked URLs. Comparison uses the explicit versioned identity function;
-  // these values themselves remain untouched evidence.
-  urls?: string[];
-};
-
-type StrongPairEvidence = ClusterEvidence & {
-  sharedUrls: string[];
-  urlIntersectionCount: number;
-  urlUnionCount: number;
-  urlJaccard: number;
-  classification: ClusterPairClassification;
+  urls: string[];
 };
 
 export type ClusteringResult = {
@@ -74,7 +65,8 @@ export function clusterKeywords(
   const exclusions: ClusteredKeywordExclusion[] = [];
 
   for (const input of inputs) {
-    if (input.domains.length === 0) {
+    const topDomains = input.domains.slice(0, topN).filter((domain) => domain !== '');
+    if (topDomains.length === 0) {
       exclusions.push({
         keywordIdx: input.keywordIdx,
         keyword: input.keyword,
@@ -103,10 +95,13 @@ export function clusterKeywords(
   const domainSets = new Map<number, Set<string>>();
   const urlSets = new Map<number, Set<string>>();
   for (const input of valid) {
-    domainSets.set(input.keywordIdx, new Set(input.domains.slice(0, topN)));
+    domainSets.set(
+      input.keywordIdx,
+      new Set(input.domains.slice(0, topN).filter((domain) => domain !== '')),
+    );
 
     const urls = new Set<string>();
-    for (const rawUrl of (input.urls ?? []).slice(0, topN)) {
+    for (const rawUrl of input.urls.slice(0, topN)) {
       const identity = clusteringUrlIdentity(rawUrl);
       if (identity !== null) urls.add(identity);
     }
@@ -135,8 +130,8 @@ export function clusterKeywords(
         domainEvidence.intersectionCount >= edgeRule.minSharedDomains
         && domainEvidence.jaccard >= edgeRule.minJaccard;
       const urlStrong =
-        urlEvidence.intersectionCount >= edgeRule.minSharedUrls!
-        && urlEvidence.jaccard >= edgeRule.minUrlJaccard!;
+        urlEvidence.intersectionCount >= edgeRule.minSharedUrls
+        && urlEvidence.jaccard >= edgeRule.minUrlJaccard;
       const classification = classifyPair(
         domainStrong,
         urlStrong,
