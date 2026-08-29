@@ -45,6 +45,10 @@ import {
 } from './types.js';
 
 export type RawSuggestionOccurrence = {
+  // Browser/cache collectors operate on semantic text and may not know the
+  // source-run relation. runQuerySuggestionsModule assigns the concrete idx
+  // before persistence. Historical persisted occurrences can remain null.
+  parentKeywordIdx?: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -103,6 +107,7 @@ function makeOccurrences(
   source: QuerySuggestionSource,
   rawTexts: string[],
   structured: Array<{ text: string; volume: number | null; cpc: number | null; ordinal: number | null }>,
+  parentKeywordIdx: number | null = null,
 ): RawSuggestionOccurrence[] {
   const out: RawSuggestionOccurrence[] = [];
   const useStructured = source === 'surfer_related' && structured.length > 0;
@@ -113,6 +118,7 @@ function makeOccurrences(
     const text = item.text.trim();
     if (!text) continue;
     out.push({
+      parentKeywordIdx,
       parentKeyword,
       normalizedParent,
       source,
@@ -126,6 +132,16 @@ function makeOccurrences(
   return out;
 }
 
+function parentIdentityKey(parentKeywordIdx: number | null | undefined, normalizedParent: string): string {
+  return parentKeywordIdx === null || parentKeywordIdx === undefined
+    ? `legacy:${normalizedParent}`
+    : `idx:${parentKeywordIdx}`;
+}
+
+function occurrenceIdentityKey(occurrence: RawSuggestionOccurrence): string {
+  return `${occurrence.source}:${parentIdentityKey(occurrence.parentKeywordIdx, occurrence.normalizedParent)}:${occurrence.normalizedSuggestion}`;
+}
+
 export function dedupSuggestions(
   occurrences: RawSuggestionOccurrence[],
   market: string,
@@ -134,9 +150,11 @@ export function dedupSuggestions(
 ): QuerySuggestion[] {
   const bySuggestion = new Map<string, QuerySuggestion>();
   for (const occ of occurrences) {
+    const parentKeywordIdx = occ.parentKeywordIdx ?? null;
     const existing = bySuggestion.get(occ.normalizedSuggestion);
     if (existing) {
       existing.occurrences.push({
+        parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source,
@@ -152,6 +170,7 @@ export function dedupSuggestions(
       continue;
     }
     bySuggestion.set(occ.normalizedSuggestion, {
+      parentKeywordIdx,
       parentKeyword: occ.parentKeyword,
       normalizedParent: occ.normalizedParent,
       source: occ.source,
@@ -167,6 +186,7 @@ export function dedupSuggestions(
       collectionStatus: 'ok',
       occurrences: [
         {
+          parentKeywordIdx,
           parentKeyword: occ.parentKeyword,
           normalizedParent: occ.normalizedParent,
           source: occ.source,
@@ -193,25 +213,26 @@ function emptySourceStats(): QuerySuggestionResult['sourceStats'] {
 
 export function buildDiscoverySurferCollections(
   rows: readonly StoredRelatedKeyword[],
-): Map<string, RawSourceCollection> {
-  const grouped = new Map<string, StoredRelatedKeyword[]>();
+): Map<number, RawSourceCollection> {
+  const grouped = new Map<number, StoredRelatedKeyword[]>();
   for (const row of rows) {
-    const key = normalizeKeyword(row.parentKeyword);
-    const group = grouped.get(key) ?? [];
+    const group = grouped.get(row.parentIdx) ?? [];
     group.push(row);
-    grouped.set(key, group);
+    grouped.set(row.parentIdx, group);
   }
 
-  const collections = new Map<string, RawSourceCollection>();
-  for (const [normalizedParent, group] of grouped) {
+  const collections = new Map<number, RawSourceCollection>();
+  for (const [parentKeywordIdx, group] of grouped) {
+    const parentKeyword = group[0]?.parentKeyword ?? '';
+    const normalizedParent = normalizeKeyword(parentKeyword);
     const successful = group.filter((row) => row.status === 'ok' && row.relatedKeyword.trim() !== '');
     if (successful.length > 0) {
-      const parentKeyword = successful[0]!.parentKeyword;
-      collections.set(normalizedParent, {
+      collections.set(parentKeywordIdx, {
         source: 'surfer_related',
         status: 'ok',
         occurrences: successful.map((row, ordinal) => ({
-          parentKeyword,
+          parentKeywordIdx,
+          parentKeyword: row.parentKeyword,
           normalizedParent,
           source: 'surfer_related',
           rawText: row.relatedKeyword,
@@ -227,7 +248,7 @@ export function buildDiscoverySurferCollections(
     }
 
     if (group.some((row) => row.status === 'empty')) {
-      collections.set(normalizedParent, {
+      collections.set(parentKeywordIdx, {
         source: 'surfer_related',
         status: 'empty',
         occurrences: [],
@@ -570,7 +591,7 @@ export async function runQuerySuggestionsModule(
   const allKeywords = sourceStore
     .loadKeywords(sourceRunId)
     .filter((k) => k.status === 'completed' || k.status === 'partial')
-    .map((k) => ({ keyword: k.keyword, normalizedKeyword: k.normalizedKeyword }));
+    .map((k) => ({ keywordIdx: k.idx, keyword: k.keyword, normalizedKeyword: k.normalizedKeyword }));
 
   if (allKeywords.length === 0) {
     throw new ResearchError(
@@ -620,6 +641,7 @@ export async function runQuerySuggestionsModule(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
+        parentKeywordIdx: occ.parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
@@ -637,7 +659,7 @@ export async function runQuerySuggestionsModule(
     perSourceStatus.set(source, { source, status: 'empty', collected: 0, error: null });
   }
   const sourceStats = emptySourceStats();
-  const seenSuggestionKeys = new Set(occurrences.map((o) => `${o.source}:${o.normalizedParent}:${o.normalizedSuggestion}`));
+  const seenSuggestionKeys = new Set(occurrences.map(occurrenceIdentityKey));
   const discoverySurferCollections = buildDiscoverySurferCollections(
     sourceStore.loadRelatedKeywords(sourceRunId),
   );
@@ -723,9 +745,11 @@ export async function runQuerySuggestionsModule(
       await new Promise(resolve => setImmediate(resolve));
       checkCancellation(signal, EnrichmentCancelledError);
 
-      const missingSources = config.sources.filter(
-        (source) => !completedItems.has(`${source}:${keyword.normalizedKeyword}`),
-      );
+      const missingSources = config.sources.filter((source) => {
+        const newItemId = `${source}:${keyword.keywordIdx}`;
+        const legacyItemId = `${source}:${keyword.normalizedKeyword}`;
+        return !completedItems.has(newItemId) && !completedItems.has(legacyItemId);
+      });
       if (missingSources.length === 0) continue;
 
       const fetched: RawSourceCollection[] = [];
@@ -736,12 +760,14 @@ export async function runQuerySuggestionsModule(
       const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
         if (source === 'surfer_related') {
-          const sourceRunCollection = discoverySurferCollections.get(keyword.normalizedKeyword);
+          const sourceRunCollection = discoverySurferCollections.get(keyword.keywordIdx);
           if (sourceRunCollection) {
             fetched.push(sourceRunCollection);
             continue;
           }
         }
+        // Cross-run cache identity intentionally remains semantic text. The
+        // source-run idx is not portable across different discovery runs.
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
         if (cached) {
@@ -764,6 +790,7 @@ export async function runQuerySuggestionsModule(
               source,
               rows.map((r) => r.text),
               rows.map((r, i) => ({ text: r.text, volume: r.volume, cpc: r.cpc, ordinal: r.ordinal ?? i })),
+              keyword.keywordIdx,
             );
             fetched.push({
               source,
@@ -789,9 +816,13 @@ export async function runQuerySuggestionsModule(
         transportRequests = totalNavigations + totalXhrs;
         for (const col of result.collections) {
           await new Promise(resolve => setImmediate(resolve));
+          const ownedOccurrences = col.occurrences.map((occurrence) => ({
+            ...occurrence,
+            parentKeywordIdx: keyword.keywordIdx,
+          }));
           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
-          const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
+          const rows = ownedOccurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
           cache.putSuggestion(
             {
               cacheKey,
@@ -807,7 +838,7 @@ export async function runQuerySuggestionsModule(
             ttlMsForSuggestionStatus(col.status, researchConfig.cache.ttl),
           );
           const wasExpired = expiredSources.includes(col.source);
-          fetched.push({ ...col, cacheStatus: wasExpired ? 'expired' : 'miss' });
+          fetched.push({ ...col, occurrences: ownedOccurrences, cacheStatus: wasExpired ? 'expired' : 'miss' });
         }
       }
 
@@ -818,6 +849,7 @@ export async function runQuerySuggestionsModule(
         ordinal: number | null;
         collectionStatus: string;
         occurrences: Array<{
+          parentKeywordIdx: number;
           parentKeyword: string;
           normalizedParent: string;
           source: string;
@@ -831,12 +863,14 @@ export async function runQuerySuggestionsModule(
 
       for (const collection of fetched) {
         const cappedOccurrences = collection.occurrences.slice(0, config.maxSuggestionsPerSource);
-        for (const occ of cappedOccurrences) {
-          const key = `${occ.source}:${occ.normalizedParent}:${occ.normalizedSuggestion}`;
+        for (const rawOccurrence of cappedOccurrences) {
+          const occ = { ...rawOccurrence, parentKeywordIdx: rawOccurrence.parentKeywordIdx ?? keyword.keywordIdx };
+          const key = occurrenceIdentityKey(occ);
           if (seenSuggestionKeys.has(key)) {
             const existing = keywordSuggestions.get(occ.normalizedSuggestion);
             if (existing) {
               existing.occurrences.push({
+                parentKeywordIdx: occ.parentKeywordIdx,
                 parentKeyword: occ.parentKeyword,
                 normalizedParent: occ.normalizedParent,
                 source: occ.source,
@@ -854,6 +888,7 @@ export async function runQuerySuggestionsModule(
           const existingSuggestion = keywordSuggestions.get(occ.normalizedSuggestion);
           if (existingSuggestion) {
             existingSuggestion.occurrences.push({
+              parentKeywordIdx: occ.parentKeywordIdx,
               parentKeyword: occ.parentKeyword,
               normalizedParent: occ.normalizedParent,
               source: occ.source,
@@ -871,6 +906,7 @@ export async function runQuerySuggestionsModule(
               ordinal: occ.ordinal,
               collectionStatus: 'ok',
               occurrences: [{
+                parentKeywordIdx: occ.parentKeywordIdx,
                 parentKeyword: occ.parentKeyword,
                 normalizedParent: occ.normalizedParent,
                 source: occ.source,
@@ -951,6 +987,7 @@ export async function runQuerySuggestionsModule(
 
       enrichmentStore.persistParentAtomic(
         enrichmentId,
+        keyword.keywordIdx,
         keyword.normalizedKeyword,
         market,
         hl,
@@ -1001,6 +1038,7 @@ export function buildQueryResultFromStore(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
+        parentKeywordIdx: occ.parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
@@ -1057,7 +1095,7 @@ export function buildQueryResultFromStore(
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
   const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
   const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
-  const inputCount = new Set(sourceRecords.map((r) => r.normalizedParent)).size;
+  const inputCount = new Set(sourceRecords.map((record) => parentIdentityKey(record.parentKeywordIdx, record.normalizedParent))).size;
 
   return {
     enrichmentId,
