@@ -78,7 +78,12 @@ export type ClusterEvidence = {
   jaccard: number;
 };
 
+// Source keyword identity is (sourceRunId, keywordIdx). The enrichment run
+// already persists sourceRunId, so keywordIdx is the durable relational key.
+// It is nullable only when reading historical enrichment rows that predate
+// V2.1; every new clustering write carries a concrete index.
 export type ClusterMember = {
+  keywordIdx: number | null;
   keyword: string;
   normalizedKeyword: string;
   volume: number | null;
@@ -87,6 +92,7 @@ export type ClusterMember = {
 
 export type KeywordCluster = {
   clusterId: string;
+  canonicalKeywordIdx: number | null;
   canonicalKeyword: string;
   members: ClusterMember[];
   representativeDomains: string[];
@@ -126,8 +132,10 @@ export type EnrichmentModuleConfig = {
 };
 
 // One collected suggestion row. Dedup is on normalizedSuggestion only; every
-// (parentKeyword, source) occurrence is retained in `occurrences`.
+// (parent keyword identity, source) occurrence is retained in `occurrences`.
+// parentKeywordIdx is nullable only for historical persisted occurrences.
 export type QuerySuggestion = {
+  parentKeywordIdx: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -143,14 +151,16 @@ export type QuerySuggestion = {
   gl: string;
   parserVersion: string;
   collectionStatus: QuerySuggestionCollectionStatus;
-  // Every (parentKeyword, source) occurrence of this normalized suggestion,
-  // retained even when the identity collides across parents/sources.
+  // Every (parent keyword identity, source) occurrence of this normalized
+  // suggestion, retained even when suggestion identity collides across parents.
   occurrences: QuerySuggestionOccurrence[];
 };
 
-// One occurrence of a suggestion under a specific parent/source, preserved even
-// when the normalized identity collides across parents/sources.
+// One occurrence of a suggestion under a specific source keyword/source. New
+// writes own the relation by parentKeywordIdx; normalizedParent remains useful
+// for display, semantic lookup, and cross-run cache identity.
 export type QuerySuggestionOccurrence = {
+  parentKeywordIdx: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -227,6 +237,7 @@ export type EnrichmentItemRecord = {
 };
 
 export type ClusteredKeywordExclusion = {
+  keywordIdx: number | null;
   keyword: string;
   normalizedKeyword: string;
   reason: 'no_serp' | 'no_domains' | 'shortlist_mismatch';
@@ -234,6 +245,8 @@ export type ClusteredKeywordExclusion = {
 };
 
 export type PairwiseComparison = {
+  keywordAIdx: number | null;
+  keywordBIdx: number | null;
   keywordA: string;
   keywordB: string;
   intersectionCount: number;
