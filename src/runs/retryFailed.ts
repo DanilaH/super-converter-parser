@@ -1,6 +1,6 @@
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
-import { RunStore, type StoredRun } from '../db/store.js';
+import { RunStore, type StoredKeyword, type StoredRun } from '../db/store.js';
 import {
   applyFailedKeywordRetries,
   isRetryRepairStateEligible,
@@ -27,10 +27,33 @@ function assertRetryParserCompatibility(run: StoredRun): void {
   }
 }
 
+function isPrimaryRepairEligible(keyword: StoredKeyword): boolean {
+  if (keyword.status === 'failed') return true;
+  if (keyword.status !== 'partial' || keyword.error === null) return false;
+
+  const googleStatus = keyword.google?.serpStatus;
+  const googleIncomplete =
+    googleStatus === 'fetch_error'
+    || googleStatus === 'parse_error'
+    || googleStatus === 'not_fetched'
+    || googleStatus === 'unknown';
+  const legacyGoogleIncomplete =
+    googleStatus === undefined
+    && (keyword.error.code === 'GOOGLE_SERP_PARSE_ERROR' || keyword.error.code === 'GOOGLE_UNAVAILABLE');
+  const surferIncomplete = keyword.surfer === null;
+
+  return surferIncomplete || googleIncomplete || legacyGoogleIncomplete;
+}
+
 /**
  * Builds a read-only repair plan. No run state, keyword checkpoint, SERP row,
  * domain aggregate, or retry schema is changed here. The CLI can therefore run
  * all resume config/cache/output preflight before applying operator intent.
+ *
+ * The historical flag remains --retry-failed, but the repair surface also
+ * includes partial primary checkpoints with a persisted Surfer/Google failure.
+ * Optional related-keyword errors do not make a keyword partial and are not
+ * reopened by this path.
  */
 export function prepareFailedKeywordRetry(
   store: RunStore,
@@ -56,7 +79,7 @@ export function prepareFailedKeywordRetry(
 
   // An interrupted repair already carries durable intent. Re-entering with
   // --retry-failed is idempotent: finish that generation first instead of
-  // opening a second attempt for another failed row mid-repair.
+  // opening a second attempt for another repairable row mid-repair.
   const alreadyOpen = loadOpenKeywordRetryIndexes(store, runId);
   if (alreadyOpen.length > 0) {
     return {
@@ -67,20 +90,20 @@ export function prepareFailedKeywordRetry(
     };
   }
 
-  const failed = store
+  const repairable = store
     .loadKeywords(runId)
-    .filter((keyword) => keyword.status === 'failed')
+    .filter(isPrimaryRepairEligible)
     .map((keyword) => keyword.idx);
-  if (failed.length === 0) {
+  if (repairable.length === 0) {
     throw new ResearchError(
       'INPUT_SCHEMA_ERROR',
-      `Run "${runId}" has no failed keywords to retry.`,
+      `Run "${runId}" has no failed or repairable partial keywords to retry.`,
     );
   }
 
   return {
     run,
-    plannedKeywordIdxs: failed,
+    plannedKeywordIdxs: repairable,
     openKeywordIdxs: [],
     requestedAt,
   };
@@ -88,8 +111,8 @@ export function prepareFailedKeywordRetry(
 
 /**
  * Applies a previously validated repair plan after CLI preflight. The DB layer
- * re-checks that every planned keyword is still failed, so a stale plan cannot
- * silently overwrite concurrent state.
+ * re-checks that every planned checkpoint is still failed/partial, so a stale
+ * plan cannot silently overwrite concurrent state.
  */
 export function applyFailedKeywordRetryPreparation(
   store: RunStore,
