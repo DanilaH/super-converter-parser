@@ -205,34 +205,36 @@ export function applyFailedKeywordRetries(
   if (uniqueIdxs.length === 0) return [];
 
   const db = dbOf(store);
-  const nextRetryNo = db.prepare(
-    `SELECT COALESCE(MAX(retry_no), 0) + 1 AS retry_no
-     FROM keyword_retry_attempts WHERE run_id = ? AND keyword_idx = ?`,
-  );
-  const openAttempt = db.prepare(
-    `SELECT retry_no FROM keyword_retry_attempts
-     WHERE run_id = ? AND keyword_idx = ? AND completed_at IS NULL`,
-  );
-  const insertAttempt = db.prepare(
-    `INSERT INTO keyword_retry_attempts
-      (run_id, keyword_idx, retry_no, requested_at, previous_record, previous_serp_rows)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  );
-  const resetKeyword = db.prepare(
-    `UPDATE keywords
-     SET status = 'pending', surfer = NULL, google = NULL, error = NULL,
-         collected_at = NULL, cache_status = NULL
-     WHERE run_id = ? AND idx = ? AND status = 'failed'`,
-  );
-  const deleteSerp = db.prepare('DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?');
-  const updateRun = db.prepare(
-    `UPDATE runs
-     SET state = 'paused', updated_at = ?, pause_reason = ?
-     WHERE run_id = ?`,
-  );
-
   const apply = db.transaction(() => {
+    // Prepare extension-table statements only after the table is known to exist.
+    // Fresh runs have never created this feature-owned schema before their first
+    // explicit repair.
     applyKeywordRetrySchema(db);
+    const nextRetryNo = db.prepare(
+      `SELECT COALESCE(MAX(retry_no), 0) + 1 AS retry_no
+       FROM keyword_retry_attempts WHERE run_id = ? AND keyword_idx = ?`,
+    );
+    const openAttempt = db.prepare(
+      `SELECT retry_no FROM keyword_retry_attempts
+       WHERE run_id = ? AND keyword_idx = ? AND completed_at IS NULL`,
+    );
+    const insertAttempt = db.prepare(
+      `INSERT INTO keyword_retry_attempts
+        (run_id, keyword_idx, retry_no, requested_at, previous_record, previous_serp_rows)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const resetKeyword = db.prepare(
+      `UPDATE keywords
+       SET status = 'pending', surfer = NULL, google = NULL, error = NULL,
+           collected_at = NULL, cache_status = NULL
+       WHERE run_id = ? AND idx = ? AND status = 'failed'`,
+    );
+    const deleteSerp = db.prepare('DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?');
+    const updateRun = db.prepare(
+      `UPDATE runs
+       SET state = 'paused', updated_at = ?, pause_reason = ?
+       WHERE run_id = ?`,
+    );
     const currentSerpRows = store.loadSerpRows(runId);
     const reopened: number[] = [];
 
