@@ -109,14 +109,9 @@ test('null volume: does not break clustering and tie-breaks last', () => {
 test('canonical keyword: highest in-cluster domain Jaccard sum wins', () => {
   const inputs = withIds([
     { keyword: 'center', normalizedKeyword: 'center', volume: 100, domains: ['a.com', 'b.com', 'c.com', 'd.com', 'e.com'] },
-    { keyword: 'leaf1', normalizedKeyword: 'leaf1', volume: 200, domains: ['a.com', 'b.com', 'c.com'] },
-    { keyword: 'leaf2', normalizedKeyword: 'leaf2', volume: 300, domains: ['c.com', 'd.com', 'e.com'] },
+    { keyword: 'leaf1', normalizedKeyword: 'leaf1', volume: 200, domains: ['a.com', 'b.com', 'c.com', 'd.com', 'x.com'] },
+    { keyword: 'leaf2', normalizedKeyword: 'leaf2', volume: 300, domains: ['a.com', 'b.com', 'c.com', 'e.com', 'y.com'] },
   ]);
-  // Make every pair URL-strong so this test remains about canonical selection,
-  // not about the V2 grouping gate.
-  for (const input of inputs) {
-    input.urls = ['https://shared.test/a', 'https://shared.test/b', ...urlsForDomains(input.domains)];
-  }
   const result = clusterKeywords(inputs, DEFAULT_CONFIG);
   assert.equal(result.clusters.length, 1);
   assert.equal(result.clusters[0]!.canonicalKeyword, 'center');
