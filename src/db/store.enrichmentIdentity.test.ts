@@ -8,8 +8,21 @@ import { RunStore, SCHEMA_VERSION } from './store.js';
 
 const CLUSTER_CONFIG = {
   topN: 10,
-  edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
-  algorithmVersion: '1.0.0',
+  edgeRule: {
+    minSharedDomains: 3,
+    minJaccard: 0.3,
+    minSharedUrls: 2,
+    minUrlJaccard: 0.1,
+  },
+  algorithmVersion: '2.0.0',
+  urlIdentityVersion: '1.0.0',
+  groupingRule: 'complete_link' as const,
+};
+
+const COHESION = {
+  pairCount: 1,
+  urlJaccard: { min: 1, median: 1, mean: 1 },
+  domainJaccard: { min: 1, median: 1, mean: 1 },
 };
 
 function createEnrichment(store: RunStore, enrichmentId = 'enr-identity'): void {
@@ -38,7 +51,8 @@ test('new enrichment relations are owned by source keyword idx, not normalized t
     representativeDomains: ['example.com'],
     medianVolume: 95,
     averageVolume: 95,
-    algorithmVersion: '1.0.0',
+    cohesion: COHESION,
+    algorithmVersion: '2.0.0',
     config: CLUSTER_CONFIG,
   }]);
 
@@ -50,7 +64,18 @@ test('new enrichment relations are owned by source keyword idx, not normalized t
     intersectionCount: 3,
     unionCount: 3,
     jaccard: 1,
-    sharedDomains: ['example.com'],
+    sharedDomains: ['example.com', 'example.net', 'example.org'],
+    sharedUrls: [
+      'example.com/tool',
+      'example.net/tool',
+    ],
+    urlIntersectionCount: 2,
+    urlUnionCount: 2,
+    urlJaccard: 1,
+    domainIntersectionCount: 3,
+    domainUnionCount: 3,
+    domainJaccard: 1,
+    classification: 'strong',
     isEdge: true,
   }]);
 
@@ -98,9 +123,12 @@ test('new enrichment relations are owned by source keyword idx, not normalized t
   const clusters = store.loadKeywordClusters('enr-identity');
   assert.equal(clusters[0]?.canonicalKeywordIdx, 3);
   assert.deepEqual(clusters[0]?.members.map((member) => member.keywordIdx), [3, 4]);
+  assert.deepEqual(clusters[0]?.cohesion, COHESION);
 
   const pairs = store.loadEnrichmentPairs('enr-identity');
   assert.deepEqual(pairs.map((pair) => [pair.keywordAIdx, pair.keywordBIdx]), [[3, 4]]);
+  assert.equal(pairs[0]?.classification, 'strong');
+  assert.deepEqual(pairs[0]?.sharedUrls, ['example.com/tool', 'example.net/tool']);
 
   const exclusions = store.loadEnrichmentExclusions('enr-identity');
   assert.deepEqual(exclusions.map((row) => row.keywordIdx), [3, 4]);
@@ -123,7 +151,7 @@ test('new enrichment relations are owned by source keyword idx, not normalized t
   store.close();
 });
 
-test('v16 migration keeps v15 text-owned enrichment rows readable without rewriting them', async () => {
+test('v17 migration keeps v15 text-owned enrichment rows readable without inventing v2 evidence', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'store-enrichment-v15-'));
   const path = join(directory, 'run.sqlite');
 
@@ -153,7 +181,7 @@ test('v16 migration keeps v15 text-owned enrichment rows readable without rewrit
     JSON.stringify([{ keyword: 'JSON Diff', normalizedKeyword: 'json diff', volume: 100, serpSize: 3 }]),
     JSON.stringify(['example.com']),
     '1.0.0',
-    JSON.stringify(CLUSTER_CONFIG),
+    JSON.stringify({ topN: 10, edgeRule: { minSharedDomains: 3, minJaccard: 0.3 }, algorithmVersion: '1.0.0' }),
     '2026-08-28T00:00:00.000Z',
   );
   legacy.prepare(
@@ -202,10 +230,22 @@ test('v16 migration keeps v15 text-owned enrichment rows readable without rewrit
 
   const migrated = RunStore.open(path);
   assert.equal(migrated.version, SCHEMA_VERSION);
-  assert.equal(migrated.loadKeywordClusters('legacy-enr')[0]?.canonicalKeywordIdx, null);
-  assert.equal(migrated.loadKeywordClusters('legacy-enr')[0]?.members[0]?.keywordIdx, null);
-  assert.equal(migrated.loadEnrichmentPairs('legacy-enr')[0]?.keywordAIdx, null);
-  assert.equal(migrated.loadEnrichmentPairs('legacy-enr')[0]?.keywordBIdx, null);
+  const legacyCluster = migrated.loadKeywordClusters('legacy-enr')[0];
+  assert.equal(legacyCluster?.canonicalKeywordIdx, null);
+  assert.equal(legacyCluster?.members[0]?.keywordIdx, null);
+  assert.equal(legacyCluster?.cohesion, null);
+
+  const legacyPair = migrated.loadEnrichmentPairs('legacy-enr')[0];
+  assert.equal(legacyPair?.keywordAIdx, null);
+  assert.equal(legacyPair?.keywordBIdx, null);
+  assert.equal(legacyPair?.classification, 'legacy_domain_only');
+  assert.equal(legacyPair?.domainIntersectionCount, 2);
+  assert.equal(legacyPair?.domainUnionCount, 4);
+  assert.equal(legacyPair?.domainJaccard, 0.5);
+  assert.equal(legacyPair?.sharedUrls, undefined);
+  assert.equal(legacyPair?.urlIntersectionCount, undefined);
+  assert.equal(legacyPair?.urlJaccard, undefined);
+
   assert.equal(migrated.loadEnrichmentExclusions('legacy-enr')[0]?.keywordIdx, null);
   assert.equal(migrated.loadQuerySuggestionSources('legacy-enr')[0]?.parentKeywordIdx, null);
   assert.equal(migrated.loadQuerySuggestions('legacy-enr')[0]?.occurrences[0]?.parentKeywordIdx, null);
