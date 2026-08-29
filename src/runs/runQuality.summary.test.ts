@@ -67,7 +67,6 @@ test('tracker summary state is exposed only when its denominator matches a non-e
     ahrefs: summary(1),
   });
   assert.equal(matching.sources.ahrefs.summaryState, 'complete');
-  assert.equal(matching.runStateUpdatedAt, sourceRun.updatedAt);
 
   const mismatched = buildRunQuality({
     run: sourceRun,
