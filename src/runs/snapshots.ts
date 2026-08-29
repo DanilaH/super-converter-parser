@@ -17,6 +17,7 @@ import {
   type Candidate,
 } from '../scoring/scoring.js';
 import { resolveSerpEvidence } from './serpEvidence.js';
+import { buildRunQuality } from './runQuality.js';
 import type { AhrefsSummary, ScoringCompleteness } from './engine.js';
 
 // Default Ahrefs summary for runs that predate the tracker or are still running.
@@ -241,6 +242,23 @@ export async function writeSnapshots(
       scoringCompleteness: scoringSummary,
     }),
     'run report',
+  );
+
+  // run-quality.json is a thin deterministic projection of durable provider
+  // states. Publish it before status/manifest so a failed quality write cannot
+  // leave a terminal-looking run without its declared evidence summary.
+  await writeJsonAtomic(
+    `${runDirectory}/run-quality.json`,
+    buildRunQuality({
+      run,
+      state,
+      keywords,
+      serpRows,
+      relatedKeywords,
+      domains,
+      ahrefs: ahrefsSummary,
+    }),
+    'run quality',
   );
 
   // status.json is published first. The manifest is the final artifact: if the
@@ -500,6 +518,7 @@ export type RunArtifacts = {
   relatedKeywordsCsv: string;
   domainsCsv: string;
   candidatesCsv: string;
+  runQualityJson: string;
   report: string;
   statusFile: string;
 };
@@ -553,6 +572,7 @@ export function buildRunStatus(
     relatedKeywordsCsv: `${runDirectory}/related-keywords.csv`,
     domainsCsv: `${runDirectory}/domains.csv`,
     candidatesCsv: `${runDirectory}/candidates.csv`,
+    runQualityJson: `${runDirectory}/run-quality.json`,
     report: `${runDirectory}/report.md`,
     statusFile: `${runDirectory}/status.json`,
   };
