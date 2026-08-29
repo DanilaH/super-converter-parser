@@ -32,7 +32,6 @@ export type RunQuality = {
   version: typeof RUN_QUALITY_VERSION;
   runId: string;
   state: RunState;
-  runStateUpdatedAt: string;
   sources: {
     googleSerp: {
       denominator: number;
@@ -380,7 +379,6 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
     state,
-    runStateUpdatedAt: run.updatedAt,
     sources: {
       googleSerp: {
         denominator: keywords.length,
