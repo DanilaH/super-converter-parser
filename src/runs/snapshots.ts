@@ -1,6 +1,5 @@
 import {
   RunStore,
-  isTerminalKeywordStatus,
   storedKeywordToRecord,
   type StoredKeyword,
   type StoredRun,
@@ -17,6 +16,8 @@ import {
   SCORING_VERSION,
   type Candidate,
 } from '../scoring/scoring.js';
+import { resolveSerpEvidence } from './serpEvidence.js';
+import { buildRunQuality } from './runQuality.js';
 import type { AhrefsSummary, ScoringCompleteness } from './engine.js';
 
 // Default Ahrefs summary for runs that predate the tracker or are still running.
@@ -243,6 +244,23 @@ export async function writeSnapshots(
     'run report',
   );
 
+  // run-quality.json is a thin deterministic projection of durable provider
+  // states. Publish it before status/manifest so a failed quality write cannot
+  // leave a terminal-looking run without its declared evidence summary.
+  await writeJsonAtomic(
+    `${runDirectory}/run-quality.json`,
+    buildRunQuality({
+      run,
+      state,
+      keywords,
+      serpRows,
+      relatedKeywords,
+      domains,
+      ahrefs: ahrefsSummary,
+    }),
+    'run quality',
+  );
+
   // status.json is published first. The manifest is the final artifact: if the
   // manifest write fails, status.json is removed so a terminal run state is
   // never emitted without the manifest, and the run stays resumable (not
@@ -263,16 +281,18 @@ function organicCounts(runId: string, store: RunStore): Map<number, number> {
 }
 
 // Operator-facing keyword export: exactly one row per canonical keyword in
-// input order, with the fixed column contract of TASK-004. Missing values are
-// empty cells (never "null"/"undefined"); numeric zero is a real value. The
-// organic count comes from the run checkpoint, not from cache state.
+// input order. Missing values are empty cells (never "null"/"undefined"); a
+// numeric zero is emitted only when Google explicitly proved a genuine empty
+// SERP. The organic count comes from the durable run checkpoint, never cache
+// state. Source-specific status/error remains available in keywords.json and
+// the human-readable report without breaking the established CSV columns.
 export function renderKeywordsCsv(keywords: StoredKeyword[], organicCounts: Map<number, number>): string {
   const rows = [KEYWORDS_CSV_HEADERS];
   for (const keyword of keywords) {
-    const organic =
-      isTerminalKeywordStatus(keyword.status)
-        ? String(organicCounts.get(keyword.idx) ?? 0)
-        : '';
+    const evidence = resolveSerpEvidence(
+      { status: keyword.status, error: keyword.error, google: keyword.google },
+      organicCounts.get(keyword.idx) ?? 0,
+    );
     rows.push([
       keyword.keyword,
       keyword.normalizedKeyword,
@@ -285,7 +305,7 @@ export function renderKeywordsCsv(keywords: StoredKeyword[], organicCounts: Map<
       keyword.google?.pageUrl ?? '',
       keyword.google?.detectedLocation ?? '',
       keyword.google === null ? '' : String(keyword.google.geoWarning),
-      organic,
+      evidence.organicResultCount === null ? '' : String(evidence.organicResultCount),
       keyword.status,
       keyword.error?.code ?? '',
       keyword.error?.message ?? '',
@@ -448,6 +468,10 @@ export function renderDomainsCsv(rows: StoredDomain[]): string {
   return renderCsv(csv);
 }
 
+function numericCell(value: number | null): string {
+  return value === null ? '' : String(value);
+}
+
 export function renderCandidatesCsv(candidates: Candidate[]): string {
   const csv: string[][] = [CANDIDATES_CSV_HEADERS];
   for (const row of candidates) {
@@ -457,22 +481,22 @@ export function renderCandidatesCsv(candidates: Candidate[]): string {
       row.status,
       row.errorCode ?? '',
       row.errorMessage ?? '',
-      String(row.organicResultCount),
-      String(row.uniqueDomains),
-      String(row.knownUniqueDomains),
-      row.minDr === null ? '' : String(row.minDr),
-      row.maxDr === null ? '' : String(row.maxDr),
-      row.medianDr === null ? '' : String(row.medianDr),
-      row.top3MedianDr === null ? '' : String(row.top3MedianDr),
-      row.top5MedianDr === null ? '' : String(row.top5MedianDr),
-      String(row.veryWeakDomainsCount),
-      String(row.weakDomainsCount),
-      String(row.strongDomainsCount),
-      String(row.veryStrongDomainsCount),
-      String(row.missingDrCount),
-      String(row.exactMatchDomainCount),
-      String(row.nicheDomainCount),
-      String(row.serpDiversity),
+      numericCell(row.organicResultCount),
+      numericCell(row.uniqueDomains),
+      numericCell(row.knownUniqueDomains),
+      numericCell(row.minDr),
+      numericCell(row.maxDr),
+      numericCell(row.medianDr),
+      numericCell(row.top3MedianDr),
+      numericCell(row.top5MedianDr),
+      numericCell(row.veryWeakDomainsCount),
+      numericCell(row.weakDomainsCount),
+      numericCell(row.strongDomainsCount),
+      numericCell(row.veryStrongDomainsCount),
+      numericCell(row.missingDrCount),
+      numericCell(row.exactMatchDomainCount),
+      numericCell(row.nicheDomainCount),
+      numericCell(row.serpDiversity),
       row.surferVolume === null ? '' : String(row.surferVolume),
       row.surferCpc === null ? '' : String(row.surferCpc),
       row.score === null ? '' : String(row.score),
@@ -494,6 +518,7 @@ export type RunArtifacts = {
   relatedKeywordsCsv: string;
   domainsCsv: string;
   candidatesCsv: string;
+  runQualityJson: string;
   report: string;
   statusFile: string;
 };
@@ -547,6 +572,7 @@ export function buildRunStatus(
     relatedKeywordsCsv: `${runDirectory}/related-keywords.csv`,
     domainsCsv: `${runDirectory}/domains.csv`,
     candidatesCsv: `${runDirectory}/candidates.csv`,
+    runQualityJson: `${runDirectory}/run-quality.json`,
     report: `${runDirectory}/report.md`,
     statusFile: `${runDirectory}/status.json`,
   };
@@ -658,7 +684,7 @@ export function renderReportMd(ctx: ReportContext): string {
   const scored = candidates.filter((candidate) => candidate.score !== null);
   scored.slice(0, 20).forEach((candidate, index) => {
     lines.push(
-      `| ${index + 1} | ${candidate.keyword} | ${candidate.score} | ${candidate.tier} | ${candidate.surferVolume ?? '-'} | ${candidate.medianDr ?? '-'} | ${candidate.top3MedianDr ?? '-'} | ${candidate.uniqueDomains} | ${candidate.serpDiversity} |`,
+      `| ${index + 1} | ${candidate.keyword} | ${candidate.score} | ${candidate.tier} | ${candidate.surferVolume ?? '-'} | ${candidate.medianDr ?? '-'} | ${candidate.top3MedianDr ?? '-'} | ${candidate.uniqueDomains ?? '-'} | ${candidate.serpDiversity ?? '-'} |`,
     );
   });
   if (scored.length === 0) lines.push('_No scored candidates._');
@@ -670,11 +696,13 @@ export function renderReportMd(ctx: ReportContext): string {
   if (incomplete.length > 0) {
     lines.push('## Failed / incomplete keywords');
     lines.push('');
-    lines.push('| Keyword | Status | Error code | Error message |');
-    lines.push('| --- | --- | --- | --- |');
+    lines.push('| Keyword | Status | Error code | Error message | SERP status | SERP error |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
     for (const keyword of incomplete) {
+      const serpStatus = keyword.google?.serpStatus ?? 'unknown';
+      const serpError = keyword.google?.serpError?.code ?? '';
       lines.push(
-        `| ${keyword.keyword} | ${keyword.status} | ${keyword.error?.code ?? ''} | ${keyword.error?.message ?? ''} |`,
+        `| ${keyword.keyword} | ${keyword.status} | ${keyword.error?.code ?? ''} | ${keyword.error?.message ?? ''} | ${serpStatus} | ${serpError} |`,
       );
     }
     lines.push('');

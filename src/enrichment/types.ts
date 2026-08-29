@@ -68,17 +68,53 @@ export type EnrichmentCacheStatus =
 
 export type ClusterEdgeRule = {
   minSharedDomains: number;
+  // Historical field name retained for persisted V1 config compatibility. In
+  // clustering v2 this is explicitly the domain-Jaccard threshold.
   minJaccard: number;
+  // Optional only so historical V1 config JSON remains readable. Fresh V2
+  // config always persists concrete values.
+  minSharedUrls?: number;
+  minUrlJaccard?: number;
 };
+
+export type ClusterPairClassification =
+  | 'strong'
+  | 'domain_only'
+  | 'url_only'
+  | 'weak'
+  | 'none'
+  | 'legacy_domain_only';
 
 export type ClusterEvidence = {
   sharedDomains: string[];
   intersectionCount: number;
   unionCount: number;
   jaccard: number;
+  sharedUrls?: string[];
+  urlIntersectionCount?: number;
+  urlUnionCount?: number;
+  urlJaccard?: number;
+  classification?: ClusterPairClassification;
 };
 
+export type ClusterCohesionSummary = {
+  min: number;
+  median: number;
+  mean: number;
+};
+
+export type ClusterCohesion = {
+  pairCount: number;
+  urlJaccard: ClusterCohesionSummary | null;
+  domainJaccard: ClusterCohesionSummary | null;
+};
+
+// Source keyword identity is (sourceRunId, keywordIdx). The enrichment run
+// already persists sourceRunId, so keywordIdx is the durable relational key.
+// It is nullable only when reading historical enrichment rows that predate
+// V2.1; every new clustering write carries a concrete index.
 export type ClusterMember = {
+  keywordIdx: number | null;
   keyword: string;
   normalizedKeyword: string;
   volume: number | null;
@@ -87,18 +123,42 @@ export type ClusterMember = {
 
 export type KeywordCluster = {
   clusterId: string;
+  canonicalKeywordIdx: number | null;
   canonicalKeyword: string;
   members: ClusterMember[];
   representativeDomains: string[];
   medianVolume: number | null;
   averageVolume: number | null;
   memberCount: number;
+  // Missing only on historical V1 rows loaded from persistence.
+  cohesion?: ClusterCohesion | null;
 };
 
 export type ClusteringConfig = {
   topN: number;
   edgeRule: ClusterEdgeRule;
   algorithmVersion: string;
+  urlIdentityVersion?: string;
+  groupingRule?: 'connected_components' | 'complete_link';
+};
+
+export type RepresentativeQueryOverrideConfig = {
+  clusterId: string;
+  keywordIds: number[];
+  reason: string;
+};
+
+export type RepresentativeQueriesConfigSnapshot = {
+  targetCount: number;
+  overrides: RepresentativeQueryOverrideConfig[];
+  setVersion: string;
+};
+
+export type RepresentativeQueryRunConfigSnapshot = RepresentativeQueriesConfigSnapshot & {
+  // PR-05 operates on explicitly chosen finalist clusters. `--all-clusters`
+  // resolves to the concrete current ids before persistence so downstream work
+  // never has to reinterpret what "all" meant later.
+  selectedClusterIds: string[];
 };
 
 type ReservedModuleConfig = Record<string, unknown>;
@@ -114,6 +174,7 @@ export type QuerySuggestionsConfig = {
 
 export type EnrichmentModuleConfig = {
   clusters?: ClusteringConfig;
+  representative_queries?: RepresentativeQueryRunConfigSnapshot;
   pages?: ReservedModuleConfig;
   site_structure?: ReservedModuleConfig;
   query_suggestions?: QuerySuggestionsConfig;
@@ -126,8 +187,10 @@ export type EnrichmentModuleConfig = {
 };
 
 // One collected suggestion row. Dedup is on normalizedSuggestion only; every
-// (parentKeyword, source) occurrence is retained in `occurrences`.
+// (parent keyword identity, source) occurrence is retained in `occurrences`.
+// parentKeywordIdx is nullable only for historical persisted occurrences.
 export type QuerySuggestion = {
+  parentKeywordIdx: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -143,14 +206,16 @@ export type QuerySuggestion = {
   gl: string;
   parserVersion: string;
   collectionStatus: QuerySuggestionCollectionStatus;
-  // Every (parentKeyword, source) occurrence of this normalized suggestion,
-  // retained even when the identity collides across parents/sources.
+  // Every (parent keyword identity, source) occurrence of this normalized
+  // suggestion, retained even when suggestion identity collides across parents.
   occurrences: QuerySuggestionOccurrence[];
 };
 
-// One occurrence of a suggestion under a specific parent/source, preserved even
-// when the normalized identity collides across parents/sources.
+// One occurrence of a suggestion under a specific source keyword/source. New
+// writes own the relation by parentKeywordIdx; normalizedParent remains useful
+// for display, semantic lookup, and cross-run cache identity.
 export type QuerySuggestionOccurrence = {
+  parentKeywordIdx: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -227,6 +292,7 @@ export type EnrichmentItemRecord = {
 };
 
 export type ClusteredKeywordExclusion = {
+  keywordIdx: number | null;
   keyword: string;
   normalizedKeyword: string;
   reason: 'no_serp' | 'no_domains' | 'shortlist_mismatch';
@@ -234,12 +300,24 @@ export type ClusteredKeywordExclusion = {
 };
 
 export type PairwiseComparison = {
+  keywordAIdx: number | null;
+  keywordBIdx: number | null;
   keywordA: string;
   keywordB: string;
+  // V1 compatibility aliases: domain intersection / union / Jaccard.
   intersectionCount: number;
   unionCount: number;
   jaccard: number;
   sharedDomains: string[];
+  // V2 additive evidence. Missing only on historical persisted V1 rows.
+  sharedUrls?: string[];
+  urlIntersectionCount?: number;
+  urlUnionCount?: number;
+  urlJaccard?: number;
+  domainIntersectionCount?: number;
+  domainUnionCount?: number;
+  domainJaccard?: number;
+  classification?: ClusterPairClassification;
   isEdge: boolean;
 };
 

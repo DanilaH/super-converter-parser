@@ -43,18 +43,19 @@ src/
 ├── ahrefs/          # Domain Rating provider adapter
 ├── browser/         # CDP connection, collection, CAPTCHA/preflight
 ├── cache/           # Persistent cross-run cache + identities/TTL
-├── cli/             # research / enrich entry points
+├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history / traffic-evidence / finalist-evidence
 ├── config/          # typed runtime configuration
-├── db/              # SQLite schema, migrations, RunStore
+├── db/              # SQLite schema, migrations, RunStore + feature-owned evidence extensions
 ├── diagnostics/     # parser-failure evidence
 ├── domains/         # hostname / registrable-domain normalization
-├── enrichment/      # clusters, suggestions, pages, site structure, HTTP safety
+├── enrichment/      # clusters, representative/entrant/history/traffic/finalist projections, suggestions, pages, site structure
 ├── exports/         # generic CSV/export helpers
 ├── firstseen/       # first-seen provider adapter (Wayback path)
 ├── google/          # SERP, autocomplete, PAA, related-search parsing
 ├── input/
 │   ├── seeds/
-│   └── microsoft/
+│   ├── microsoft/
+│   └── traffic/
 ├── outputs/         # research layout, archive/publication paths
 ├── rdap/            # registration-date provider adapter
 ├── runs/            # discovery engine, snapshots, domain-age enrichment
@@ -102,6 +103,41 @@ module CSV/JSON + status.json + manifest.json
 ```
 
 Deep modules are bounded independently. Domain caps must be visible in artifacts as omitted evidence, not silently discarded.
+
+The same `enrichment.sqlite` also owns the deterministic post-enrichment evidence chain for explicitly selected finalist clusters:
+
+```text
+clustering v2 evidence
+        ↓
+representatives CLI
+        ↓
+versioned representative-query sets
+        ↓
+entrant-cohort CLI
+        ↓
+representative top-10 registrable-domain cohort
+        ├────────────→ cohort-history CLI
+        │                    ↓
+        │             coverage-aware RDAP / first-seen history projection
+        │
+        └────────────→ traffic-evidence CLI
+                             ↓
+                      provider-neutral domain / URL traffic snapshots
+                             ↓
+                      current target validation + compatible history / velocity projection
+        ↓
+finalist-evidence CLI
+        ↓
+independent A–G human-review blocks + generation-pinned human decisions
+        ↓
+finalist-evidence-matrix.csv / finalist-evidence-matrix.json
+```
+
+Each child projection pins its current parent and invalidates published downstream interpretation when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, cohort-history, traffic-evidence, and finalist-evidence CSV/JSON files are published derivatives. Historical traffic imports remain durable raw facts and are revalidated against the current entrant generation rather than being deleted when finalist evidence changes. History interpretation thresholds and traffic low-base policy are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
+
+The finalist matrix is a projection layer, not a scoring layer. Demand, SERP accessibility, organic traffic proof, entrant repeatability, moat observations, monetization/geography, and product feasibility remain independent evidence blocks. Existing Score v1 remains a broad-discovery signal and is not converted into the finalist verdict. Product feasibility remains unautomated when no trustworthy measurement exists.
+
+Human finalist decisions are persisted separately from evidence in a lazy feature-owned extension inside `enrichment.sqlite`. A decision stores the representative revision and entrant fingerprint it reviewed. Upstream evidence changes do not silently rewrite that decision as current; the matrix exposes stale/retired decision state until the operator records a new current decision.
 
 ## Browser architecture
 
@@ -193,7 +229,7 @@ The browser/discovery runtime works with `KeywordRecord`; SQLite loads the persi
 type KeywordRecord = {
   id: string;
   keyword: string;             // original display text
-  normalizedKeyword: string;   // normalized lookup/cache identity
+  normalizedKeyword: string;   // normalized semantic/cache lookup text
   sources: KeywordSource[];
   status: "pending" | "running" | "completed" | "partial" | "failed";
   // microsoft / surfer / google / error fields omitted here for brevity
@@ -233,7 +269,47 @@ type KeywordSource =
     };
 ```
 
-Text normalization is not a relational key. SERP ownership, scoring, clustering, and other persisted joins must use the durable keyword index/ID rather than comparing raw keyword strings.
+Text normalization is not a relational ownership key. Discovery SERP ownership and scoring use the durable per-run keyword index. Deep-enrichment relations owned by a source keyword—clustering graph nodes/members/canonical keyword, pairwise comparisons, exclusions, query-suggestion parent occurrences, and per-parent/source suggestion checkpoints—use `(sourceRunId, keywordIdx)` identity. The enrichment run persists `sourceRunId`, so enrichment tables store `keywordIdx` as the local relation key. Normalized text remains intentional for semantic suggestion dedupe, cross-run cache identity (where source-run idx is not portable), user shortlist lookup, display/provenance, and compatibility reads of historical text-owned enrichment rows. Query-suggestion resume ownership is resolved from idx-owned source checkpoint rows; `enrichment_items` is lifecycle/accounting metadata, not a source-keyword ownership authority.
+
+## Google SERP observation
+
+Google organic evidence is persisted independently from the aggregate keyword status because Surfer and Google can succeed or fail independently.
+
+Fresh collection writes a source-specific Google observation under the persisted `google` JSON:
+
+```ts
+type SerpObservationStatus =
+  | "ok"
+  | "empty"
+  | "fetch_error"
+  | "parse_error"
+  | "not_fetched"
+  | "unknown"; // compatibility projection for ambiguous historical rows
+
+type GoogleObservation = {
+  hl: string;
+  gl: string;
+  pageUrl: string;
+  detectedLocation: string | null;
+  geoWarning: boolean;
+  serpStatus: SerpObservationStatus;
+  serpError: { code: string; message: string } | null;
+};
+```
+
+Truth invariant:
+
+```text
+serpStatus=ok    + persisted rows → organic_result_count=N
+serpStatus=empty + zero rows      → organic_result_count=0
+fetch/parse/not_fetched/unknown   → organic_result_count missing
+```
+
+An aggregate keyword may therefore be `failed` because Surfer failed while its Google SERP observation is truthfully `empty`, or `partial` because Surfer succeeded while Google parsing failed. Candidate scoring requires trustworthy SERP evidence; a Google parse/fetch failure cannot be interpreted as an easy zero-result SERP.
+
+Historical rows that predate `serpStatus` are interpreted conservatively from durable state. Positive stored SERP rows prove `ok`; a clean historical `completed` zero-row keyword proves the old collector's confirmed zero-results path; ambiguous terminal zero-row records remain `unknown` instead of becoming zero.
+
+The Google parser version is part of keyword cache/resume identity. Changes to this observation contract therefore require a parser-version bump instead of silently reusing old cached semantics.
 
 ## Related keyword
 
@@ -287,6 +363,31 @@ Discovery state lives in `run.sqlite`; enrichment state lives in `enrichment.sql
 - resume resets interrupted `running` work to retryable state where appropriate;
 - completed checkpoints are not re-fetched merely because a mutable cross-run cache entry changed;
 - omitted work is terminal evidence, not successful measurement.
+
+### Failed-keyword repair journal
+
+Ordinary resume does not reopen terminal failed keyword checkpoints. Discovery has one explicit repair path:
+
+```text
+npm run research -- --resume <run-id> --retry-failed
+```
+
+The path is intentionally narrow:
+
+- `completed_with_errors` may be reopened only through this explicit flag; `completed`, `failed`, and `cancelled` run states remain immutable;
+- a read-only repair plan is built first from the durable failed keyword indexes;
+- persisted parser/config semantics, refresh input, Ahrefs requirements, cache open, and discovery/debug directory writability are validated before the plan mutates `run.sqlite`;
+- the plan is then revalidated and applied synchronously in one SQLite transaction immediately before browser work;
+- only planned `failed` checkpoints are reset to `pending`; completed/partial siblings are untouched;
+- the previous keyword record and its SERP rows are copied into append-only attempt history before current SERP evidence is cleared;
+- current domain membership/first-seen ownership is reconciled from the surviving current SERP rows so removed failed SERPs cannot leave ghost domains;
+- a stale plan aborts the whole repair transaction rather than partially reopening a batch.
+
+Retry history is stored in the same `run.sqlite` under the feature-owned, independently versioned `keyword_retry_schema` / `keyword_retry_attempts` extension. The core discovery schema version is not bumped merely to make an operator who never uses failed repair create those tables. Ordinary reads do not create the extension schema.
+
+An open retry attempt is durable repair intent. It transiently forces the corresponding keyword cache decision to `refreshed` for that invocation, but is not copied into the run's persistent `refresh_keywords`. Therefore an interrupted repair continues with ordinary `--resume` and still bypasses the stale failed keyword cache, while a completed repair does not become a permanent forced refresh.
+
+If the process dies after a repaired keyword checkpoint commits but before the attempt journal is closed, the next resume reconciles the open attempt from the current durable keyword/SERP state without performing a second browser request.
 
 ---
 
@@ -396,17 +497,25 @@ A discovery run stopped partway through must continue unfinished work:
 npm run research -- --resume <run-id>
 ```
 
+A discovery run that reached `completed_with_errors` may explicitly repair only its failed keywords without replaying successful siblings:
+
+```text
+npm run research -- --resume <run-id> --retry-failed
+```
+
 A deep-enrichment run resumes by enrichment ID:
 
 ```text
 npm run enrich -- --resume <enrichment-id>
 ```
 
-Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifacts.
+Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifacts. Ordinary resume leaves terminal keyword checkpoints untouched; failed-keyword repair is the explicit exception described above and preserves prior-attempt evidence before reopening current state.
 
 ## Atomic publication
 
 Writes that represent terminal/public state are atomic enough that an interrupted write does not advertise a completed run with mismatched artifacts. `manifest.json` is the final publication marker for terminal output sets; status/manifest publication must remain consistent.
+
+Derived finalist artifacts are manifest-gated in `results.zip`. Invalidating representative, entrant, history, traffic, or human-decision generations removes stale finalist metadata/artifact advertisements before a new matrix can be published, so orphan files cannot silently become current evidence.
 
 ## Graceful shutdown
 
@@ -486,9 +595,12 @@ The user must be able to tell why a parser/provider failed without immediately r
 Examples:
 
 - missing SERP is not `organic_result_count = 0` unless zero was actually observed;
+- source-specific Google status/error is preserved even when the aggregate keyword error belongs to Surfer;
 - omitted domains are explicitly marked `omitted` / `domain_cap`;
 - unavailable first-seen data is distinct from registration data;
-- successful suggestion sources are retained even if another source fails.
+- successful suggestion sources are retained even if another source fails;
+- missing finalist history/traffic/site-structure/product-feasibility evidence remains missing rather than becoming a penalty;
+- an explicit human `unknown` decision remains distinct from no recorded decision, and stale decisions remain visible rather than being silently treated as current.
 
 ## Rate limiting
 

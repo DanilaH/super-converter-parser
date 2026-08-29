@@ -26,6 +26,7 @@ import {
   type RunState,
 } from './run.js';
 import { countProgress, countCacheStats, cacheHitRatePercent, writeSnapshots } from './snapshots.js';
+import { formatOrganicResultCount } from './serpEvidence.js';
 import {
   CircuitBreaker,
   isTransientErrorCode,
@@ -413,7 +414,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       store.recordDomains(runId, stored.idx, stored.keyword, entry.serpRows, hitSourceByDomain);
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
       logger(
-        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${entry.serpRows.length}`,
+        `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${formatOrganicResultCount(entry.record, entry.serpRows.length)}`,
       );
     } else {
       const startAt = hooks.now();
@@ -504,7 +505,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       if (record.surfer) {
         const volume = formatVolume(record.surfer.volume);
         const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
-        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${result?.serpRows.length}`);
+        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${formatOrganicResultCount(record, result?.serpRows.length ?? 0)}`);
       } else {
         logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
       }

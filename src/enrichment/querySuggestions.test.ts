@@ -1297,7 +1297,7 @@ test('fully completed resume: no browser work, sourceStats preserved from SQLite
   const parents = testShortlist();
 
   // Pre-populate SQLite as if a previous (interrupted) run completed every (parent, source) pair.
-  for (const parent of parents) {
+  for (const [parentKeywordIdx, parent] of parents.entries()) {
     const normalizedParent = normalizeKeyword(parent);
     const sourceResults = sources.map((source) => ({
       source,
@@ -1316,6 +1316,7 @@ test('fully completed resume: no browser work, sourceStats preserved from SQLite
       ordinal: 0,
       collectionStatus: 'ok',
       occurrences: [{
+        parentKeywordIdx,
         parentKeyword: parent,
         normalizedParent,
         source: 'surfer_related',
@@ -1326,7 +1327,7 @@ test('fully completed resume: no browser work, sourceStats preserved from SQLite
         collectionStatus: 'ok',
       }],
     }];
-    enrichmentStore.persistParentAtomic(enrichmentId, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
+    enrichmentStore.persistParentAtomic(enrichmentId, parentKeywordIdx, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
   }
 
   // Sanity check: all 20 (5 parents x 4 sources) completed items exist.
@@ -1403,7 +1404,7 @@ test('partial resume: only missing (parent, source) is collected', async () => {
   const parents = testShortlist();
 
   // Pre-populate all pairs EXCEPT (json diff, google_paa).
-  for (const parent of parents) {
+  for (const [parentKeywordIdx, parent] of parents.entries()) {
     const normalizedParent = normalizeKeyword(parent);
     const sourcesToWrite = parent === 'json diff'
       ? sources.filter((s) => s !== 'google_paa')
@@ -1425,6 +1426,7 @@ test('partial resume: only missing (parent, source) is collected', async () => {
       ordinal: 0,
       collectionStatus: 'ok',
       occurrences: [{
+        parentKeywordIdx,
         parentKeyword: parent,
         normalizedParent,
         source: 'surfer_related',
@@ -1435,12 +1437,12 @@ test('partial resume: only missing (parent, source) is collected', async () => {
         collectionStatus: 'ok',
       }],
     }];
-    enrichmentStore.persistParentAtomic(enrichmentId, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
+    enrichmentStore.persistParentAtomic(enrichmentId, parentKeywordIdx, normalizedParent, config.research.market, config.research.googleHl, config.research.googleGl, sourceResults, suggestions);
   }
 
-  // Verify: (json diff, google_paa) is missing.
+  // Verify: source idx 0 / google_paa is missing.
   const missingBefore = enrichmentStore.loadEnrichmentItems(enrichmentId)
-    .find((i) => i.itemId === 'google_paa:json diff');
+    .find((i) => i.itemId === 'google_paa:0');
   assert.equal(missingBefore, undefined);
 
   // Plan only produces output for the missing pair.
@@ -1483,15 +1485,15 @@ test('partial resume: only missing (parent, source) is collected', async () => {
   assert.equal(result.sourceStats.google_paa.ok, 5);
   assert.equal(result.inputCount, 5);
 
-  // The (json diff, google_paa) pair has requestCount 1 (from this resume).
+  // The (source idx 0, google_paa) pair has requestCount 1 (from this resume).
   const missingAfter = enrichmentStore.loadEnrichmentItems(enrichmentId)
-    .find((i) => i.itemId === 'google_paa:json diff');
+    .find((i) => i.itemId === 'google_paa:0');
   assert.ok(missingAfter);
   assert.equal(missingAfter!.requestCount, 1);
 
   // Previously completed pairs keep their original requestCount (still 1, not re-fetched).
   const untouched = enrichmentStore.loadEnrichmentItems(enrichmentId)
-    .find((i) => i.itemId === 'surfer_related:json diff');
+    .find((i) => i.itemId === 'surfer_related:0');
   assert.ok(untouched);
   assert.equal(untouched!.requestCount, 1);
 

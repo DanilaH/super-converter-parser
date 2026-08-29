@@ -45,6 +45,10 @@ import {
 } from './types.js';
 
 export type RawSuggestionOccurrence = {
+  // Browser/cache collectors operate on semantic text and may not know the
+  // source-run relation. runQuerySuggestionsModule assigns the concrete idx
+  // before persistence. Historical persisted occurrences can remain null.
+  parentKeywordIdx?: number | null;
   parentKeyword: string;
   normalizedParent: string;
   source: QuerySuggestionSource;
@@ -103,6 +107,7 @@ function makeOccurrences(
   source: QuerySuggestionSource,
   rawTexts: string[],
   structured: Array<{ text: string; volume: number | null; cpc: number | null; ordinal: number | null }>,
+  parentKeywordIdx: number | null = null,
 ): RawSuggestionOccurrence[] {
   const out: RawSuggestionOccurrence[] = [];
   const useStructured = source === 'surfer_related' && structured.length > 0;
@@ -113,6 +118,7 @@ function makeOccurrences(
     const text = item.text.trim();
     if (!text) continue;
     out.push({
+      parentKeywordIdx,
       parentKeyword,
       normalizedParent,
       source,
@@ -126,6 +132,39 @@ function makeOccurrences(
   return out;
 }
 
+function parentIdentityKey(parentKeywordIdx: number | null | undefined, normalizedParent: string): string {
+  return parentKeywordIdx === null || parentKeywordIdx === undefined
+    ? `legacy:${normalizedParent}`
+    : `idx:${parentKeywordIdx}`;
+}
+
+function occurrenceIdentityKey(occurrence: RawSuggestionOccurrence): string {
+  return `${occurrence.source}:${parentIdentityKey(occurrence.parentKeywordIdx, occurrence.normalizedParent)}:${occurrence.normalizedSuggestion}`;
+}
+
+export function countPersistedQueryParents(
+  records: ReadonlyArray<{ parentKeywordIdx: number | null; normalizedParent: string }>,
+): number {
+  const concreteIds = new Set<number>();
+  const concreteTexts = new Set<string>();
+  const legacyTexts = new Set<string>();
+
+  for (const record of records) {
+    if (record.parentKeywordIdx === null) {
+      legacyTexts.add(record.normalizedParent);
+      continue;
+    }
+    concreteIds.add(record.parentKeywordIdx);
+    concreteTexts.add(record.normalizedParent);
+  }
+
+  let legacyOnlyCount = 0;
+  for (const normalizedParent of legacyTexts) {
+    if (!concreteTexts.has(normalizedParent)) legacyOnlyCount += 1;
+  }
+  return concreteIds.size + legacyOnlyCount;
+}
+
 export function dedupSuggestions(
   occurrences: RawSuggestionOccurrence[],
   market: string,
@@ -134,9 +173,11 @@ export function dedupSuggestions(
 ): QuerySuggestion[] {
   const bySuggestion = new Map<string, QuerySuggestion>();
   for (const occ of occurrences) {
+    const parentKeywordIdx = occ.parentKeywordIdx ?? null;
     const existing = bySuggestion.get(occ.normalizedSuggestion);
     if (existing) {
       existing.occurrences.push({
+        parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source,
@@ -152,6 +193,7 @@ export function dedupSuggestions(
       continue;
     }
     bySuggestion.set(occ.normalizedSuggestion, {
+      parentKeywordIdx,
       parentKeyword: occ.parentKeyword,
       normalizedParent: occ.normalizedParent,
       source: occ.source,
@@ -167,6 +209,7 @@ export function dedupSuggestions(
       collectionStatus: 'ok',
       occurrences: [
         {
+          parentKeywordIdx,
           parentKeyword: occ.parentKeyword,
           normalizedParent: occ.normalizedParent,
           source: occ.source,
@@ -193,25 +236,26 @@ function emptySourceStats(): QuerySuggestionResult['sourceStats'] {
 
 export function buildDiscoverySurferCollections(
   rows: readonly StoredRelatedKeyword[],
-): Map<string, RawSourceCollection> {
-  const grouped = new Map<string, StoredRelatedKeyword[]>();
+): Map<number, RawSourceCollection> {
+  const grouped = new Map<number, StoredRelatedKeyword[]>();
   for (const row of rows) {
-    const key = normalizeKeyword(row.parentKeyword);
-    const group = grouped.get(key) ?? [];
+    const group = grouped.get(row.parentIdx) ?? [];
     group.push(row);
-    grouped.set(key, group);
+    grouped.set(row.parentIdx, group);
   }
 
-  const collections = new Map<string, RawSourceCollection>();
-  for (const [normalizedParent, group] of grouped) {
+  const collections = new Map<number, RawSourceCollection>();
+  for (const [parentKeywordIdx, group] of grouped) {
+    const parentKeyword = group[0]?.parentKeyword ?? '';
+    const normalizedParent = normalizeKeyword(parentKeyword);
     const successful = group.filter((row) => row.status === 'ok' && row.relatedKeyword.trim() !== '');
     if (successful.length > 0) {
-      const parentKeyword = successful[0]!.parentKeyword;
-      collections.set(normalizedParent, {
+      collections.set(parentKeywordIdx, {
         source: 'surfer_related',
         status: 'ok',
         occurrences: successful.map((row, ordinal) => ({
-          parentKeyword,
+          parentKeywordIdx,
+          parentKeyword: row.parentKeyword,
           normalizedParent,
           source: 'surfer_related',
           rawText: row.relatedKeyword,
@@ -227,7 +271,7 @@ export function buildDiscoverySurferCollections(
     }
 
     if (group.some((row) => row.status === 'empty')) {
-      collections.set(normalizedParent, {
+      collections.set(parentKeywordIdx, {
         source: 'surfer_related',
         status: 'empty',
         occurrences: [],
@@ -570,7 +614,7 @@ export async function runQuerySuggestionsModule(
   const allKeywords = sourceStore
     .loadKeywords(sourceRunId)
     .filter((k) => k.status === 'completed' || k.status === 'partial')
-    .map((k) => ({ keyword: k.keyword, normalizedKeyword: k.normalizedKeyword }));
+    .map((k) => ({ keywordIdx: k.idx, keyword: k.keyword, normalizedKeyword: k.normalizedKeyword }));
 
   if (allKeywords.length === 0) {
     throw new ResearchError(
@@ -609,17 +653,36 @@ export async function runQuerySuggestionsModule(
     );
   }
 
-  const completedItems = new Set(
-    enrichmentStore
-      .loadEnrichmentItems(enrichmentId)
-      .filter((item) => item.module === 'query_suggestions' && item.status === 'completed')
-      .map((item) => item.itemId),
+  const normalizedParentCounts = new Map<string, number>();
+  for (const keyword of selectedKeywords) {
+    normalizedParentCounts.set(
+      keyword.normalizedKeyword,
+      (normalizedParentCounts.get(keyword.normalizedKeyword) ?? 0) + 1,
+    );
+  }
+  const unambiguousLegacyParents = new Set(
+    [...normalizedParentCounts.entries()]
+      .filter(([, count]) => count === 1)
+      .map(([normalizedParent]) => normalizedParent),
+  );
+
+  const persistedSourceCheckpoints = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
+  const completedCurrentSources = new Set(
+    persistedSourceCheckpoints
+      .filter((row) => row.parentKeywordIdx !== null && row.status !== 'error')
+      .map((row) => `${row.source}:${row.parentKeywordIdx}`),
+  );
+  const completedLegacySources = new Set(
+    persistedSourceCheckpoints
+      .filter((row) => row.parentKeywordIdx === null && row.status !== 'error')
+      .map((row) => `${row.source}:${row.normalizedParent}`),
   );
 
   const occurrences: RawSuggestionOccurrence[] = [];
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
+        parentKeywordIdx: occ.parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
@@ -634,10 +697,10 @@ export async function runQuerySuggestionsModule(
 
   const perSourceStatus = new Map<QuerySuggestionSource, QuerySuggestionPerSourceStatus>();
   for (const source of config.sources) {
-    perSourceStatus.set(source, { source, status: 'empty', collected: 0, error: null });
+    perSourceStatus.set(source, { source, status: 'unavailable', collected: 0, error: null });
   }
   const sourceStats = emptySourceStats();
-  const seenSuggestionKeys = new Set(occurrences.map((o) => `${o.source}:${o.normalizedParent}:${o.normalizedSuggestion}`));
+  const seenSuggestionKeys = new Set(occurrences.map(occurrenceIdentityKey));
   const discoverySurferCollections = buildDiscoverySurferCollections(
     sourceStore.loadRelatedKeywords(sourceRunId),
   );
@@ -723,9 +786,13 @@ export async function runQuerySuggestionsModule(
       await new Promise(resolve => setImmediate(resolve));
       checkCancellation(signal, EnrichmentCancelledError);
 
-      const missingSources = config.sources.filter(
-        (source) => !completedItems.has(`${source}:${keyword.normalizedKeyword}`),
-      );
+      const missingSources = config.sources.filter((source) => {
+        const currentKey = `${source}:${keyword.keywordIdx}`;
+        const legacyKey = `${source}:${keyword.normalizedKeyword}`;
+        const legacyCompleted = unambiguousLegacyParents.has(keyword.normalizedKeyword)
+          && completedLegacySources.has(legacyKey);
+        return !completedCurrentSources.has(currentKey) && !legacyCompleted;
+      });
       if (missingSources.length === 0) continue;
 
       const fetched: RawSourceCollection[] = [];
@@ -736,12 +803,14 @@ export async function runQuerySuggestionsModule(
       const cacheMissSources: QuerySuggestionSource[] = [];
       for (const source of missingSources) {
         if (source === 'surfer_related') {
-          const sourceRunCollection = discoverySurferCollections.get(keyword.normalizedKeyword);
+          const sourceRunCollection = discoverySurferCollections.get(keyword.keywordIdx);
           if (sourceRunCollection) {
             fetched.push(sourceRunCollection);
             continue;
           }
         }
+        // Cross-run cache identity intentionally remains semantic text. The
+        // source-run idx is not portable across different discovery runs.
         const cacheKey = buildSuggestionCacheKey(source, keyword.normalizedKeyword, identity, parserVersionForSource(source));
         const cached = cache.getSuggestion(cacheKey);
         if (cached) {
@@ -764,6 +833,7 @@ export async function runQuerySuggestionsModule(
               source,
               rows.map((r) => r.text),
               rows.map((r, i) => ({ text: r.text, volume: r.volume, cpc: r.cpc, ordinal: r.ordinal ?? i })),
+              keyword.keywordIdx,
             );
             fetched.push({
               source,
@@ -789,9 +859,13 @@ export async function runQuerySuggestionsModule(
         transportRequests = totalNavigations + totalXhrs;
         for (const col of result.collections) {
           await new Promise(resolve => setImmediate(resolve));
+          const ownedOccurrences = col.occurrences.map((occurrence) => ({
+            ...occurrence,
+            parentKeywordIdx: keyword.keywordIdx,
+          }));
           const cacheKey = buildSuggestionCacheKey(col.source, keyword.normalizedKeyword, identity, parserVersionForSource(col.source));
           const storedAt = new Date().toISOString();
-          const rows = col.occurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
+          const rows = ownedOccurrences.slice(0, config.maxSuggestionsPerSource).map((o) => ({ text: o.rawText, volume: o.volume, cpc: o.cpc, ordinal: o.ordinal }));
           cache.putSuggestion(
             {
               cacheKey,
@@ -807,7 +881,7 @@ export async function runQuerySuggestionsModule(
             ttlMsForSuggestionStatus(col.status, researchConfig.cache.ttl),
           );
           const wasExpired = expiredSources.includes(col.source);
-          fetched.push({ ...col, cacheStatus: wasExpired ? 'expired' : 'miss' });
+          fetched.push({ ...col, occurrences: ownedOccurrences, cacheStatus: wasExpired ? 'expired' : 'miss' });
         }
       }
 
@@ -818,6 +892,7 @@ export async function runQuerySuggestionsModule(
         ordinal: number | null;
         collectionStatus: string;
         occurrences: Array<{
+          parentKeywordIdx: number;
           parentKeyword: string;
           normalizedParent: string;
           source: string;
@@ -831,12 +906,14 @@ export async function runQuerySuggestionsModule(
 
       for (const collection of fetched) {
         const cappedOccurrences = collection.occurrences.slice(0, config.maxSuggestionsPerSource);
-        for (const occ of cappedOccurrences) {
-          const key = `${occ.source}:${occ.normalizedParent}:${occ.normalizedSuggestion}`;
+        for (const rawOccurrence of cappedOccurrences) {
+          const occ = { ...rawOccurrence, parentKeywordIdx: rawOccurrence.parentKeywordIdx ?? keyword.keywordIdx };
+          const key = occurrenceIdentityKey(occ);
           if (seenSuggestionKeys.has(key)) {
             const existing = keywordSuggestions.get(occ.normalizedSuggestion);
             if (existing) {
               existing.occurrences.push({
+                parentKeywordIdx: occ.parentKeywordIdx,
                 parentKeyword: occ.parentKeyword,
                 normalizedParent: occ.normalizedParent,
                 source: occ.source,
@@ -854,6 +931,7 @@ export async function runQuerySuggestionsModule(
           const existingSuggestion = keywordSuggestions.get(occ.normalizedSuggestion);
           if (existingSuggestion) {
             existingSuggestion.occurrences.push({
+              parentKeywordIdx: occ.parentKeywordIdx,
               parentKeyword: occ.parentKeyword,
               normalizedParent: occ.normalizedParent,
               source: occ.source,
@@ -871,6 +949,7 @@ export async function runQuerySuggestionsModule(
               ordinal: occ.ordinal,
               collectionStatus: 'ok',
               occurrences: [{
+                parentKeywordIdx: occ.parentKeywordIdx,
                 parentKeyword: occ.parentKeyword,
                 normalizedParent: occ.normalizedParent,
                 source: occ.source,
@@ -890,10 +969,10 @@ export async function runQuerySuggestionsModule(
           status.collected += cappedOccurrences.length;
           sourceStats[collection.source].ok += 1;
         } else if (collection.status === 'empty') {
-          if (status.status === 'empty') status.status = 'empty';
+          if (status.status === 'unavailable' || status.status === 'empty') status.status = 'empty';
           sourceStats[collection.source].empty += 1;
         } else if (collection.status === 'unavailable') {
-          status.status = 'unavailable';
+          if (status.status !== 'ok') status.status = 'unavailable';
           sourceStats[collection.source].unavailable += 1;
         } else {
           status.status = 'error';
@@ -951,6 +1030,7 @@ export async function runQuerySuggestionsModule(
 
       enrichmentStore.persistParentAtomic(
         enrichmentId,
+        keyword.keywordIdx,
         keyword.normalizedKeyword,
         market,
         hl,
@@ -1001,6 +1081,7 @@ export function buildQueryResultFromStore(
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
     for (const occ of saved.occurrences) {
       occurrences.push({
+        parentKeywordIdx: occ.parentKeywordIdx,
         parentKeyword: occ.parentKeyword,
         normalizedParent: occ.normalizedParent,
         source: occ.source as QuerySuggestionSource,
@@ -1015,7 +1096,7 @@ export function buildQueryResultFromStore(
 
   const bySource = new Map<QuerySuggestionSource, QuerySuggestionPerSourceStatus>();
   for (const source of config.sources) {
-    bySource.set(source, { source, status: 'empty', collected: 0, error: null });
+    bySource.set(source, { source, status: 'unavailable', collected: 0, error: null });
   }
   const sourceStats = emptySourceStats();
 
@@ -1025,19 +1106,32 @@ export function buildQueryResultFromStore(
     const status = bySource.get(source);
     if (!status) continue;
     if (record.status === 'ok') {
-      status.status = 'ok';
       sourceStats[source].ok += 1;
     } else if (record.status === 'empty') {
-      if (status.status !== 'ok') status.status = 'empty';
       sourceStats[source].empty += 1;
     } else if (record.status === 'unavailable') {
-      if (status.status !== 'ok') status.status = 'unavailable';
       sourceStats[source].unavailable += 1;
     } else {
-      status.status = 'error';
-      status.error = record.error;
+      status.error ??= record.error;
       sourceStats[source].error += 1;
     }
+  }
+
+  // Aggregate across parent keywords by evidence severity, not row order.
+  // Any failed/incomplete parent keeps the source visibly incomplete instead
+  // of allowing a later empty/ok row to make coverage look complete.
+  for (const [source, status] of bySource) {
+    const stats = sourceStats[source];
+    status.status = stats.error > 0
+      ? 'error'
+      : stats.unavailable > 0
+        ? 'unavailable'
+        : stats.ok > 0
+          ? 'ok'
+          : stats.empty > 0
+            ? 'empty'
+            : 'unavailable';
+    if (status.status !== 'error') status.error = null;
   }
 
   for (const saved of enrichmentStore.loadQuerySuggestions(enrichmentId)) {
@@ -1057,7 +1151,7 @@ export function buildQueryResultFromStore(
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
   const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
   const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
-  const inputCount = new Set(sourceRecords.map((r) => r.normalizedParent)).size;
+  const inputCount = countPersistedQueryParents(sourceRecords);
 
   return {
     enrichmentId,

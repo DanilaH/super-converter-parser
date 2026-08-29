@@ -3,7 +3,7 @@ import { registrableDomain } from '../domains/normalize.js';
 
 // Cache and resume identity depend on this value. Bump it whenever Google SERP
 // parsing or derived SERP semantics (such as registrable-domain extraction) change.
-export const GOOGLE_PARSER_VERSION = '1.3.0';
+export const GOOGLE_PARSER_VERSION = '1.4.0';
 
 export const GOOGLE_SELECTORS = {
   organicResults: '#search a[href^="http"]:has(h3)',

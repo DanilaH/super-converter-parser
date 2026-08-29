@@ -27,6 +27,17 @@ type EnrichmentIndexRecord = {
   enrichmentDirectory: string;
 };
 
+const MANIFEST_GATED_ENRICHMENT_ARTIFACTS = new Set([
+  'cohort-history.csv',
+  'cohort-history-summary.csv',
+  'cohort-history.json',
+  'traffic-evidence.csv',
+  'traffic-velocity.csv',
+  'traffic-evidence.json',
+  'finalist-evidence-matrix.csv',
+  'finalist-evidence-matrix.json',
+]);
+
 export function resolveOutputRoot(
   cliValue: string | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -263,16 +274,35 @@ async function collectArchiveFiles(root: string): Promise<Array<{ absolutePath: 
   const output: Array<{ absolutePath: string; relativePath: string }> = [];
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
+    const publishedArtifacts = await readPublishedArtifacts(directory);
     for (const entry of entries) {
       const absolutePath = join(directory, entry.name);
       const relativePath = relative(root, absolutePath);
       if (shouldExclude(relativePath, entry.isDirectory())) continue;
       if (entry.isDirectory()) await visit(absolutePath);
-      else if (entry.isFile()) output.push({ absolutePath, relativePath });
+      else if (entry.isFile()) {
+        if (
+          MANIFEST_GATED_ENRICHMENT_ARTIFACTS.has(entry.name)
+          && !publishedArtifacts.has(entry.name)
+        ) continue;
+        output.push({ absolutePath, relativePath });
+      }
     }
   };
   await visit(root);
   return output.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+async function readPublishedArtifacts(directory: string): Promise<Set<string>> {
+  try {
+    const parsed = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as unknown;
+    if (!isRecord(parsed) || !Array.isArray(parsed.artifacts)) return new Set();
+    const names = parsed.artifacts.filter((value): value is string => typeof value === 'string');
+    return new Set(names);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return new Set();
+    return new Set();
+  }
 }
 
 function shouldExclude(relativePath: string, directory: boolean): boolean {
@@ -285,6 +315,10 @@ function shouldExclude(relativePath: string, directory: boolean): boolean {
     || name.endsWith('-shm')
     || name === '.env'
     || /secret/i.test(name);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function buildZip(entries: Array<{ name: string; data: Buffer }>): Buffer {

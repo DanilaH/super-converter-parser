@@ -15,8 +15,17 @@ import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsof
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
+import {
+  applyFailedKeywordRetryPreparation,
+  prepareFailedKeywordRetry,
+  type FailedKeywordRetryPreparation,
+} from '../runs/retryFailed.js';
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
+import {
+  loadOpenKeywordRetryIndexes,
+  reconcileCompletedKeywordRetries,
+} from '../db/retryAttempts.js';
 import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../runs/run.js';
 import { allocateResearchLocation, archiveResearchDirectory, resolveOutputRoot, resolveRunLocation, writeRunIndex } from '../outputs/researchLayout.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
@@ -38,6 +47,7 @@ type CliOptions = {
   seedsPath: string | null;
   microsoftPath: string | null;
   resumeRunId: string | null;
+  retryFailed: boolean;
   forceRefresh: boolean;
   refreshKeywords: string[];
   expand: boolean;
@@ -92,6 +102,7 @@ function parseArgs(argv: string[]): CliOptions {
     seedsPath: null,
     microsoftPath: null,
     resumeRunId: null,
+    retryFailed: false,
     forceRefresh: false,
     refreshKeywords: [],
     expand: false,
@@ -111,6 +122,8 @@ function parseArgs(argv: string[]): CliOptions {
     } else if (arg === '--resume') {
       options.resumeRunId = optionValue(argv, index, '--resume');
       index += 1;
+    } else if (arg === '--retry-failed') {
+      options.retryFailed = true;
     } else if (arg === '--force-refresh') {
       options.forceRefresh = true;
     } else if (arg === '--expand' || arg === '--expand-surfer') {
@@ -145,11 +158,13 @@ function printUsage(): void {
   console.log('  npm run research -- --seeds <path> --refresh-keyword "json diff"');
   console.log('  npm run research -- --microsoft <path>');
   console.log('  npm run research -- --resume <run-id>');
+  console.log('  npm run research -- --resume <run-id> --retry-failed');
   console.log('');
   console.log('Options:');
   console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
   console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
+  console.log('  --retry-failed       With --resume, reopen only failed keyword checkpoints and preserve their attempt history.');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --expand-surfer      Alias for --expand (clarity flag).');
@@ -299,6 +314,10 @@ export async function runCli(
     console.error('--seeds and --microsoft are mutually exclusive.');
     return EXIT_INVALID_INPUT;
   }
+  if (options.retryFailed && !options.resumeRunId) {
+    console.error('--retry-failed requires --resume <run-id>.');
+    return EXIT_INVALID_INPUT;
+  }
   if (!options.seedsPath && !options.microsoftPath && !options.resumeRunId) {
     printUsage();
     return EXIT_INVALID_INPUT;
@@ -375,7 +394,21 @@ export async function runCli(
 
       const storePath = join(runDirectory, 'run.sqlite');
       store = RunStore.open(storePath);
-      const run = validateResume(store, runId);
+
+      // Recover the narrow crash window where the normal keyword checkpoint was
+      // already committed but its retry journal row was not closed yet. This is
+      // schema-neutral for runs that have never used --retry-failed.
+      const recoveredRetryIdxs = reconcileCompletedKeywordRetries(store, runId);
+      let retryPreparation: FailedKeywordRetryPreparation | null = null;
+      if (options.retryFailed) {
+        retryPreparation = prepareFailedKeywordRetry(store, runId);
+      }
+
+      // A new explicit repair may start from completed_with_errors, which normal
+      // resume correctly rejects. Use its read-only preparation snapshot only to
+      // validate config/input/environment; after preflight the applied repair is
+      // paused and goes through the ordinary validateResume contract again.
+      const run = retryPreparation?.run ?? validateResume(store, runId);
       runConfig = effectiveConfigForResume(config, run.configSnapshot, runId);
       input = run.input;
       refreshKeywords = validateRefreshKeywords(
@@ -388,11 +421,29 @@ export async function runCli(
       console.log('Utility Research Runner');
       console.log('');
       console.log(`[resume] ${runId} (state: ${run.state}, parser ${run.parserVersions.surfer}/${run.parserVersions.google})`);
+      if (recoveredRetryIdxs.length > 0) {
+        console.log(`  ✓ recovered ${recoveredRetryIdxs.length} completed retry journal checkpoint(s)`);
+      }
       await ensureWritableDirectory(runDirectory);
       console.log(`  ✓ ${runDirectory} writable`);
       await ensureWritableDirectory(debugRoot);
       console.log(`  ✓ ${debugRoot} writable`);
       console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
+
+      if (retryPreparation) {
+        const reopenedRetryIdxs = applyFailedKeywordRetryPreparation(store, retryPreparation);
+        if (reopenedRetryIdxs.length > 0) {
+          // The applied run is now paused and must satisfy the same parser/state
+          // contract as every ordinary resume before browser work begins.
+          validateResume(store, runId);
+          console.log(`  ↻ reopened ${reopenedRetryIdxs.length} failed keyword checkpoint(s)`);
+        } else if (retryPreparation.openKeywordIdxs.length > 0) {
+          // Re-entering --retry-failed while a repair is already open is an
+          // idempotent continuation, not a new retry generation.
+          validateResume(store, runId);
+          console.log(`  ↻ continuing ${retryPreparation.openKeywordIdxs.length} open retry attempt(s)`);
+        }
+      }
       console.log('');
     } else {
       mode = 'fresh';
@@ -500,6 +551,48 @@ export async function runCli(
     );
     const refreshSet = new Set(effective.refreshKeywords);
 
+    // An open repair attempt is its own durable reason to bypass a stale failed
+    // keyword cache entry. Keep this transient: do not persist it into the run's
+    // ordinary refresh_keywords, or a one-time repair would become permanent.
+    const retryOpenIdxs = mode === 'resume' ? loadOpenKeywordRetryIndexes(store, runId) : [];
+    const retryOpenIdxSet = new Set(retryOpenIdxs);
+    const retryRefreshKeywords = mode === 'resume'
+      ? store
+          .loadKeywords(runId)
+          .filter((item) => retryOpenIdxSet.has(item.idx))
+          .map((item) => item.normalizedKeyword)
+      : [];
+
+    // Related-keyword observation is an independent fact. If an open primary
+    // repair already has a successful/truthful-empty related checkpoint in this
+    // run, do not let the forced primary browser visit overwrite that evidence
+    // (or its cache entry) with a later related error/empty observation.
+    const preservedRelatedRepairIdxs = new Set(
+      mode === 'resume'
+        ? store
+            .loadRelatedKeywords(runId)
+            .filter(
+              (row) =>
+                retryOpenIdxSet.has(row.parentIdx) &&
+                (row.status === 'ok' || row.status === 'empty'),
+            )
+            .map((row) => row.parentIdx)
+        : [],
+    );
+    const preservedRelatedRepairKeywordIds = new Set(
+      mode === 'resume'
+        ? store
+            .loadKeywords(runId)
+            .filter((item) => preservedRelatedRepairIdxs.has(item.idx))
+            .map((item) => item.id)
+        : [],
+    );
+
+    const planningRefreshSet = new Set([...refreshSet, ...retryRefreshKeywords]);
+    if (retryOpenIdxs.length > 0) {
+      console.log(`  ↻ ${retryOpenIdxs.length} retry attempt(s) in progress; stale keyword cache bypassed`);
+    }
+
     // Expansion has an independent cache decision. A keyword-cache hit still
     // needs Chrome when its root keyword has no fresh successful/empty related
     // lookup. Related children are intentionally excluded (depth is fixed at 1).
@@ -518,7 +611,7 @@ export async function runCli(
 
     const plan = planRunCache(
       pendingNormalized,
-      { identity, forceRefresh: effective.forceRefresh, refreshKeywords: refreshSet },
+      { identity, forceRefresh: effective.forceRefresh, refreshKeywords: planningRefreshSet },
       cacheStore,
       Date.now(),
       {
@@ -586,9 +679,23 @@ export async function runCli(
       runDirectory,
       debugRoot,
       // collect only runs when there are pending keywords, which implies the
-      // browser was connected and context assigned.
-      collect: (record, debugRootForKeyword) =>
-        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword, signal),
+      // browser was connected and context assigned. Primary repair deliberately
+      // suppresses a newly observed related outcome when the same parent already
+      // has successful independent related evidence in the durable run.
+      collect: async (record, debugRootForKeyword) => {
+        const result = await deps.collect(
+          context as BrowserContext,
+          runConfig,
+          record,
+          debugRootForKeyword,
+          signal,
+        );
+        if (!preservedRelatedRepairKeywordIds.has(record.id)) return result;
+        return {
+          ...result,
+          related: { status: 'not_attempted', error: null, rows: [] },
+        };
+      },
       ...(relatedCollector
         ? {
             collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
@@ -603,9 +710,34 @@ export async function runCli(
         : {}),
       hooks,
       signal,
+      // Reconcile retry journal/domain state inside the engine's existing
+      // publication boundary. The engine publishes terminal artifacts before it
+      // flips the run to a terminal state; doing reconciliation here preserves
+      // that atomic-publication invariant and avoids an unsafe post-terminal
+      // rewrite from the CLI.
+      publishSnapshots: async (
+        snapshotStore,
+        snapshotRunId,
+        snapshotDirectory,
+        snapshotState,
+        snapshotAhrefs,
+        snapshotScoring,
+      ) => {
+        reconcileCompletedKeywordRetries(snapshotStore, snapshotRunId);
+        await writeSnapshots(
+          snapshotStore,
+          snapshotRunId,
+          snapshotDirectory,
+          snapshotState,
+          snapshotAhrefs,
+          snapshotScoring,
+        );
+      },
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
+        // Persisted refresh semantics stay unchanged; the retry bypass is
+        // already frozen into plan.resolutions for this invocation.
         refreshKeywords: refreshSet,
         resolutions: plan.resolutions,
         relatedResolutions: plan.relatedResolutions,

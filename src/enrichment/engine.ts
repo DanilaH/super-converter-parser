@@ -8,7 +8,17 @@ import type { SerpResult } from '../google/serp.js';
 import { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
-import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
+import {
+  clusterKeywords,
+  CLUSTERING_ALGORITHM_VERSION,
+  DEFAULT_CLUSTER_MIN_SHARED_URLS,
+  DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  type ClusteringConfig,
+  type ClusteringInput,
+  type ClusteringResult,
+} from './clustering.js';
+import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
+import { CLUSTER_URL_IDENTITY_VERSION } from './urlIdentity.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson, writePagesCsv, writePagesJson, writeSiteStructureCsv, writeSiteStructureJson } from './outputs.js';
 import {
   runDomainAgeModule,
@@ -147,20 +157,29 @@ function buildClusteringInputs(
 ): ClusteringInput[] {
   const inputs: ClusteringInput[] = [];
   for (const kw of keywords) {
-    const rows = serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [];
-    const domains = [...new Set(rows
-      .filter((r) => r.resultType === 'organic')
-      .sort((a, b) => a.position - b.position)
-      .map((r) => r.registrableDomain)
-      .filter((d) => d !== ''))];
+    const organicRows = (serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [])
+      .filter((row) => row.resultType === 'organic')
+      .sort((a, b) => a.position - b.position);
     inputs.push({
+      keywordIdx: kw.keywordIdx,
       keyword: kw.keyword,
       normalizedKeyword: kw.normalizedKeyword,
       volume: kw.volume,
-      domains,
+      domains: organicRows.map((row) => row.registrableDomain ?? ''),
+      urls: organicRows.map((row) => row.url),
     });
   }
   return inputs;
+}
+
+function compareClusterIds(a: string, b: string): number {
+  const aMatch = /^cluster-(\d+)$/.exec(a);
+  const bMatch = /^cluster-(\d+)$/.exec(b);
+  if (aMatch && bMatch) {
+    const numeric = Number(aMatch[1]) - Number(bMatch[1]);
+    if (numeric !== 0) return numeric;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // Collects the bounded, deduplicated set of registrable domains from a source run's
@@ -266,8 +285,12 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       cache = EnrichmentCache.open(cacheConfig);
     }
 
+    const clusteringConfig = modules.includes('clusters')
+      ? (config.clusters ?? defaultClusteringConfig())
+      : config.clusters;
     const persistedConfig: EnrichmentModuleConfig = {
       ...config,
+      ...(clusteringConfig ? { clusters: clusteringConfig } : {}),
       http: httpConfig,
       pages: pagesConfig,
       site_structure: siteStructureConfig,
@@ -326,15 +349,22 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       );
       if (existingItem?.status === 'completed') {
         logger('Skipping completed clusters module');
-        const clusters = enrichmentStore.loadKeywordClusters(enrichmentId);
-        const pairs = enrichmentStore.loadEnrichmentPairs(enrichmentId);
-        const exclusions = enrichmentStore.loadEnrichmentExclusions(enrichmentId);
+        const clusters = enrichmentStore
+          .loadKeywordClusters(enrichmentId)
+          .sort((a, b) => compareClusterIds(a.clusterId, b.clusterId));
+        const { pairs, exclusions } = loadPersistedClusteringRelations(
+          enrichmentStore,
+          enrichmentId,
+        );
         result.clusters = {
           clusters,
           pairs,
           exclusions: exclusions as ClusteringResult['exclusions'],
-          config: config.clusters ?? defaultClusteringConfig(),
-          algorithmVersion: clusters[0]?.algorithmVersion ?? CLUSTERING_ALGORITHM_VERSION,
+          config: clusteringConfig ?? defaultClusteringConfig(),
+          algorithmVersion:
+            clusters[0]?.algorithmVersion
+            ?? clusteringConfig?.algorithmVersion
+            ?? CLUSTERING_ALGORITHM_VERSION,
           inputCount: clusters.reduce((sum, c) => sum + c.memberCount, 0) + exclusions.length,
           excludedCount: exclusions.length,
           edgeCount: pairs.filter((p) => p.isEdge).length,
@@ -344,7 +374,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           enrichmentId,
           sourceConn.store,
           sourceRunId,
-          config.clusters ?? defaultClusteringConfig(),
+          clusteringConfig ?? defaultClusteringConfig(),
           enrichmentStore,
           shortlist,
           logger,
@@ -802,6 +832,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         perSourceStatus: queryResult.perSourceStatus,
         sourceStats: queryResult.sourceStats,
         sourceRecords: sourceRecords.map((r) => ({
+          parentKeywordIdx: r.parentKeywordIdx,
           normalizedParent: r.normalizedParent,
           source: r.source,
           status: r.status,
@@ -1015,7 +1046,7 @@ async function runClustersModule(
 
   checkCancellation(signal);
 
-  const withSerp = inputs.filter((i) => i.domains.length > 0).length;
+  const withSerp = inputs.filter((input) => input.domains.some((domain) => domain !== '')).length;
   logger(`Clustering ${inputs.length} keywords (${withSerp} with SERP, ${inputs.length - withSerp} excluded)`);
 
   const result = clusterKeywords(inputs, config);
@@ -1026,6 +1057,7 @@ async function runClustersModule(
   result.excludedCount += keywordsWithoutSerp.length;
   for (const kw of keywordsWithoutSerp) {
     result.exclusions.push({
+      keywordIdx: kw.keywordIdx,
       keyword: kw.keyword,
       normalizedKeyword: kw.normalizedKeyword,
       reason: 'no_serp',
@@ -1035,16 +1067,32 @@ async function runClustersModule(
 
   enrichmentStore.saveKeywordClusters(
     enrichmentId,
-    result.clusters.map((c) => ({
-      clusterId: c.clusterId,
-      canonicalKeyword: c.canonicalKeyword,
-      members: c.members,
-      representativeDomains: c.representativeDomains,
-      medianVolume: c.medianVolume,
-      averageVolume: c.averageVolume,
-      algorithmVersion: result.algorithmVersion,
-      config: result.config,
-    })),
+    result.clusters.map((c) => {
+      if (c.canonicalKeywordIdx === null) {
+        throw new Error(`Fresh cluster ${c.clusterId} is missing canonical source keyword identity.`);
+      }
+      if (c.cohesion === undefined || c.cohesion === null) {
+        throw new Error(`Fresh cluster ${c.clusterId} is missing clustering-v2 cohesion evidence.`);
+      }
+      const members = c.members.map((member) => {
+        if (member.keywordIdx === null) {
+          throw new Error(`Fresh cluster ${c.clusterId} contains a member without source keyword identity.`);
+        }
+        return { ...member, keywordIdx: member.keywordIdx };
+      });
+      return {
+        clusterId: c.clusterId,
+        canonicalKeywordIdx: c.canonicalKeywordIdx,
+        canonicalKeyword: c.canonicalKeyword,
+        members,
+        representativeDomains: c.representativeDomains,
+        medianVolume: c.medianVolume,
+        averageVolume: c.averageVolume,
+        cohesion: c.cohesion,
+        algorithmVersion: result.algorithmVersion,
+        config: result.config,
+      };
+    }),
   );
 
   enrichmentStore.saveEnrichmentPairs(enrichmentId, result.pairs);
@@ -1886,8 +1934,15 @@ function rebuildSiteStructureFromTargets(enrichmentStore: RunStore, enrichmentId
 function defaultClusteringConfig(): ClusteringConfig {
   return {
     topN: 10,
-    edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+    edgeRule: {
+      minSharedDomains: 3,
+      minJaccard: 0.3,
+      minSharedUrls: DEFAULT_CLUSTER_MIN_SHARED_URLS,
+      minUrlJaccard: DEFAULT_CLUSTER_MIN_URL_JACCARD,
+    },
     algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+    urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+    groupingRule: 'complete_link',
   };
 }
 

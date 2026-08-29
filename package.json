@@ -8,6 +8,11 @@
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
     "enrich": "tsx src/cli/enrich.ts",
+    "representatives": "tsx src/cli/representatives.ts",
+    "entrant-cohort": "tsx src/cli/entrantCohort.ts",
+    "cohort-history": "tsx src/cli/cohortHistory.ts",
+    "traffic-evidence": "tsx src/cli/trafficEvidence.ts",
+    "finalist-evidence": "tsx src/cli/finalistEvidence.ts",
     "chrome:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/research-chrome.ps1 -Mode setup",
     "chrome:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/research-chrome.ps1 -Mode start",
     "test": "node scripts/run-tests.mjs",
@@ -20,7 +25,7 @@
     "better-sqlite3": "^12.11.1",
     "csv-parse": "^7.0.2",
     "playwright-core": "^1.62.1",
-    "tldts": "^7.4.8",
+    "tldts": "^7.4.11",
     "undici": "^6.28.0"
   },
   "devDependencies": {

@@ -23,6 +23,22 @@ export type RunState =
 
 export type KeywordStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
 
+// Source-specific Google SERP truth. `unknown` exists only for historical rows
+// whose old persisted shape cannot prove whether a zero-row SERP was genuinely
+// empty or unavailable. New collection code always persists an explicit state.
+export type SerpObservationStatus =
+  | 'ok'
+  | 'empty'
+  | 'fetch_error'
+  | 'parse_error'
+  | 'not_fetched'
+  | 'unknown';
+
+export type SerpObservationError = {
+  code: ResearchErrorCode;
+  message: string;
+};
+
 export const TERMINAL_KEYWORD_STATUSES: ReadonlySet<KeywordStatus> = new Set([
   'completed',
   'partial',
@@ -122,6 +138,11 @@ export type KeywordRecord = {
     pageUrl: string;
     detectedLocation: string | null;
     geoWarning: boolean;
+    // Optional only for compatibility with pre-V2.1 persisted JSON/test
+    // fixtures. Fresh collection always writes both fields. Missing status is
+    // interpreted conservatively by the SERP-evidence resolver.
+    serpStatus?: SerpObservationStatus;
+    serpError?: SerpObservationError | null;
   } | null;
   status: KeywordStatus;
   error: { code: ResearchErrorCode; message: string } | null;
