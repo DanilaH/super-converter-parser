@@ -1,19 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clusterKeywords, type ClusteringInput } from './clustering.js';
+import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringInput } from './clustering.js';
 import type { ClusteringConfig } from './types.js';
 
 const CONFIG: ClusteringConfig = {
   topN: 10,
-  edgeRule: { minSharedDomains: 1, minJaccard: 0 },
-  algorithmVersion: '1.0.0',
+  edgeRule: {
+    minSharedDomains: 1,
+    minJaccard: 0,
+    minSharedUrls: 1,
+    minUrlJaccard: 0,
+  },
+  algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
 };
 
 test('fresh pair relations use the same idx ordering as SQLite resume reads', () => {
   const inputs: ClusteringInput[] = [
-    { keywordIdx: 30, keyword: 'Alpha', normalizedKeyword: 'alpha', volume: 300, domains: ['shared.com'] },
-    { keywordIdx: 10, keyword: 'Zulu', normalizedKeyword: 'zulu', volume: 100, domains: ['shared.com'] },
-    { keywordIdx: 20, keyword: 'Mike', normalizedKeyword: 'mike', volume: 200, domains: ['shared.com'] },
+    { keywordIdx: 30, keyword: 'Alpha', normalizedKeyword: 'alpha', volume: 300, domains: ['shared.com'], urls: ['https://shared.com/tool'] },
+    { keywordIdx: 10, keyword: 'Zulu', normalizedKeyword: 'zulu', volume: 100, domains: ['shared.com'], urls: ['https://shared.com/tool'] },
+    { keywordIdx: 20, keyword: 'Mike', normalizedKeyword: 'mike', volume: 200, domains: ['shared.com'], urls: ['https://shared.com/tool'] },
   ];
 
   const result = clusterKeywords(inputs, CONFIG);
@@ -30,9 +35,9 @@ test('fresh pair relations use the same idx ordering as SQLite resume reads', ()
 
 test('fresh exclusions use source idx ordering like SQLite resume reads', () => {
   const inputs: ClusteringInput[] = [
-    { keywordIdx: 30, keyword: 'Alpha', normalizedKeyword: 'alpha', volume: 300, domains: [] },
-    { keywordIdx: 10, keyword: 'Zulu', normalizedKeyword: 'zulu', volume: 100, domains: [] },
-    { keywordIdx: 20, keyword: 'Mike', normalizedKeyword: 'mike', volume: 200, domains: [] },
+    { keywordIdx: 30, keyword: 'Alpha', normalizedKeyword: 'alpha', volume: 300, domains: [], urls: [] },
+    { keywordIdx: 10, keyword: 'Zulu', normalizedKeyword: 'zulu', volume: 100, domains: [], urls: [] },
+    { keywordIdx: 20, keyword: 'Mike', normalizedKeyword: 'mike', volume: 200, domains: [], urls: [] },
   ];
 
   const result = clusterKeywords(inputs, CONFIG);
