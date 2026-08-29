@@ -234,17 +234,38 @@ test('failed repair closes attempt and the next explicit repair gets a monotonic
   store.close();
 });
 
-test('stale repair plan rolls back without creating a partial retry generation', () => {
+test('stale multi-keyword repair plan rolls back the whole retry generation', () => {
   const { store, runId } = setup();
-  seedCompletedAndFailed(store, runId);
-  const failed = store.loadKeyword(runId, 1)!;
-  store.updateKeyword(runId, { ...failed, status: 'completed', error: null });
+  const keyword0 = store.loadKeyword(runId, 0)!;
+  const keyword1 = store.loadKeyword(runId, 1)!;
+  store.updateKeyword(runId, {
+    ...keyword0,
+    status: 'failed',
+    error: { code: 'GOOGLE_UNAVAILABLE', message: 'first failure' },
+    collectedAt: '2026-08-28T10:00:00.000Z',
+  });
+  store.updateKeyword(runId, {
+    ...keyword1,
+    status: 'completed',
+    error: null,
+    collectedAt: '2026-08-28T10:01:00.000Z',
+  });
+  store.setRunState(runId, 'completed_with_errors');
 
   assert.throws(
-    () => applyFailedKeywordRetries(store, runId, [1], '2026-08-29T09:00:00.000Z'),
+    () => applyFailedKeywordRetries(store, runId, [0, 1], '2026-08-29T09:00:00.000Z'),
     (error: unknown) => error instanceof Error && error.message.includes('stale repair plan'),
   );
+  assert.equal(store.loadRun(runId)?.state, 'completed_with_errors');
+  assert.equal(store.loadKeyword(runId, 0)?.status, 'failed', 'first reset must roll back');
+  assert.equal(store.loadKeyword(runId, 0)?.error?.message, 'first failure');
   assert.equal(store.loadKeyword(runId, 1)?.status, 'completed');
   assert.equal(loadKeywordRetryAttempts(store, runId).length, 0);
+  const db = (store as unknown as { db: Database.Database }).db;
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'keyword_retry_schema'").get(),
+    undefined,
+    'schema creation must roll back with the failed generation',
+  );
   store.close();
 });
