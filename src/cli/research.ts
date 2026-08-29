@@ -15,7 +15,11 @@ import { buildMicrosoftKeywords, type MicrosoftKeyword } from '../input/microsof
 import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { executeRun, validateResume, type EngineHooks } from '../runs/engine.js';
-import { prepareFailedKeywordRetry } from '../runs/retryFailed.js';
+import {
+  applyFailedKeywordRetryPreparation,
+  prepareFailedKeywordRetry,
+  type FailedKeywordRetryPreparation,
+} from '../runs/retryFailed.js';
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { RunStore, isTerminalKeywordStatus } from '../db/store.js';
 import {
@@ -197,7 +201,7 @@ function printUsage(): void {
   console.log('  CACHE_TTL_COMPLETED_MS       Cache TTL for completed keywords in ms (default 7d)');
   console.log('  CACHE_TTL_PARTIAL_MS         Cache TTL for partial keywords in ms (default 6h)');
   console.log('  CACHE_TTL_FAILED_MS          Cache TTL for failed keywords in ms (default 1h)');
-  console.log('  CACHE_TTL_RELATED_MS         Cache TTL for related keywords in ms (default 7d)');
+  console.log('  CACHE_TTL_RELATED_MS         Cache TTL for related keywords (ok and empty expansions)');
   console.log('  CACHE_TTL_RELATED_ERROR_MS   Cache TTL for failed related-keyword expansions in ms (default 1h)');
   console.log('  CACHE_TTL_DOMAIN_OK_MS       Cache TTL for successful DR lookups in ms (default 30d)');
   console.log('  CACHE_TTL_DOMAIN_NOT_FOUND_MS Cache TTL for not-found DR lookups in ms (default 30d)');
@@ -395,12 +399,16 @@ export async function runCli(
       // already committed but its retry journal row was not closed yet. This is
       // schema-neutral for runs that have never used --retry-failed.
       const recoveredRetryIdxs = reconcileCompletedKeywordRetries(store, runId);
-      let reopenedRetryIdxs: number[] = [];
+      let retryPreparation: FailedKeywordRetryPreparation | null = null;
       if (options.retryFailed) {
-        reopenedRetryIdxs = prepareFailedKeywordRetry(store, runId).reopenedKeywordIdxs;
+        retryPreparation = prepareFailedKeywordRetry(store, runId);
       }
 
-      const run = validateResume(store, runId);
+      // A new explicit repair may start from completed_with_errors, which normal
+      // resume correctly rejects. Use its read-only preparation snapshot only to
+      // validate config/input/environment; after preflight the applied repair is
+      // paused and goes through the ordinary validateResume contract again.
+      const run = retryPreparation?.run ?? validateResume(store, runId);
       runConfig = effectiveConfigForResume(config, run.configSnapshot, runId);
       input = run.input;
       refreshKeywords = validateRefreshKeywords(
@@ -416,14 +424,26 @@ export async function runCli(
       if (recoveredRetryIdxs.length > 0) {
         console.log(`  ✓ recovered ${recoveredRetryIdxs.length} completed retry journal checkpoint(s)`);
       }
-      if (reopenedRetryIdxs.length > 0) {
-        console.log(`  ↻ reopened ${reopenedRetryIdxs.length} failed keyword checkpoint(s)`);
-      }
       await ensureWritableDirectory(runDirectory);
       console.log(`  ✓ ${runDirectory} writable`);
       await ensureWritableDirectory(debugRoot);
       console.log(`  ✓ ${debugRoot} writable`);
       console.log(`  ✓ cache ${runConfig.cache.path} opened (schema v${cacheStore.version})`);
+
+      if (retryPreparation) {
+        const reopenedRetryIdxs = applyFailedKeywordRetryPreparation(store, retryPreparation);
+        if (reopenedRetryIdxs.length > 0) {
+          // The applied run is now paused and must satisfy the same parser/state
+          // contract as every ordinary resume before browser work begins.
+          validateResume(store, runId);
+          console.log(`  ↻ reopened ${reopenedRetryIdxs.length} failed keyword checkpoint(s)`);
+        } else if (retryPreparation.openKeywordIdxs.length > 0) {
+          // Re-entering --retry-failed while a repair is already open is an
+          // idempotent continuation, not a new retry generation.
+          validateResume(store, runId);
+          console.log(`  ↻ continuing ${retryPreparation.openKeywordIdxs.length} open retry attempt(s)`);
+        }
+      }
       console.log('');
     } else {
       mode = 'fresh';
