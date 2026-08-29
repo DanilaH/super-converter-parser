@@ -27,10 +27,11 @@ function assertRetryParserCompatibility(run: StoredRun): void {
 }
 
 /**
- * Explicitly reopens only failed keyword checkpoints. The retry journal snapshots
- * every failed checkpoint before mutation and leaves an open attempt marker that
- * survives process interruption. Ordinary resume can continue that repair
- * without needing --retry-failed again.
+ * Explicitly prepares only failed keyword checkpoints for repair. New repair
+ * state is staged transactionally; the CLI publishes it only after resume
+ * config/cache/output preflight succeeds. Closing the store first rolls the
+ * preparation back. An already-open repair remains ordinary durable resume
+ * state and does not need --retry-failed again.
  */
 export function prepareFailedKeywordRetry(
   store: RunStore,
@@ -76,9 +77,11 @@ export function prepareFailedKeywordRetry(
     throw new ResearchError('DB_ERROR', `Run "${runId}" disappeared while preparing failed-keyword repair.`);
   }
 
+  // Do not call loadOpenKeywordRetryIndexes() here: that read is the publication
+  // point after CLI preflight and would commit the staged transaction too early.
   return {
     run: updatedRun,
     reopenedKeywordIdxs,
-    openKeywordIdxs: loadOpenKeywordRetryIndexes(store, runId),
+    openKeywordIdxs: reopenedKeywordIdxs,
   };
 }
