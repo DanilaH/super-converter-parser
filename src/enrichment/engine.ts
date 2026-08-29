@@ -148,18 +148,16 @@ function buildClusteringInputs(
 ): ClusteringInput[] {
   const inputs: ClusteringInput[] = [];
   for (const kw of keywords) {
-    const rows = serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [];
-    const domains = [...new Set(rows
-      .filter((r) => r.resultType === 'organic')
-      .sort((a, b) => a.position - b.position)
-      .map((r) => r.registrableDomain)
-      .filter((d) => d !== ''))];
+    const organicRows = (serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [])
+      .filter((row) => row.resultType === 'organic')
+      .sort((a, b) => a.position - b.position);
     inputs.push({
       keywordIdx: kw.keywordIdx,
       keyword: kw.keyword,
       normalizedKeyword: kw.normalizedKeyword,
       volume: kw.volume,
-      domains,
+      domains: organicRows.map((row) => row.registrableDomain ?? ''),
+      urls: organicRows.map((row) => row.url),
     });
   }
   return inputs;
@@ -1020,7 +1018,7 @@ async function runClustersModule(
 
   checkCancellation(signal);
 
-  const withSerp = inputs.filter((i) => i.domains.length > 0).length;
+  const withSerp = inputs.filter((input) => input.domains.some((domain) => domain !== '')).length;
   logger(`Clustering ${inputs.length} keywords (${withSerp} with SERP, ${inputs.length - withSerp} excluded)`);
 
   const result = clusterKeywords(inputs, config);
