@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import type { SerpResult } from '../google/serp.js';
 import { TERMINAL_KEYWORD_STATUSES, type RunState } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
@@ -152,6 +152,10 @@ function reconcileDomainsFromCurrentSerp(db: Database.Database, runId: string): 
        )`,
   ).run(runId);
 
+  const domains = db.prepare(
+    `SELECT domain, first_seen_keyword_idx
+     FROM domains WHERE run_id = ? ORDER BY domain ASC`,
+  ).all(runId) as Array<{ domain: string; first_seen_keyword_idx: number }>;
   const rows = db.prepare(
     `SELECT registrable_domain, keyword_idx, keyword, position
      FROM serp_rows
@@ -163,16 +167,23 @@ function reconcileDomainsFromCurrentSerp(db: Database.Database, runId: string): 
     keyword: string;
     position: number;
   }>;
+  const rowsByDomain = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const group = rowsByDomain.get(row.registrable_domain) ?? [];
+    group.push(row);
+    rowsByDomain.set(row.registrable_domain, group);
+  }
   const update = db.prepare(
     `UPDATE domains
      SET first_seen_keyword = ?, first_seen_keyword_idx = ?, first_seen_position = ?
      WHERE run_id = ? AND domain = ?`,
   );
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (seen.has(row.registrable_domain)) continue;
-    seen.add(row.registrable_domain);
-    update.run(row.keyword, row.keyword_idx, row.position, runId, row.registrable_domain);
+  for (const domain of domains) {
+    const candidates = rowsByDomain.get(domain.domain) ?? [];
+    if (candidates.length === 0) continue;
+    const preservedOwner = candidates.find((row) => row.keyword_idx === domain.first_seen_keyword_idx);
+    const owner = preservedOwner ?? candidates[0]!;
+    update.run(owner.keyword, owner.keyword_idx, owner.position, runId, domain.domain);
   }
 }
 
@@ -293,7 +304,10 @@ export function reconcileCompletedKeywordRetries(
       );
       closed.push(keywordIdx);
     }
-    if (closed.length > 0) reconcileDomainsFromCurrentSerp(db, runId);
+    // An interrupted commit can leave recordDomains() ahead of the keyword/SERP
+    // checkpoint. While any repair is open, rebuild aggregate membership from
+    // the current SERP source of truth even if no journal row closed this call.
+    reconcileDomainsFromCurrentSerp(db, runId);
   });
   tx();
   return closed;
