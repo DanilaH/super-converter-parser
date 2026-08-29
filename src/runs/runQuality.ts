@@ -261,11 +261,12 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     if (domain.dr !== null) ahrefsNumeric += 1;
   }
   const ahrefsResolved = ahrefsStatuses.ok + ahrefsStatuses.notFound + ahrefsStatuses.error;
-  // writeSnapshots can project old/resumed runs without a live Ahrefs tracker.
-  // Only expose the tracker-level summary verdict when its discovered-domain
-  // denominator agrees with the durable domain set; the per-domain projection
-  // above remains authoritative either way.
-  const ahrefsSummaryState = ahrefs && ahrefs.discovered === domains.length ? ahrefs.state : null;
+  // A tracker summary is meaningful only when there is an observed domain set
+  // and its denominator agrees with the durable current state. This prevents
+  // synthetic empty fallbacks during snapshot regeneration from masquerading
+  // as a provider verdict.
+  const ahrefsSummaryState =
+    domains.length > 0 && ahrefs && ahrefs.discovered === domains.length ? ahrefs.state : null;
 
   const detectedLocations = Array.from(
     new Set(
