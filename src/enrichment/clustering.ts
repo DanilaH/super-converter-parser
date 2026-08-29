@@ -75,9 +75,9 @@ export function clusterKeywords(
     || a.keywordIdx - b.keywordIdx;
   valid.sort(compareInputs);
   exclusions.sort((a, b) =>
-    a.normalizedKeyword.localeCompare(b.normalizedKeyword)
-    || a.keyword.localeCompare(b.keyword)
-    || (a.keywordIdx ?? Number.MAX_SAFE_INTEGER) - (b.keywordIdx ?? Number.MAX_SAFE_INTEGER),
+    (a.keywordIdx ?? Number.MAX_SAFE_INTEGER) - (b.keywordIdx ?? Number.MAX_SAFE_INTEGER)
+    || a.normalizedKeyword.localeCompare(b.normalizedKeyword)
+    || a.keyword.localeCompare(b.keyword),
   );
 
   const excludedCount = inputs.length - valid.length;
@@ -153,6 +153,11 @@ export function clusterKeywords(
       adjacency.get(b)!.add(a);
     }
   }
+
+  allPairs.sort((a, b) =>
+    (a.keywordAIdx ?? Number.MAX_SAFE_INTEGER) - (b.keywordAIdx ?? Number.MAX_SAFE_INTEGER)
+    || (a.keywordBIdx ?? Number.MAX_SAFE_INTEGER) - (b.keywordBIdx ?? Number.MAX_SAFE_INTEGER),
+  );
 
   const compareKeywordIds = (a: number, b: number): number =>
     compareInputs(keywordInputMap.get(a)!, keywordInputMap.get(b)!);
