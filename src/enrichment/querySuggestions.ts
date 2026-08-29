@@ -630,6 +630,19 @@ export async function runQuerySuggestionsModule(
     );
   }
 
+  const normalizedParentCounts = new Map<string, number>();
+  for (const keyword of selectedKeywords) {
+    normalizedParentCounts.set(
+      keyword.normalizedKeyword,
+      (normalizedParentCounts.get(keyword.normalizedKeyword) ?? 0) + 1,
+    );
+  }
+  const unambiguousLegacyParents = new Set(
+    [...normalizedParentCounts.entries()]
+      .filter(([, count]) => count === 1)
+      .map(([normalizedParent]) => normalizedParent),
+  );
+
   const completedItems = new Set(
     enrichmentStore
       .loadEnrichmentItems(enrichmentId)
@@ -748,7 +761,9 @@ export async function runQuerySuggestionsModule(
       const missingSources = config.sources.filter((source) => {
         const newItemId = `${source}:${keyword.keywordIdx}`;
         const legacyItemId = `${source}:${keyword.normalizedKeyword}`;
-        return !completedItems.has(newItemId) && !completedItems.has(legacyItemId);
+        const legacyCompleted = unambiguousLegacyParents.has(keyword.normalizedKeyword)
+          && completedItems.has(legacyItemId);
+        return !completedItems.has(newItemId) && !legacyCompleted;
       });
       if (missingSources.length === 0) continue;
 
