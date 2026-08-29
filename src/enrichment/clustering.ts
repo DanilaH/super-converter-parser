@@ -13,6 +13,7 @@ export type { ClusteringConfig } from './types.js';
 export const CLUSTERING_ALGORITHM_VERSION = '1.0.0';
 
 export type ClusteringInput = {
+  keywordIdx: number;
   keyword: string;
   normalizedKeyword: string;
   volume: number | null;
@@ -20,8 +21,8 @@ export type ClusteringInput = {
 };
 
 type PairEvidence = {
-  a: string;
-  b: string;
+  a: number;
+  b: number;
   evidence: ClusterEvidence;
 };
 
@@ -43,12 +44,21 @@ export function clusterKeywords(
   const topN = config.topN;
   const { minSharedDomains, minJaccard } = config.edgeRule;
 
+  const keywordInputMap = new Map<number, ClusteringInput>();
+  for (const input of inputs) {
+    if (keywordInputMap.has(input.keywordIdx)) {
+      throw new Error(`Duplicate source keyword index in clustering input: ${input.keywordIdx}`);
+    }
+    keywordInputMap.set(input.keywordIdx, input);
+  }
+
   const valid: ClusteringInput[] = [];
   const exclusions: ClusteredKeywordExclusion[] = [];
 
   for (const input of inputs) {
     if (input.domains.length === 0) {
       exclusions.push({
+        keywordIdx: input.keywordIdx,
         keyword: input.keyword,
         normalizedKeyword: input.normalizedKeyword,
         reason: 'no_domains',
@@ -59,33 +69,43 @@ export function clusterKeywords(
     valid.push(input);
   }
 
-  valid.sort((a, b) =>
-    a.normalizedKeyword.localeCompare(b.normalizedKeyword) || a.keyword.localeCompare(b.keyword),
+  const compareInputs = (a: ClusteringInput, b: ClusteringInput): number =>
+    a.normalizedKeyword.localeCompare(b.normalizedKeyword)
+    || a.keyword.localeCompare(b.keyword)
+    || a.keywordIdx - b.keywordIdx;
+  valid.sort(compareInputs);
+  exclusions.sort((a, b) =>
+    a.normalizedKeyword.localeCompare(b.normalizedKeyword)
+    || a.keyword.localeCompare(b.keyword)
+    || (a.keywordIdx ?? Number.MAX_SAFE_INTEGER) - (b.keywordIdx ?? Number.MAX_SAFE_INTEGER),
   );
-  exclusions.sort((a, b) => a.normalizedKeyword.localeCompare(b.normalizedKeyword));
 
   const excludedCount = inputs.length - valid.length;
 
-  const domainSets = new Map<string, Set<string>>();
+  // Source keyword idx is the graph identity. Text is retained only as
+  // user-facing/semantic metadata and never owns an edge/member relation.
+  const domainSets = new Map<number, Set<string>>();
   for (const input of valid) {
     const set = new Set<string>();
     for (let i = 0; i < Math.min(input.domains.length, topN); i += 1) {
       set.add(input.domains[i]!);
     }
-    domainSets.set(input.normalizedKeyword, set);
+    domainSets.set(input.keywordIdx, set);
   }
 
-  const keywords = valid.map((i) => i.normalizedKeyword);
+  const keywordIds = valid.map((input) => input.keywordIdx);
   const edges: PairEvidence[] = [];
-  const adjacency = new Map<string, Set<string>>();
+  const adjacency = new Map<number, Set<number>>();
   const allPairs: PairwiseComparison[] = [];
 
-  for (let i = 0; i < keywords.length; i += 1) {
-    const a = keywords[i]!;
+  for (let i = 0; i < keywordIds.length; i += 1) {
+    const a = keywordIds[i]!;
     const setA = domainSets.get(a)!;
-    for (let j = i + 1; j < keywords.length; j += 1) {
-      const b = keywords[j]!;
+    const inputA = keywordInputMap.get(a)!;
+    for (let j = i + 1; j < keywordIds.length; j += 1) {
+      const b = keywordIds[j]!;
       const setB = domainSets.get(b)!;
+      const inputB = keywordInputMap.get(b)!;
 
       let intersectionSize = 0;
       const shared: string[] = [];
@@ -102,8 +122,10 @@ export function clusterKeywords(
 
       shared.sort();
       allPairs.push({
-        keywordA: a,
-        keywordB: b,
+        keywordAIdx: a,
+        keywordBIdx: b,
+        keywordA: inputA.normalizedKeyword,
+        keywordB: inputB.normalizedKeyword,
         intersectionCount: intersectionSize,
         unionCount: unionSize,
         jaccard,
@@ -128,19 +150,22 @@ export function clusterKeywords(
     }
   }
 
-  const visited = new Set<string>();
-  const components: string[][] = [];
+  const compareKeywordIds = (a: number, b: number): number =>
+    compareInputs(keywordInputMap.get(a)!, keywordInputMap.get(b)!);
 
-  for (const keyword of keywords) {
-    if (visited.has(keyword)) continue;
-    if (!adjacency.has(keyword)) {
-      components.push([keyword]);
-      visited.add(keyword);
+  const visited = new Set<number>();
+  const components: number[][] = [];
+
+  for (const keywordIdx of keywordIds) {
+    if (visited.has(keywordIdx)) continue;
+    if (!adjacency.has(keywordIdx)) {
+      components.push([keywordIdx]);
+      visited.add(keywordIdx);
       continue;
     }
-    const component: string[] = [];
-    const queue: string[] = [keyword];
-    visited.add(keyword);
+    const component: number[] = [];
+    const queue: number[] = [keywordIdx];
+    visited.add(keywordIdx);
     while (queue.length > 0) {
       const current = queue.shift()!;
       component.push(current);
@@ -154,48 +179,43 @@ export function clusterKeywords(
         }
       }
     }
-    component.sort();
+    component.sort(compareKeywordIds);
     components.push(component);
-  }
-
-  const keywordInputMap = new Map<string, ClusteringInput>();
-  for (const input of valid) {
-    keywordInputMap.set(input.normalizedKeyword, input);
   }
 
   const pairJaccardMap = new Map<string, number>();
   for (const pair of allPairs) {
-    pairJaccardMap.set(pairKey(pair.keywordA, pair.keywordB), pair.jaccard);
+    if (pair.keywordAIdx === null || pair.keywordBIdx === null) continue;
+    pairJaccardMap.set(pairKey(pair.keywordAIdx, pair.keywordBIdx), pair.jaccard);
   }
 
   const rawClusters: Array<{
-    members: string[];
-    canonicalKeyword: string;
+    members: number[];
+    canonicalKeywordIdx: number;
     representativeDomains: string[];
     medianVolume: number | null;
     averageVolume: number | null;
   }> = [];
 
-  for (const memberKeys of components) {
-    if (!memberKeys) continue;
-    const memberInputs = memberKeys
-      .map((m) => keywordInputMap.get(m)!)
+  for (const memberIds of components) {
+    const memberInputs = memberIds
+      .map((id) => keywordInputMap.get(id)!)
       .filter(Boolean);
 
     const memberVolumes = memberInputs
-      .map((m) => m.volume)
-      .filter((v): v is number => v !== null && v !== undefined);
+      .map((member) => member.volume)
+      .filter((volume): volume is number => volume !== null && volume !== undefined);
 
     const medianVolume =
       memberVolumes.length > 0 ? median(memberVolumes) : null;
     const averageVolume =
       memberVolumes.length > 0
-        ? memberVolumes.reduce((s, v) => s + v, 0) / memberVolumes.length
+        ? memberVolumes.reduce((sum, volume) => sum + volume, 0) / memberVolumes.length
         : null;
 
     const domainFrequency = new Map<string, { count: number; rankSum: number }>();
     for (const member of memberInputs) {
-      const set = domainSets.get(member.normalizedKeyword);
+      const set = domainSets.get(member.keywordIdx);
       if (!set) continue;
       let rank = 0;
       for (const domain of member.domains.slice(0, topN)) {
@@ -221,35 +241,35 @@ export function clusterKeywords(
       })
       .map(([domain]) => domain);
 
-    let canonicalKeyword = memberKeys[0] ?? '';
-    if (memberKeys.length > 1) {
+    let canonicalKeywordIdx = memberIds[0] ?? -1;
+    if (memberIds.length > 1) {
       let bestScore = -1;
       let bestVolume = -1;
-      for (const member of memberKeys) {
+      for (const memberIdx of memberIds) {
         let jaccardSum = 0;
-        for (const other of memberKeys) {
-          if (member === other) continue;
-          jaccardSum += pairJaccardMap.get(pairKey(member, other)) ?? 0;
+        for (const otherIdx of memberIds) {
+          if (memberIdx === otherIdx) continue;
+          jaccardSum += pairJaccardMap.get(pairKey(memberIdx, otherIdx)) ?? 0;
         }
-        const volume = keywordInputMap.get(member)?.volume ?? null;
+        const member = keywordInputMap.get(memberIdx)!;
+        const volume = member.volume ?? null;
+        const currentCanonical = keywordInputMap.get(canonicalKeywordIdx)!;
+        const lexicalOrder = compareInputs(member, currentCanonical);
         if (
           jaccardSum > bestScore ||
-          (jaccardSum === bestScore &&
-            (volume ?? -1) > bestVolume) ||
-          (jaccardSum === bestScore &&
-            (volume ?? -1) === bestVolume &&
-            member < canonicalKeyword)
+          (jaccardSum === bestScore && (volume ?? -1) > bestVolume) ||
+          (jaccardSum === bestScore && (volume ?? -1) === bestVolume && lexicalOrder < 0)
         ) {
           bestScore = jaccardSum;
           bestVolume = volume ?? -1;
-          canonicalKeyword = member;
+          canonicalKeywordIdx = memberIdx;
         }
       }
     }
 
     rawClusters.push({
-      members: memberKeys,
-      canonicalKeyword,
+      members: memberIds,
+      canonicalKeywordIdx,
       representativeDomains,
       medianVolume,
       averageVolume,
@@ -258,33 +278,32 @@ export function clusterKeywords(
 
   rawClusters.sort((a, b) => {
     if (b.members.length !== a.members.length) return b.members.length - a.members.length;
-    if (a.canonicalKeyword !== b.canonicalKeyword) {
-      return a.canonicalKeyword < b.canonicalKeyword ? -1 : 1;
-    }
-    return 0;
+    return compareKeywordIds(a.canonicalKeywordIdx, b.canonicalKeywordIdx);
   });
 
-  const clusters: KeywordCluster[] = rawClusters.map((rc, idx) => {
-    const memberInputs = rc.members
-      .map((m) => keywordInputMap.get(m)!)
+  const clusters: KeywordCluster[] = rawClusters.map((rawCluster, idx) => {
+    const memberInputs = rawCluster.members
+      .map((memberIdx) => keywordInputMap.get(memberIdx)!)
       .filter(Boolean);
 
-    const clusterMembers: ClusterMember[] = memberInputs.map((m) => ({
-      keyword: m.keyword,
-      normalizedKeyword: m.normalizedKeyword,
-      volume: m.volume,
-      serpSize: domainSets.get(m.normalizedKeyword)?.size ?? 0,
+    const clusterMembers: ClusterMember[] = memberInputs.map((member) => ({
+      keywordIdx: member.keywordIdx,
+      keyword: member.keyword,
+      normalizedKeyword: member.normalizedKeyword,
+      volume: member.volume,
+      serpSize: domainSets.get(member.keywordIdx)?.size ?? 0,
     }));
+    const canonical = keywordInputMap.get(rawCluster.canonicalKeywordIdx)!;
 
     return {
       clusterId: `cluster-${idx + 1}`,
-      canonicalKeyword:
-        keywordInputMap.get(rc.canonicalKeyword)?.keyword ?? rc.canonicalKeyword,
+      canonicalKeywordIdx: rawCluster.canonicalKeywordIdx,
+      canonicalKeyword: canonical.keyword,
       members: clusterMembers,
-      representativeDomains: rc.representativeDomains,
-      medianVolume: rc.medianVolume,
-      averageVolume: rc.averageVolume,
-      memberCount: rc.members.length,
+      representativeDomains: rawCluster.representativeDomains,
+      medianVolume: rawCluster.medianVolume,
+      averageVolume: rawCluster.averageVolume,
+      memberCount: rawCluster.members.length,
     };
   });
 
@@ -300,7 +319,7 @@ export function clusterKeywords(
   };
 }
 
-function pairKey(a: string, b: string): string {
+function pairKey(a: number, b: number): string {
   return JSON.stringify(a < b ? [a, b] : [b, a]);
 }
 
