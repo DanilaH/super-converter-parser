@@ -32,7 +32,7 @@ export type RunQuality = {
   version: typeof RUN_QUALITY_VERSION;
   runId: string;
   state: RunState;
-  projectedAt: string;
+  sourceUpdatedAt: string;
   sources: {
     googleSerp: {
       denominator: number;
@@ -94,6 +94,7 @@ export type RunQuality = {
     googleHl: string;
     googleGl: string;
     detectedKeywords: number;
+    trustworthyDetectedKeywords: number;
     mismatchKeywords: number;
     detectedLocations: string[];
   };
@@ -123,9 +124,17 @@ type BuildRunQualityInput = {
   ahrefs?: AhrefsSummary;
 };
 
+type RelatedSummary = {
+  denominator: number;
+  realRows: number;
+  ok: number;
+  empty: number;
+  error: number;
+  notAttempted: number;
+};
+
 function coveragePercent(observed: number, denominator: number): number | null {
-  if (denominator === 0) return null;
-  return Math.round((observed / denominator) * 100);
+  return denominator === 0 ? null : Math.round((observed / denominator) * 100);
 }
 
 function surferObservation(keyword: StoredKeyword): 'ok' | 'error' | 'notFetched' | 'unknown' {
@@ -148,14 +157,7 @@ function surferObservation(keyword: StoredKeyword): 'ok' | 'error' | 'notFetched
 function relatedParentOutcomes(
   keywords: StoredKeyword[],
   relatedKeywords: StoredRelatedKeyword[],
-): {
-  denominator: number;
-  realRows: number;
-  ok: number;
-  empty: number;
-  error: number;
-  notAttempted: number;
-} {
+): RelatedSummary {
   const rootKeywordIdxs = new Set(
     keywords
       .filter((keyword) => !keyword.sources.some((source) => source.type === 'surfer_related'))
@@ -192,7 +194,7 @@ function relatedParentOutcomes(
   };
 }
 
-function warning(
+function makeWarning(
   code: RunQualityWarning['code'],
   affected: number,
   denominator: number | null,
@@ -206,7 +208,6 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
   const terminal = TERMINAL_RUN_STATES.has(state);
   const serpCounts = new Map<number, number>();
   for (const row of serpRows) {
-    if (row.keywordIdx === undefined) continue;
     serpCounts.set(row.keywordIdx, (serpCounts.get(row.keywordIdx) ?? 0) + 1);
   }
 
@@ -218,32 +219,32 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     notFetched: 0,
     unknown: 0,
   };
+  const trustworthyKeywordIdxs = new Set<number>();
   for (const keyword of keywords) {
     const evidence = resolveSerpEvidence(
       { status: keyword.status, error: keyword.error, google: keyword.google },
       serpCounts.get(keyword.idx) ?? 0,
     );
-    if (evidence.status === 'ok') googleStatuses.ok += 1;
-    else if (evidence.status === 'empty') googleStatuses.empty += 1;
-    else if (evidence.status === 'fetch_error') googleStatuses.fetchError += 1;
+    if (evidence.status === 'ok') {
+      googleStatuses.ok += 1;
+      trustworthyKeywordIdxs.add(keyword.idx);
+    } else if (evidence.status === 'empty') {
+      googleStatuses.empty += 1;
+      trustworthyKeywordIdxs.add(keyword.idx);
+    } else if (evidence.status === 'fetch_error') googleStatuses.fetchError += 1;
     else if (evidence.status === 'parse_error') googleStatuses.parseError += 1;
     else if (evidence.status === 'not_fetched') googleStatuses.notFetched += 1;
     else googleStatuses.unknown += 1;
   }
-  const googleTrustworthy = googleStatuses.ok + googleStatuses.empty;
+  const googleTrustworthy = trustworthyKeywordIdxs.size;
 
   const surferStatuses = { ok: 0, error: 0, notFetched: 0, unknown: 0 };
   let surferVolumeAvailable = 0;
   let surferCpcAvailable = 0;
   for (const keyword of keywords) {
-    const observation = surferObservation(keyword);
-    surferStatuses[observation] += 1;
-    if (keyword.surfer?.volume !== null && keyword.surfer?.volume !== undefined) {
-      surferVolumeAvailable += 1;
-    }
-    if (keyword.surfer?.cpc !== null && keyword.surfer?.cpc !== undefined) {
-      surferCpcAvailable += 1;
-    }
+    surferStatuses[surferObservation(keyword)] += 1;
+    if (keyword.surfer?.volume !== null && keyword.surfer?.volume !== undefined) surferVolumeAvailable += 1;
+    if (keyword.surfer?.cpc !== null && keyword.surfer?.cpc !== undefined) surferCpcAvailable += 1;
   }
 
   const related = relatedParentOutcomes(keywords, relatedKeywords);
@@ -270,20 +271,24 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
   const detectedKeywords = keywords.filter(
     (keyword) => (keyword.google?.detectedLocation ?? '').trim() !== '',
   ).length;
+  const trustworthyDetectedKeywords = keywords.filter(
+    (keyword) =>
+      trustworthyKeywordIdxs.has(keyword.idx) &&
+      (keyword.google?.detectedLocation ?? '').trim() !== '',
+  ).length;
   const mismatchKeywords = keywords.filter((keyword) => keyword.google?.geoWarning === true).length;
-  const geoGrade: RunQuality['geo']['grade'] =
-    mismatchKeywords > 0
-      ? 'mismatch'
-      : detectedKeywords > 0
+  const geoGrade: RunQuality['geo']['grade'] = mismatchKeywords > 0
+    ? 'mismatch'
+    : googleTrustworthy === 0
+      ? 'unknown'
+      : trustworthyDetectedKeywords === googleTrustworthy
         ? 'verified'
-        : googleTrustworthy > 0
-          ? 'logical_only'
-          : 'unknown';
+        : 'logical_only';
 
   const warnings: RunQualityWarning[] = [];
   const googleUnavailable = keywords.length - googleTrustworthy;
   if (terminal && googleUnavailable > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'GOOGLE_SERP_INCOMPLETE',
       googleUnavailable,
       keywords.length,
@@ -292,7 +297,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
   }
   const surferUnavailable = keywords.length - surferStatuses.ok;
   if (terminal && surferUnavailable > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'SURFER_INCOMPLETE',
       surferUnavailable,
       keywords.length,
@@ -300,7 +305,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (related.error > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'RELATED_ERRORS',
       related.error,
       related.denominator,
@@ -308,7 +313,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (terminal && related.notAttempted > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'RELATED_NOT_ATTEMPTED',
       related.notAttempted,
       related.denominator,
@@ -316,7 +321,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (ahrefsStatuses.error > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'AHREFS_ERRORS',
       ahrefsStatuses.error,
       domains.length,
@@ -324,7 +329,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (terminal && ahrefsStatuses.notAttempted > 0) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'AHREFS_NOT_ATTEMPTED',
       ahrefsStatuses.notAttempted,
       domains.length,
@@ -332,7 +337,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (terminal && domains.length > 0 && ahrefsNumeric < domains.length) {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'AHREFS_NUMERIC_INCOMPLETE',
       domains.length - ahrefsNumeric,
       domains.length,
@@ -340,21 +345,22 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
   if (geoGrade === 'mismatch') {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'GEO_MISMATCH',
       mismatchKeywords,
       keywords.length,
       `${mismatchKeywords}/${keywords.length} keyword(s) report detected Google location mismatch.`,
     ));
   } else if (terminal && geoGrade === 'logical_only') {
-    warnings.push(warning(
+    const missingPhysical = googleTrustworthy - trustworthyDetectedKeywords;
+    warnings.push(makeWarning(
       'GEO_LOGICAL_ONLY',
+      missingPhysical,
       googleTrustworthy,
-      keywords.length,
-      'Google SERP evidence exists, but no physical Google location was detected; geo evidence is logical hl/gl only.',
+      `${missingPhysical}/${googleTrustworthy} trustworthy Google SERP observation(s) lack a detected physical location; geo evidence is only partially physical and otherwise logical hl/gl.`,
     ));
   } else if (terminal && geoGrade === 'unknown') {
-    warnings.push(warning(
+    warnings.push(makeWarning(
       'GEO_UNKNOWN',
       0,
       keywords.length,
@@ -367,7 +373,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
     state,
-    projectedAt: run.updatedAt,
+    sourceUpdatedAt: run.updatedAt,
     sources: {
       googleSerp: {
         denominator: keywords.length,
@@ -412,6 +418,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
       googleHl: run.configSnapshot.research.googleHl,
       googleGl: run.configSnapshot.research.googleGl,
       detectedKeywords,
+      trustworthyDetectedKeywords,
       mismatchKeywords,
       detectedLocations,
     },
