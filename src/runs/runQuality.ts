@@ -208,6 +208,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
   const terminal = TERMINAL_RUN_STATES.has(state);
   const serpCounts = new Map<number, number>();
   for (const row of serpRows) {
+    if (row.keywordIdx === undefined) continue;
     serpCounts.set(row.keywordIdx, (serpCounts.get(row.keywordIdx) ?? 0) + 1);
   }
 
