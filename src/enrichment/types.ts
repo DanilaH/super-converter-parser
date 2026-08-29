@@ -68,14 +68,45 @@ export type EnrichmentCacheStatus =
 
 export type ClusterEdgeRule = {
   minSharedDomains: number;
+  // Historical field name retained for persisted V1 config compatibility. In
+  // clustering v2 this is explicitly the domain-Jaccard threshold.
   minJaccard: number;
+  // Optional only so historical V1 config JSON remains readable. Fresh V2
+  // config always persists concrete values.
+  minSharedUrls?: number;
+  minUrlJaccard?: number;
 };
+
+export type ClusterPairClassification =
+  | 'strong'
+  | 'domain_only'
+  | 'url_only'
+  | 'weak'
+  | 'none'
+  | 'legacy_domain_only';
 
 export type ClusterEvidence = {
   sharedDomains: string[];
   intersectionCount: number;
   unionCount: number;
   jaccard: number;
+  sharedUrls?: string[];
+  urlIntersectionCount?: number;
+  urlUnionCount?: number;
+  urlJaccard?: number;
+  classification?: ClusterPairClassification;
+};
+
+export type ClusterCohesionSummary = {
+  min: number;
+  median: number;
+  mean: number;
+};
+
+export type ClusterCohesion = {
+  pairCount: number;
+  urlJaccard: ClusterCohesionSummary | null;
+  domainJaccard: ClusterCohesionSummary | null;
 };
 
 // Source keyword identity is (sourceRunId, keywordIdx). The enrichment run
@@ -99,12 +130,16 @@ export type KeywordCluster = {
   medianVolume: number | null;
   averageVolume: number | null;
   memberCount: number;
+  // Missing only on historical V1 rows loaded from persistence.
+  cohesion?: ClusterCohesion | null;
 };
 
 export type ClusteringConfig = {
   topN: number;
   edgeRule: ClusterEdgeRule;
   algorithmVersion: string;
+  urlIdentityVersion?: string;
+  groupingRule?: 'connected_components' | 'complete_link';
 };
 
 type ReservedModuleConfig = Record<string, unknown>;
@@ -249,10 +284,20 @@ export type PairwiseComparison = {
   keywordBIdx: number | null;
   keywordA: string;
   keywordB: string;
+  // V1 compatibility aliases: domain intersection / union / Jaccard.
   intersectionCount: number;
   unionCount: number;
   jaccard: number;
   sharedDomains: string[];
+  // V2 additive evidence. Missing only on historical persisted V1 rows.
+  sharedUrls?: string[];
+  urlIntersectionCount?: number;
+  urlUnionCount?: number;
+  urlJaccard?: number;
+  domainIntersectionCount?: number;
+  domainUnionCount?: number;
+  domainJaccard?: number;
+  classification?: ClusterPairClassification;
   isEdge: boolean;
 };
 
