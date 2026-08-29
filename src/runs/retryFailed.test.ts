@@ -67,7 +67,7 @@ test('completed, failed, and cancelled run states cannot be reopened', () => {
     store.setRunState('run-repair-control', state);
     assert.throws(
       () => prepareFailedKeywordRetry(store, 'run-repair-control'),
-      (error: Error) => error instanceof ResearchError && error.code === 'RESUME_TERMINAL_RUN',
+      (error: unknown) => error instanceof ResearchError && error.code === 'RESUME_TERMINAL_RUN',
     );
     assert.equal(store.loadKeyword('run-repair-control', 0)?.status, 'failed');
     assert.deepEqual(loadOpenKeywordRetryIndexes(store, 'run-repair-control'), []);
@@ -82,7 +82,7 @@ test('parser mismatch is rejected before any failed checkpoint mutation', () => 
 
   assert.throws(
     () => prepareFailedKeywordRetry(store, 'run-repair-control'),
-    (error: Error) => error instanceof ResearchError && error.code === 'RESUME_PARSER_MISMATCH',
+    (error: unknown) => error instanceof ResearchError && error.code === 'RESUME_PARSER_MISMATCH',
   );
   assert.equal(store.loadKeyword('run-repair-control', 0)?.status, 'failed');
   assert.equal(loadKeywordRetryAttempts(store, 'run-repair-control').length, 0);
@@ -101,7 +101,7 @@ test('explicit retry fails as input error when there is no failed or open repair
 
   assert.throws(
     () => prepareFailedKeywordRetry(store, 'run-repair-control'),
-    (error: Error) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
+    (error: unknown) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
   );
   assert.equal(loadKeywordRetryAttempts(store, 'run-repair-control').length, 0);
   store.close();
