@@ -142,6 +142,25 @@ export type ClusteringConfig = {
   groupingRule?: 'connected_components' | 'complete_link';
 };
 
+export type RepresentativeQueryOverrideConfig = {
+  clusterId: string;
+  keywordIds: number[];
+  reason: string;
+};
+
+export type RepresentativeQueriesConfigSnapshot = {
+  targetCount: number;
+  overrides: RepresentativeQueryOverrideConfig[];
+  setVersion: string;
+};
+
+export type RepresentativeQueryRunConfigSnapshot = RepresentativeQueriesConfigSnapshot & {
+  // PR-05 operates on explicitly chosen finalist clusters. `--all-clusters`
+  // resolves to the concrete current ids before persistence so downstream work
+  // never has to reinterpret what "all" meant later.
+  selectedClusterIds: string[];
+};
+
 type ReservedModuleConfig = Record<string, unknown>;
 
 export type QuerySuggestionsConfig = {
@@ -155,6 +174,7 @@ export type QuerySuggestionsConfig = {
 
 export type EnrichmentModuleConfig = {
   clusters?: ClusteringConfig;
+  representative_queries?: RepresentativeQueryRunConfigSnapshot;
   pages?: ReservedModuleConfig;
   site_structure?: ReservedModuleConfig;
   query_suggestions?: QuerySuggestionsConfig;
