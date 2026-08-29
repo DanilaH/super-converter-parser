@@ -562,6 +562,32 @@ export async function runCli(
           .filter((item) => retryOpenIdxSet.has(item.idx))
           .map((item) => item.normalizedKeyword)
       : [];
+
+    // Related-keyword observation is an independent fact. If an open primary
+    // repair already has a successful/truthful-empty related checkpoint in this
+    // run, do not let the forced primary browser visit overwrite that evidence
+    // (or its cache entry) with a later related error/empty observation.
+    const preservedRelatedRepairIdxs = new Set(
+      mode === 'resume'
+        ? store
+            .loadRelatedKeywords(runId)
+            .filter(
+              (row) =>
+                retryOpenIdxSet.has(row.parentIdx) &&
+                (row.status === 'ok' || row.status === 'empty'),
+            )
+            .map((row) => row.parentIdx)
+        : [],
+    );
+    const preservedRelatedRepairKeywordIds = new Set(
+      mode === 'resume'
+        ? store
+            .loadKeywords(runId)
+            .filter((item) => preservedRelatedRepairIdxs.has(item.idx))
+            .map((item) => item.id)
+        : [],
+    );
+
     const planningRefreshSet = new Set([...refreshSet, ...retryRefreshKeywords]);
     if (retryOpenIdxs.length > 0) {
       console.log(`  ↻ ${retryOpenIdxs.length} retry attempt(s) in progress; stale keyword cache bypassed`);
@@ -653,9 +679,23 @@ export async function runCli(
       runDirectory,
       debugRoot,
       // collect only runs when there are pending keywords, which implies the
-      // browser was connected and context assigned.
-      collect: (record, debugRootForKeyword) =>
-        deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword, signal),
+      // browser was connected and context assigned. Primary repair deliberately
+      // suppresses a newly observed related outcome when the same parent already
+      // has successful independent related evidence in the durable run.
+      collect: async (record, debugRootForKeyword) => {
+        const result = await deps.collect(
+          context as BrowserContext,
+          runConfig,
+          record,
+          debugRootForKeyword,
+          signal,
+        );
+        if (!preservedRelatedRepairKeywordIds.has(record.id)) return result;
+        return {
+          ...result,
+          related: { status: 'not_attempted', error: null, rows: [] },
+        };
+      },
       ...(relatedCollector
         ? {
             collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
