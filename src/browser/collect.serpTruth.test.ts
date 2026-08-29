@@ -84,6 +84,30 @@ async function collect(scenario: PageScenario) {
   return collectKeyword(fakeContext(scenario), config, keyword(), debugRoot);
 }
 
+test('Surfer success plus Google rows persists a trustworthy non-zero SERP observation', async () => {
+  const result = await collect({
+    surferText: '$100 $2',
+    organic: [{ href: 'https://example.com/page', title: 'Example' }],
+    noResults: false,
+  });
+
+  assert.equal(result.record.status, 'completed');
+  assert.equal(result.record.surfer?.volume, 100);
+  assert.equal(result.record.google?.serpStatus, 'ok');
+  assert.equal(result.record.google?.serpError, null);
+  assert.equal(result.serpRows.length, 1);
+});
+
+test('Surfer success plus a genuine Google zero persists numeric-zero evidence', async () => {
+  const result = await collect({ surferText: '$100 $2', organic: [], noResults: true });
+
+  assert.equal(result.record.status, 'completed');
+  assert.equal(result.record.surfer?.volume, 100);
+  assert.equal(result.record.google?.serpStatus, 'empty');
+  assert.equal(result.record.google?.serpError, null);
+  assert.equal(result.serpRows.length, 0);
+});
+
 test('Surfer failure does not erase a genuine Google zero-result observation', async () => {
   const result = await collect({ surferText: 'not a number', organic: [], noResults: true });
 
