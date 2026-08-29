@@ -18,7 +18,7 @@ export type KeywordRetryAttempt = {
   resultSerpRows: SerpResult[] | null;
 };
 
-type StoreWithDb = RunStore & { db: Database.Database };
+type StoreWithDb = { db: Database.Database };
 
 type RetryAttemptRow = {
   run_id: string;
