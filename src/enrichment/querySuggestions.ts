@@ -643,11 +643,16 @@ export async function runQuerySuggestionsModule(
       .map(([normalizedParent]) => normalizedParent),
   );
 
-  const completedItems = new Set(
-    enrichmentStore
-      .loadEnrichmentItems(enrichmentId)
-      .filter((item) => item.module === 'query_suggestions' && item.status === 'completed')
-      .map((item) => item.itemId),
+  const persistedSourceCheckpoints = enrichmentStore.loadQuerySuggestionSources(enrichmentId);
+  const completedCurrentSources = new Set(
+    persistedSourceCheckpoints
+      .filter((row) => row.parentKeywordIdx !== null && row.status !== 'error')
+      .map((row) => `${row.source}:${row.parentKeywordIdx}`),
+  );
+  const completedLegacySources = new Set(
+    persistedSourceCheckpoints
+      .filter((row) => row.parentKeywordIdx === null && row.status !== 'error')
+      .map((row) => `${row.source}:${row.normalizedParent}`),
   );
 
   const occurrences: RawSuggestionOccurrence[] = [];
@@ -759,11 +764,11 @@ export async function runQuerySuggestionsModule(
       checkCancellation(signal, EnrichmentCancelledError);
 
       const missingSources = config.sources.filter((source) => {
-        const newItemId = `${source}:${keyword.keywordIdx}`;
-        const legacyItemId = `${source}:${keyword.normalizedKeyword}`;
+        const currentKey = `${source}:${keyword.keywordIdx}`;
+        const legacyKey = `${source}:${keyword.normalizedKeyword}`;
         const legacyCompleted = unambiguousLegacyParents.has(keyword.normalizedKeyword)
-          && completedItems.has(legacyItemId);
-        return !completedItems.has(newItemId) && !legacyCompleted;
+          && completedLegacySources.has(legacyKey);
+        return !completedCurrentSources.has(currentKey) && !legacyCompleted;
       });
       if (missingSources.length === 0) continue;
 
