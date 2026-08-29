@@ -233,7 +233,7 @@ type KeywordSource =
     };
 ```
 
-Text normalization is not a relational ownership key. Discovery SERP ownership and scoring already use the durable per-run keyword index. Some deep-enrichment relations still use normalized parent/member text in the current implementation; replacing those relational uses with source keyword identity is the explicit PR-01B work in `V2_1_IMPLEMENTATION_ROADMAP.md`. Normalized text remains intentional for semantic dedupe, cache identity, user shortlist lookup, and display.
+Text normalization is not a relational ownership key. Discovery SERP ownership and scoring use the durable per-run keyword index. Deep-enrichment relations owned by a source keyword—clustering graph nodes/members/canonical keyword, pairwise comparisons, exclusions, query-suggestion parent occurrences, and per-parent/source suggestion checkpoints—use `(sourceRunId, keywordIdx)` identity. The enrichment run persists `sourceRunId`, so enrichment tables store `keywordIdx` as the local relation key. Normalized text remains intentional for semantic suggestion dedupe, cross-run cache identity (where source-run idx is not portable), user shortlist lookup, display/provenance, and compatibility reads of historical text-owned enrichment rows. Query-suggestion resume ownership is resolved from idx-owned source checkpoint rows; `enrichment_items` is lifecycle/accounting metadata, not a source-keyword ownership authority.
 
 ## Google SERP observation
 
