@@ -18,6 +18,10 @@ export type ClusterOutputOptions = {
   config: ClusteringConfig;
 };
 
+function metric(value: number | undefined): string {
+  return value === undefined ? '' : String(value);
+}
+
 export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordCluster[]): Promise<void> {
   const header = [
     'cluster_id',
@@ -29,6 +33,13 @@ export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordClu
     'median_volume',
     'average_volume',
     'representative_domains',
+    'cohesion_pair_count',
+    'url_cohesion_min',
+    'url_cohesion_median',
+    'url_cohesion_mean',
+    'domain_cohesion_min',
+    'domain_cohesion_median',
+    'domain_cohesion_mean',
   ];
   const rows: string[][] = [header];
   for (const cluster of clusters) {
@@ -42,6 +53,13 @@ export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordClu
       cluster.medianVolume !== null ? String(cluster.medianVolume) : '',
       cluster.averageVolume !== null ? cluster.averageVolume.toFixed(2) : '',
       cluster.representativeDomains.join('; '),
+      cluster.cohesion ? String(cluster.cohesion.pairCount) : '',
+      metric(cluster.cohesion?.urlJaccard?.min),
+      metric(cluster.cohesion?.urlJaccard?.median),
+      metric(cluster.cohesion?.urlJaccard?.mean),
+      metric(cluster.cohesion?.domainJaccard?.min),
+      metric(cluster.cohesion?.domainJaccard?.median),
+      metric(cluster.cohesion?.domainJaccard?.mean),
     ]);
   }
   return writeFileAtomic(outputPath, renderCsv(rows), 'keyword-clusters.csv');
@@ -70,6 +88,7 @@ export function writeKeywordClustersJson(
       medianVolume: c.medianVolume,
       averageVolume: c.averageVolume,
       representativeDomains: c.representativeDomains,
+      cohesion: c.cohesion ?? null,
     })),
     pairs: options.pairs,
     exclusions: options.exclusions,
