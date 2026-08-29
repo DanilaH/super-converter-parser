@@ -8,11 +8,12 @@ const VALID_STATUSES: readonly string[] = ['ok', 'empty', 'unavailable', 'error'
 function validateOccurrence(
   raw: unknown,
   normalizedSuggestion: string,
-): { parentKeyword: string; normalizedParent: string; source: QuerySuggestionSource; market: string; hl: string; gl: string; parserVersion: string; collectionStatus: QuerySuggestionCollectionStatus } {
+): { parentKeywordIdx: number | null; parentKeyword: string; normalizedParent: string; source: QuerySuggestionSource; market: string; hl: string; gl: string; parserVersion: string; collectionStatus: QuerySuggestionCollectionStatus } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": expected object, got ${Array.isArray(raw) ? 'array' : raw === null ? 'null' : typeof raw}`);
   }
   const occurrence = raw as Record<string, unknown>;
+  const parentKeywordIdx = occurrence.parentKeywordIdx;
   const parentKeyword = occurrence.parentKeyword;
   const normalizedParent = occurrence.normalizedParent;
   const source = occurrence.source;
@@ -22,6 +23,9 @@ function validateOccurrence(
   const parserVersion = occurrence.parserVersion;
   const collectionStatus = occurrence.collectionStatus;
 
+  if (parentKeywordIdx !== undefined && parentKeywordIdx !== null && (!Number.isInteger(parentKeywordIdx) || (parentKeywordIdx as number) < 0)) {
+    throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": invalid parentKeywordIdx`);
+  }
   if (typeof parentKeyword !== 'string' || parentKeyword.length === 0) {
     throw new ResearchError('DB_ERROR', `Invalid occurrence for suggestion "${normalizedSuggestion}": missing or empty parentKeyword`);
   }
@@ -48,6 +52,7 @@ function validateOccurrence(
   }
 
   return {
+    parentKeywordIdx: typeof parentKeywordIdx === 'number' ? parentKeywordIdx : null,
     parentKeyword,
     normalizedParent,
     source: source as QuerySuggestionSource,
@@ -88,7 +93,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -408,6 +413,53 @@ const MIGRATIONS: string[] = [
   // that appear to contain only a JavaScript application shell.
   `
   ALTER TABLE enrichment_pages ADD COLUMN possibly_js_rendered INTEGER NOT NULL DEFAULT 0;
+  `,
+  // v16: new enrichment relations use source keyword idx as durable ownership.
+  // Historical text-keyed tables stay intact for compatibility reads; v2 tables
+  // avoid retaining the old text primary keys as hidden uniqueness constraints.
+  `
+  ALTER TABLE keyword_clusters ADD COLUMN canonical_keyword_idx INTEGER;
+
+  CREATE TABLE enrichment_pairs_v2 (
+    enrichment_id TEXT NOT NULL,
+    keyword_a_idx INTEGER NOT NULL,
+    keyword_b_idx INTEGER NOT NULL,
+    keyword_a TEXT NOT NULL,
+    keyword_b TEXT NOT NULL,
+    intersection_count INTEGER NOT NULL,
+    union_count INTEGER NOT NULL,
+    jaccard REAL NOT NULL,
+    shared_domains TEXT NOT NULL,
+    is_edge INTEGER NOT NULL,
+    PRIMARY KEY (enrichment_id, keyword_a_idx, keyword_b_idx)
+  );
+
+  CREATE TABLE enrichment_exclusions_v2 (
+    enrichment_id TEXT NOT NULL,
+    keyword_idx INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    serp_size INTEGER NOT NULL,
+    PRIMARY KEY (enrichment_id, keyword_idx)
+  );
+
+  CREATE TABLE enrichment_query_suggestion_sources_v2 (
+    enrichment_id TEXT NOT NULL,
+    parent_keyword_idx INTEGER NOT NULL,
+    normalized_parent TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    fetched_at TEXT NOT NULL,
+    cache_status TEXT NOT NULL DEFAULT 'none',
+    request_count INTEGER NOT NULL DEFAULT 0,
+    market TEXT NOT NULL DEFAULT '',
+    hl TEXT NOT NULL DEFAULT '',
+    gl TEXT NOT NULL DEFAULT '',
+    parser_version TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (enrichment_id, parent_keyword_idx, source)
+  );
   `,
 ];
 
@@ -1413,8 +1465,9 @@ export class RunStore {
     enrichmentId: string,
     clusters: Array<{
       clusterId: string;
+      canonicalKeywordIdx: number;
       canonicalKeyword: string;
-      members: { keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }[];
+      members: { keywordIdx: number; keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }[];
       representativeDomains: string[];
       medianVolume: number | null;
       averageVolume: number | null;
@@ -1425,8 +1478,8 @@ export class RunStore {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(
       `INSERT INTO keyword_clusters
-       (enrichment_id, cluster_id, canonical_keyword, member_count, median_volume, average_volume, members, representative_domains, algorithm_version, config, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (enrichment_id, cluster_id, canonical_keyword_idx, canonical_keyword, member_count, median_volume, average_volume, members, representative_domains, algorithm_version, config, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const deleteExisting = this.db.prepare(
       'DELETE FROM keyword_clusters WHERE enrichment_id = ?',
@@ -1437,6 +1490,7 @@ export class RunStore {
         stmt.run(
           enrichmentId,
           c.clusterId,
+          c.canonicalKeywordIdx,
           c.canonicalKeyword,
           c.members.length,
           c.medianVolume,
@@ -1454,11 +1508,12 @@ export class RunStore {
 
   loadKeywordClusters(enrichmentId: string): Array<{
     clusterId: string;
+    canonicalKeywordIdx: number | null;
     canonicalKeyword: string;
     memberCount: number;
     medianVolume: number | null;
     averageVolume: number | null;
-    members: { keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }[];
+    members: { keywordIdx: number | null; keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }[];
     representativeDomains: string[];
     algorithmVersion: string;
     config: ClusteringConfig;
@@ -1467,6 +1522,7 @@ export class RunStore {
       .prepare('SELECT * FROM keyword_clusters WHERE enrichment_id = ? ORDER BY cluster_id')
       .all(enrichmentId) as Array<{
       cluster_id: string;
+      canonical_keyword_idx: number | null;
       canonical_keyword: string;
       member_count: number;
       median_volume: number | null;
@@ -1478,11 +1534,15 @@ export class RunStore {
     }>;
     return rows.map((row) => ({
       clusterId: row.cluster_id,
+      canonicalKeywordIdx: row.canonical_keyword_idx ?? null,
       canonicalKeyword: row.canonical_keyword,
       memberCount: row.member_count,
       medianVolume: row.median_volume,
       averageVolume: row.average_volume,
-      members: JSON.parse(row.members),
+      members: (JSON.parse(row.members) as Array<{ keywordIdx?: number | null; keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }>).map((member) => ({
+        ...member,
+        keywordIdx: member.keywordIdx ?? null,
+      })),
       representativeDomains: JSON.parse(row.representative_domains),
       algorithmVersion: row.algorithm_version,
       config: JSON.parse(row.config),
@@ -1493,6 +1553,8 @@ export class RunStore {
   saveEnrichmentPairs(
     enrichmentId: string,
     pairs: Array<{
+      keywordAIdx: number | null;
+      keywordBIdx: number | null;
       keywordA: string;
       keywordB: string;
       intersectionCount: number;
@@ -1503,20 +1565,26 @@ export class RunStore {
     }>,
   ): void {
     const stmt = this.db.prepare(
-      `INSERT INTO enrichment_pairs
-       (enrichment_id, keyword_a, keyword_b, intersection_count, union_count, jaccard, shared_domains, is_edge)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO enrichment_pairs_v2
+       (enrichment_id, keyword_a_idx, keyword_b_idx, keyword_a, keyword_b, intersection_count, union_count, jaccard, shared_domains, is_edge)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const deleteExisting = this.db.prepare(
-      'DELETE FROM enrichment_pairs WHERE enrichment_id = ?',
+      'DELETE FROM enrichment_pairs_v2 WHERE enrichment_id = ?',
     );
     const tx = this.db.transaction(() => {
       deleteExisting.run(enrichmentId);
       for (const p of pairs) {
+        if (p.keywordAIdx === null || p.keywordBIdx === null) {
+          throw new ResearchError('DB_ERROR', 'New enrichment pair is missing source keyword identity.');
+        }
+        const swap = p.keywordAIdx > p.keywordBIdx;
         stmt.run(
           enrichmentId,
-          p.keywordA < p.keywordB ? p.keywordA : p.keywordB,
-          p.keywordA < p.keywordB ? p.keywordB : p.keywordA,
+          swap ? p.keywordBIdx : p.keywordAIdx,
+          swap ? p.keywordAIdx : p.keywordBIdx,
+          swap ? p.keywordB : p.keywordA,
+          swap ? p.keywordA : p.keywordB,
           p.intersectionCount,
           p.unionCount,
           p.jaccard,
@@ -1529,6 +1597,8 @@ export class RunStore {
   }
 
   loadEnrichmentPairs(enrichmentId: string): Array<{
+    keywordAIdx: number | null;
+    keywordBIdx: number | null;
     keywordA: string;
     keywordB: string;
     intersectionCount: number;
@@ -1537,7 +1607,33 @@ export class RunStore {
     sharedDomains: string[];
     isEdge: boolean;
   }> {
-    const rows = this.db
+    const current = this.db
+      .prepare('SELECT * FROM enrichment_pairs_v2 WHERE enrichment_id = ? ORDER BY keyword_a_idx, keyword_b_idx')
+      .all(enrichmentId) as Array<{
+      keyword_a_idx: number;
+      keyword_b_idx: number;
+      keyword_a: string;
+      keyword_b: string;
+      intersection_count: number;
+      union_count: number;
+      jaccard: number;
+      shared_domains: string;
+      is_edge: number;
+    }>;
+    if (current.length > 0) {
+      return current.map((row) => ({
+        keywordAIdx: row.keyword_a_idx,
+        keywordBIdx: row.keyword_b_idx,
+        keywordA: row.keyword_a,
+        keywordB: row.keyword_b,
+        intersectionCount: row.intersection_count,
+        unionCount: row.union_count,
+        jaccard: row.jaccard,
+        sharedDomains: JSON.parse(row.shared_domains),
+        isEdge: row.is_edge === 1,
+      }));
+    }
+    const legacy = this.db
       .prepare('SELECT * FROM enrichment_pairs WHERE enrichment_id = ? ORDER BY keyword_a, keyword_b')
       .all(enrichmentId) as Array<{
       keyword_a: string;
@@ -1548,7 +1644,9 @@ export class RunStore {
       shared_domains: string;
       is_edge: number;
     }>;
-    return rows.map((row) => ({
+    return legacy.map((row) => ({
+      keywordAIdx: null,
+      keywordBIdx: null,
       keywordA: row.keyword_a,
       keywordB: row.keyword_b,
       intersectionCount: row.intersection_count,
@@ -1562,6 +1660,7 @@ export class RunStore {
   saveEnrichmentExclusions(
     enrichmentId: string,
     exclusions: Array<{
+      keywordIdx: number | null;
       keyword: string;
       normalizedKeyword: string;
       reason: string;
@@ -1569,29 +1668,51 @@ export class RunStore {
     }>,
   ): void {
     const stmt = this.db.prepare(
-      `INSERT INTO enrichment_exclusions
-       (enrichment_id, keyword, normalized_keyword, reason, serp_size)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO enrichment_exclusions_v2
+       (enrichment_id, keyword_idx, keyword, normalized_keyword, reason, serp_size)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     );
     const deleteExisting = this.db.prepare(
-      'DELETE FROM enrichment_exclusions WHERE enrichment_id = ?',
+      'DELETE FROM enrichment_exclusions_v2 WHERE enrichment_id = ?',
     );
     const tx = this.db.transaction(() => {
       deleteExisting.run(enrichmentId);
       for (const e of exclusions) {
-        stmt.run(enrichmentId, e.keyword, e.normalizedKeyword, e.reason, e.serpSize);
+        if (e.keywordIdx === null) {
+          throw new ResearchError('DB_ERROR', 'New enrichment exclusion is missing source keyword identity.');
+        }
+        stmt.run(enrichmentId, e.keywordIdx, e.keyword, e.normalizedKeyword, e.reason, e.serpSize);
       }
     });
     tx();
   }
 
   loadEnrichmentExclusions(enrichmentId: string): Array<{
+    keywordIdx: number | null;
     keyword: string;
     normalizedKeyword: string;
     reason: string;
     serpSize: number;
   }> {
-    const rows = this.db
+    const current = this.db
+      .prepare('SELECT * FROM enrichment_exclusions_v2 WHERE enrichment_id = ? ORDER BY keyword_idx')
+      .all(enrichmentId) as Array<{
+      keyword_idx: number;
+      keyword: string;
+      normalized_keyword: string;
+      reason: string;
+      serp_size: number;
+    }>;
+    if (current.length > 0) {
+      return current.map((row) => ({
+        keywordIdx: row.keyword_idx,
+        keyword: row.keyword,
+        normalizedKeyword: row.normalized_keyword,
+        reason: row.reason,
+        serpSize: row.serp_size,
+      }));
+    }
+    const legacy = this.db
       .prepare('SELECT * FROM enrichment_exclusions WHERE enrichment_id = ? ORDER BY keyword')
       .all(enrichmentId) as Array<{
       keyword: string;
@@ -1599,7 +1720,8 @@ export class RunStore {
       reason: string;
       serp_size: number;
     }>;
-    return rows.map((row) => ({
+    return legacy.map((row) => ({
+      keywordIdx: null,
       keyword: row.keyword,
       normalizedKeyword: row.normalized_keyword,
       reason: row.reason,
@@ -1624,6 +1746,7 @@ export class RunStore {
       parserVersion: string;
       collectionStatus: string;
       occurrences: Array<{
+        parentKeywordIdx?: number | null;
         parentKeyword: string;
         normalizedParent: string;
         source: string;
@@ -1678,6 +1801,7 @@ export class RunStore {
     parserVersion: string;
     collectionStatus: string;
     occurrences: Array<{
+      parentKeywordIdx: number | null;
       parentKeyword: string;
       normalizedParent: string;
       source: QuerySuggestionSource;
@@ -1744,17 +1868,29 @@ export class RunStore {
     hl: string = '',
     gl: string = '',
     parserVersion: string = '',
+    parentKeywordIdx: number | null = null,
   ): void {
+    if (parentKeywordIdx === null) {
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
+            (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
+      return;
+    }
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
-          (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO enrichment_query_suggestion_sources_v2
+          (enrichment_id, parent_keyword_idx, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(enrichmentId, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
+      .run(enrichmentId, parentKeywordIdx, normalizedParent, source, status, error, fetchedAt, cacheStatus, requestCount, market, hl, gl, parserVersion);
   }
 
   loadQuerySuggestionSources(enrichmentId: string): Array<{
+    parentKeywordIdx: number | null;
     normalizedParent: string;
     source: QuerySuggestionSource;
     status: string;
@@ -1767,7 +1903,40 @@ export class RunStore {
     gl: string;
     parserVersion: string;
   }> {
-    const rows = this.db
+    const current = this.db
+      .prepare(
+        'SELECT parent_keyword_idx, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version FROM enrichment_query_suggestion_sources_v2 WHERE enrichment_id = ?',
+      )
+      .all(enrichmentId) as Array<{
+      parent_keyword_idx: number;
+      normalized_parent: string;
+      source: string;
+      status: string;
+      error: string | null;
+      fetched_at: string;
+      cache_status: string;
+      request_count: number;
+      market: string;
+      hl: string;
+      gl: string;
+      parser_version: string;
+    }>;
+    const currentRows = current.map((row) => ({
+      parentKeywordIdx: row.parent_keyword_idx,
+      normalizedParent: row.normalized_parent,
+      source: row.source as QuerySuggestionSource,
+      status: row.status,
+      error: row.error,
+      fetchedAt: row.fetched_at,
+      cacheStatus: row.cache_status,
+      requestCount: row.request_count,
+      market: row.market,
+      hl: row.hl,
+      gl: row.gl,
+      parserVersion: row.parser_version,
+    }));
+    const currentTextKeys = new Set(currentRows.map((row) => `${row.normalizedParent}:${row.source}`));
+    const legacy = this.db
       .prepare(
         'SELECT normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version FROM enrichment_query_suggestion_sources WHERE enrichment_id = ?',
       )
@@ -1784,23 +1953,30 @@ export class RunStore {
       gl: string;
       parser_version: string;
     }>;
-    return rows.map((row) => ({
-      normalizedParent: row.normalized_parent,
-      source: row.source as QuerySuggestionSource,
-      status: row.status,
-      error: row.error,
-      fetchedAt: row.fetched_at,
-      cacheStatus: row.cache_status,
-      requestCount: row.request_count,
-      market: row.market,
-      hl: row.hl,
-      gl: row.gl,
-      parserVersion: row.parser_version,
-    }));
+    return [
+      ...currentRows,
+      ...legacy
+        .filter((row) => !currentTextKeys.has(`${row.normalized_parent}:${row.source}`))
+        .map((row) => ({
+          parentKeywordIdx: null,
+          normalizedParent: row.normalized_parent,
+          source: row.source as QuerySuggestionSource,
+          status: row.status,
+          error: row.error,
+          fetchedAt: row.fetched_at,
+          cacheStatus: row.cache_status,
+          requestCount: row.request_count,
+          market: row.market,
+          hl: row.hl,
+          gl: row.gl,
+          parserVersion: row.parser_version,
+        })),
+    ];
   }
 
   persistParentAtomic(
     enrichmentId: string,
+    parentKeywordIdx: number,
     normalizedParent: string,
     market: string,
     hl: string,
@@ -1822,6 +1998,7 @@ export class RunStore {
       ordinal: number | null;
       collectionStatus: string;
       occurrences: Array<{
+        parentKeywordIdx: number;
         parentKeyword: string;
         normalizedParent: string;
         source: string;
@@ -1834,9 +2011,9 @@ export class RunStore {
     }>,
   ): void {
     const sourceStmt = this.db.prepare(
-      `INSERT OR REPLACE INTO enrichment_query_suggestion_sources
-        (enrichment_id, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO enrichment_query_suggestion_sources_v2
+        (enrichment_id, parent_keyword_idx, normalized_parent, source, status, error, fetched_at, cache_status, request_count, market, hl, gl, parser_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const itemStmt = this.db.prepare(
       `INSERT INTO enrichment_items
@@ -1865,6 +2042,7 @@ export class RunStore {
       for (const sr of sourceResults) {
         sourceStmt.run(
           enrichmentId,
+          parentKeywordIdx,
           normalizedParent,
           sr.source,
           sr.status,
@@ -1880,7 +2058,7 @@ export class RunStore {
         const itemStatus = sr.status === 'error' ? 'error' : 'completed';
         itemStmt.run(
           enrichmentId,
-          `${sr.source}:${normalizedParent}`,
+          `${sr.source}:${parentKeywordIdx}`,
           itemStatus,
           sr.source === 'surfer_related' ? 'surfer' : 'google',
           now,
@@ -1906,12 +2084,16 @@ export class RunStore {
           if (!Array.isArray(existingOccurrences)) {
             throw new ResearchError('DB_ERROR', `Corrupt occurrences_json for suggestion "${s.normalizedSuggestion}" in enrichment "${enrichmentId}": expected array`);
           }
-          const seen = new Set(s.occurrences.map((o) => `${o.normalizedParent}:${o.source}`));
+          const seen = new Set(s.occurrences.map((o) => `${o.parentKeywordIdx}:${o.source}`));
           for (const eo of existingOccurrences) {
-            const key = `${String(eo.normalizedParent)}:${String(eo.source)}`;
-            if (!seen.has(key)) {
+            const existingIdx = typeof eo.parentKeywordIdx === 'number' ? eo.parentKeywordIdx : null;
+            const source = String(eo.source);
+            const duplicate = existingIdx === null
+              ? s.occurrences.some((o) => o.normalizedParent === String(eo.normalizedParent) && o.source === source)
+              : seen.has(`${existingIdx}:${source}`);
+            if (!duplicate) {
               mergedOccurrences = [...mergedOccurrences, eo];
-              seen.add(key);
+              if (existingIdx !== null) seen.add(`${existingIdx}:${source}`);
             }
           }
         }
