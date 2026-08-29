@@ -1,9 +1,11 @@
 import type { RunStore } from '../db/store.js';
-import type { ClusteredKeywordExclusion, PairwiseComparison } from './types.js';
+
+type PersistedPairs = ReturnType<RunStore['loadEnrichmentPairs']>;
+type PersistedExclusions = ReturnType<RunStore['loadEnrichmentExclusions']>;
 
 export type PersistedClusteringRelations = {
-  pairs: PairwiseComparison[];
-  exclusions: ClusteredKeywordExclusion[];
+  pairs: PersistedPairs;
+  exclusions: PersistedExclusions;
 };
 
 export function loadPersistedClusteringRelations(
