@@ -1,6 +1,17 @@
 import Database from 'better-sqlite3';
 import { ResearchError, type ResearchErrorCode } from '../shared/errors.js';
-import type { ClusteringConfig, EnrichmentCacheStatus, EnrichmentItemRecord, EnrichmentItemStatus, EnrichmentModuleId, EnrichmentRunRecord, QuerySuggestionCollectionStatus, QuerySuggestionSource } from '../enrichment/types.js';
+import type {
+  ClusterCohesion,
+  ClusterPairClassification,
+  ClusteringConfig,
+  EnrichmentCacheStatus,
+  EnrichmentItemRecord,
+  EnrichmentItemStatus,
+  EnrichmentModuleId,
+  EnrichmentRunRecord,
+  QuerySuggestionCollectionStatus,
+  QuerySuggestionSource,
+} from '../enrichment/types.js';
 
 const VALID_SOURCES: readonly string[] = ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'];
 const VALID_STATUSES: readonly string[] = ['ok', 'empty', 'unavailable', 'error'];
@@ -93,7 +104,7 @@ import {
   type RunState,
 } from '../runs/run.js';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 // Index i is applied when the database is at version i.
 // Never edit an applied migration; append a new one.
@@ -461,6 +472,11 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (enrichment_id, parent_keyword_idx, source)
   );
   `,
+  // v17: clustering-v2 evidence columns are repaired idempotently below so a
+  // failed post-version schema repair can safely retry on the next open.
+  `
+  SELECT 1;
+  `,
 ];
 
 export type StoredRun = {
@@ -720,6 +736,20 @@ export class RunStore {
     ];
     for (const [column, definition] of siteStructureDynamic) {
       addColumnIfMissingLocal(this.db, 'enrichment_site_structure', column, definition);
+    }
+    addColumnIfMissingLocal(this.db, 'keyword_clusters', 'cohesion', 'TEXT');
+    const pairV2Dynamic: Array<[string, string]> = [
+      ['shared_urls', 'TEXT'],
+      ['url_intersection_count', 'INTEGER'],
+      ['url_union_count', 'INTEGER'],
+      ['url_jaccard', 'REAL'],
+      ['domain_intersection_count', 'INTEGER'],
+      ['domain_union_count', 'INTEGER'],
+      ['domain_jaccard', 'REAL'],
+      ['classification', 'TEXT'],
+    ];
+    for (const [column, definition] of pairV2Dynamic) {
+      addColumnIfMissingLocal(this.db, 'enrichment_pairs_v2', column, definition);
     }
     // Ensure v9/v10 tables exist for databases created before those versions.
     this.db.exec(`
@@ -1471,6 +1501,7 @@ export class RunStore {
       representativeDomains: string[];
       medianVolume: number | null;
       averageVolume: number | null;
+      cohesion: ClusterCohesion;
       algorithmVersion: string;
       config: ClusteringConfig;
     }>,
@@ -1478,8 +1509,8 @@ export class RunStore {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(
       `INSERT INTO keyword_clusters
-       (enrichment_id, cluster_id, canonical_keyword_idx, canonical_keyword, member_count, median_volume, average_volume, members, representative_domains, algorithm_version, config, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (enrichment_id, cluster_id, canonical_keyword_idx, canonical_keyword, member_count, median_volume, average_volume, members, representative_domains, cohesion, algorithm_version, config, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const deleteExisting = this.db.prepare(
       'DELETE FROM keyword_clusters WHERE enrichment_id = ?',
@@ -1497,6 +1528,7 @@ export class RunStore {
           c.averageVolume,
           JSON.stringify(c.members),
           JSON.stringify(c.representativeDomains),
+          JSON.stringify(c.cohesion),
           c.algorithmVersion,
           JSON.stringify(c.config),
           now,
@@ -1515,6 +1547,7 @@ export class RunStore {
     averageVolume: number | null;
     members: { keywordIdx: number | null; keyword: string; normalizedKeyword: string; volume: number | null; serpSize: number }[];
     representativeDomains: string[];
+    cohesion: ClusterCohesion | null;
     algorithmVersion: string;
     config: ClusteringConfig;
   }> {
@@ -1529,6 +1562,7 @@ export class RunStore {
       average_volume: number | null;
       members: string;
       representative_domains: string;
+      cohesion: string | null;
       algorithm_version: string;
       config: string;
     }>;
@@ -1544,11 +1578,11 @@ export class RunStore {
         keywordIdx: member.keywordIdx ?? null,
       })),
       representativeDomains: JSON.parse(row.representative_domains),
+      cohesion: row.cohesion === null ? null : JSON.parse(row.cohesion) as ClusterCohesion,
       algorithmVersion: row.algorithm_version,
       config: JSON.parse(row.config),
     }));
   }
-
 
   saveEnrichmentPairs(
     enrichmentId: string,
@@ -1561,13 +1595,24 @@ export class RunStore {
       unionCount: number;
       jaccard: number;
       sharedDomains: string[];
+      sharedUrls?: string[];
+      urlIntersectionCount?: number;
+      urlUnionCount?: number;
+      urlJaccard?: number;
+      domainIntersectionCount?: number;
+      domainUnionCount?: number;
+      domainJaccard?: number;
+      classification?: ClusterPairClassification;
       isEdge: boolean;
     }>,
   ): void {
     const stmt = this.db.prepare(
       `INSERT INTO enrichment_pairs_v2
-       (enrichment_id, keyword_a_idx, keyword_b_idx, keyword_a, keyword_b, intersection_count, union_count, jaccard, shared_domains, is_edge)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (enrichment_id, keyword_a_idx, keyword_b_idx, keyword_a, keyword_b,
+        intersection_count, union_count, jaccard, shared_domains, is_edge,
+        shared_urls, url_intersection_count, url_union_count, url_jaccard,
+        domain_intersection_count, domain_union_count, domain_jaccard, classification)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const deleteExisting = this.db.prepare(
       'DELETE FROM enrichment_pairs_v2 WHERE enrichment_id = ?',
@@ -1577,6 +1622,19 @@ export class RunStore {
       for (const p of pairs) {
         if (p.keywordAIdx === null || p.keywordBIdx === null) {
           throw new ResearchError('DB_ERROR', 'New enrichment pair is missing source keyword identity.');
+        }
+        if (
+          p.sharedUrls === undefined
+          || p.urlIntersectionCount === undefined
+          || p.urlUnionCount === undefined
+          || p.urlJaccard === undefined
+          || p.domainIntersectionCount === undefined
+          || p.domainUnionCount === undefined
+          || p.domainJaccard === undefined
+          || p.classification === undefined
+          || p.classification === 'legacy_domain_only'
+        ) {
+          throw new ResearchError('DB_ERROR', 'New enrichment pair is missing clustering-v2 URL/domain evidence.');
         }
         const swap = p.keywordAIdx > p.keywordBIdx;
         stmt.run(
@@ -1590,6 +1648,14 @@ export class RunStore {
           p.jaccard,
           JSON.stringify(p.sharedDomains),
           p.isEdge ? 1 : 0,
+          JSON.stringify(p.sharedUrls),
+          p.urlIntersectionCount,
+          p.urlUnionCount,
+          p.urlJaccard,
+          p.domainIntersectionCount,
+          p.domainUnionCount,
+          p.domainJaccard,
+          p.classification,
         );
       }
     });
@@ -1605,6 +1671,14 @@ export class RunStore {
     unionCount: number;
     jaccard: number;
     sharedDomains: string[];
+    sharedUrls?: string[];
+    urlIntersectionCount?: number;
+    urlUnionCount?: number;
+    urlJaccard?: number;
+    domainIntersectionCount?: number;
+    domainUnionCount?: number;
+    domainJaccard?: number;
+    classification?: ClusterPairClassification;
     isEdge: boolean;
   }> {
     const current = this.db
@@ -1619,19 +1693,44 @@ export class RunStore {
       jaccard: number;
       shared_domains: string;
       is_edge: number;
+      shared_urls: string | null;
+      url_intersection_count: number | null;
+      url_union_count: number | null;
+      url_jaccard: number | null;
+      domain_intersection_count: number | null;
+      domain_union_count: number | null;
+      domain_jaccard: number | null;
+      classification: string | null;
     }>;
     if (current.length > 0) {
-      return current.map((row) => ({
-        keywordAIdx: row.keyword_a_idx,
-        keywordBIdx: row.keyword_b_idx,
-        keywordA: row.keyword_a,
-        keywordB: row.keyword_b,
-        intersectionCount: row.intersection_count,
-        unionCount: row.union_count,
-        jaccard: row.jaccard,
-        sharedDomains: JSON.parse(row.shared_domains),
-        isEdge: row.is_edge === 1,
-      }));
+      return current.map((row) => {
+        const hasUrlEvidence =
+          row.shared_urls !== null
+          && row.url_intersection_count !== null
+          && row.url_union_count !== null
+          && row.url_jaccard !== null;
+        return {
+          keywordAIdx: row.keyword_a_idx,
+          keywordBIdx: row.keyword_b_idx,
+          keywordA: row.keyword_a,
+          keywordB: row.keyword_b,
+          intersectionCount: row.intersection_count,
+          unionCount: row.union_count,
+          jaccard: row.jaccard,
+          sharedDomains: JSON.parse(row.shared_domains) as string[],
+          domainIntersectionCount: row.domain_intersection_count ?? row.intersection_count,
+          domainUnionCount: row.domain_union_count ?? row.union_count,
+          domainJaccard: row.domain_jaccard ?? row.jaccard,
+          classification: (row.classification as ClusterPairClassification | null) ?? 'legacy_domain_only',
+          ...(hasUrlEvidence ? {
+            sharedUrls: JSON.parse(row.shared_urls as string) as string[],
+            urlIntersectionCount: row.url_intersection_count as number,
+            urlUnionCount: row.url_union_count as number,
+            urlJaccard: row.url_jaccard as number,
+          } : {}),
+          isEdge: row.is_edge === 1,
+        };
+      });
     }
     const legacy = this.db
       .prepare('SELECT * FROM enrichment_pairs WHERE enrichment_id = ? ORDER BY keyword_a, keyword_b')
@@ -1652,7 +1751,11 @@ export class RunStore {
       intersectionCount: row.intersection_count,
       unionCount: row.union_count,
       jaccard: row.jaccard,
-      sharedDomains: JSON.parse(row.shared_domains),
+      sharedDomains: JSON.parse(row.shared_domains) as string[],
+      domainIntersectionCount: row.intersection_count,
+      domainUnionCount: row.union_count,
+      domainJaccard: row.jaccard,
+      classification: 'legacy_domain_only',
       isEdge: row.is_edge === 1,
     }));
   }
