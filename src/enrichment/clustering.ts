@@ -121,11 +121,15 @@ export function clusterKeywords(
       const isEdge = intersectionSize >= minSharedDomains && jaccard >= minJaccard;
 
       shared.sort();
+      const pairAIdx = Math.min(a, b);
+      const pairBIdx = Math.max(a, b);
+      const pairAInput = pairAIdx === a ? inputA : inputB;
+      const pairBInput = pairBIdx === b ? inputB : inputA;
       allPairs.push({
-        keywordAIdx: a,
-        keywordBIdx: b,
-        keywordA: inputA.normalizedKeyword,
-        keywordB: inputB.normalizedKeyword,
+        keywordAIdx: pairAIdx,
+        keywordBIdx: pairBIdx,
+        keywordA: pairAInput.normalizedKeyword,
+        keywordB: pairBInput.normalizedKeyword,
         intersectionCount: intersectionSize,
         unionCount: unionSize,
         jaccard,
