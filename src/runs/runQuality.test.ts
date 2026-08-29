@@ -235,6 +235,7 @@ test('projects source-native mixed evidence with explicit denominators', () => {
     googleHl: 'en',
     googleGl: 'us',
     detectedKeywords: 2,
+    trustworthyDetectedKeywords: 2,
     mismatchKeywords: 1,
     detectedLocations: ['Chelyabinsk Oblast, Russia', 'New York, NY'],
   });
@@ -277,11 +278,59 @@ test('uses logical_only geo grade when SERP is trustworthy but physical location
   });
 
   assert.equal(quality.geo.grade, 'logical_only');
+  assert.equal(quality.geo.trustworthyDetectedKeywords, 0);
   assert.equal(quality.sources.googleSerp.coveragePercent, 100);
   assert.equal(quality.sources.related.coveragePercent, 100);
   assert.equal(quality.sources.ahrefs.resolvedCoveragePercent, null);
   assert.equal(quality.sources.ahrefs.numericCoveragePercent, null);
   assert.deepEqual(quality.warnings.map((item) => item.code), ['GEO_LOGICAL_ONLY']);
+});
+
+test('partial physical geo coverage remains logical_only instead of verified', () => {
+  const withLocation = keyword(0);
+  const withoutLocation = keyword(1, {
+    google: {
+      hl: 'en',
+      gl: 'us',
+      pageUrl: 'https://google.com/search?q=1',
+      detectedLocation: null,
+      geoWarning: false,
+      serpStatus: 'empty',
+      serpError: null,
+    },
+  });
+
+  const quality = buildRunQuality({
+    run: run(),
+    state: 'completed',
+    keywords: [withLocation, withoutLocation],
+    serpRows: [serpRow(0)],
+    relatedKeywords: [related(0, 'empty'), related(1, 'empty')],
+    domains: [],
+  });
+
+  assert.equal(quality.sources.googleSerp.trustworthy, 2);
+  assert.equal(quality.geo.detectedKeywords, 1);
+  assert.equal(quality.geo.trustworthyDetectedKeywords, 1);
+  assert.equal(quality.geo.grade, 'logical_only');
+  const geoWarning = quality.warnings.find((item) => item.code === 'GEO_LOGICAL_ONLY');
+  assert.equal(geoWarning?.affected, 1);
+  assert.equal(geoWarning?.denominator, 2);
+});
+
+test('complete physical geo coverage is verified', () => {
+  const quality = buildRunQuality({
+    run: run(),
+    state: 'completed',
+    keywords: [keyword(0), keyword(1)],
+    serpRows: [serpRow(0), serpRow(1)],
+    relatedKeywords: [related(0, 'empty'), related(1, 'empty')],
+    domains: [],
+  });
+
+  assert.equal(quality.geo.grade, 'verified');
+  assert.equal(quality.geo.trustworthyDetectedKeywords, 2);
+  assert.equal(quality.warnings.some((item) => item.code.startsWith('GEO_')), false);
 });
 
 test('does not invent missing historical expansion bounds or zero coverage', () => {
