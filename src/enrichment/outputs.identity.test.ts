@@ -75,10 +75,10 @@ test('cluster CSV and JSON publish source keyword ids alongside display text', a
     });
 
     const csv = await readFile(csvPath, 'utf8');
-    assert.match(csv, /"canonical_keyword_idx"/);
-    assert.match(csv, /"member_keyword_idxs"/);
-    assert.match(csv, /"7"/);
-    assert.match(csv, /"7; 8"/);
+    assert.match(csv, /canonical_keyword_idx/);
+    assert.match(csv, /member_keyword_idxs/);
+    assert.match(csv, /cluster-1,7,/);
+    assert.match(csv, /7; 8/);
 
     const json = JSON.parse(await readFile(jsonPath, 'utf8')) as {
       clusters: Array<{ canonicalKeywordIdx: number; members: Array<{ keywordIdx: number }> }>;
@@ -185,8 +185,8 @@ test('query suggestion CSV and JSON publish parent source keyword ids', async ()
     });
 
     const csv = await readFile(csvPath, 'utf8');
-    assert.match(csv, /"parent_keyword_idxs"/);
-    assert.match(csv, /"7; 8"/);
+    assert.match(csv, /parent_keyword_idxs/);
+    assert.match(csv, /7; 8/);
 
     const json = JSON.parse(await readFile(jsonPath, 'utf8')) as {
       sourceRecords: Array<{ parentKeywordIdx: number }>;
