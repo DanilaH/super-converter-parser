@@ -48,7 +48,10 @@ function row(keyword: string, keywordIdx: number, domain: string, position = 1):
 }
 
 function persistDomain(store: RunStore, runId: string, keywordIdx: number, keyword: string, serpRows: SerpResult[]): void {
-  const source = new Map<string, { source: 'fresh'; fetchedAt: string }>();
+  const source = new Map<string, {
+    source: 'cache' | 'fresh' | 'none';
+    fetchedAt: string | null;
+  }>();
   for (const serpRow of serpRows) {
     source.set(serpRow.registrableDomain, { source: 'fresh', fetchedAt: '2026-08-29T00:00:00.000Z' });
   }
@@ -151,6 +154,59 @@ test('terminal repair checkpoint is recoverably journaled without another retry 
   assert.equal(attempt.resultRecord?.cacheStatus, 'refreshed');
   assert.deepEqual(attempt.resultSerpRows?.map((r) => r.registrableDomain), ['fresh.example']);
   assert.deepEqual(store.loadDomains(runId).map((d) => d.domain), ['fresh.example', 'healthy.example']);
+  store.close();
+});
+
+test('domain first-seen owner is preserved while that owner still has current SERP evidence', () => {
+  const { store, runId } = setup();
+  const firstOwner = store.loadKeyword(runId, 1)!;
+  const repairTarget = store.loadKeyword(runId, 0)!;
+  const firstOwnerRows = [row('failed keyword', 1, 'shared.example', 2)];
+  const repairTargetRows = [row('healthy keyword', 0, 'shared.example', 1)];
+
+  store.commitKeyword(runId, { ...firstOwner, status: 'completed', collectedAt: '2026-08-28T10:00:00.000Z' }, firstOwnerRows, 'miss');
+  persistDomain(store, runId, 1, 'failed keyword', firstOwnerRows);
+  store.commitKeyword(runId, {
+    ...repairTarget,
+    status: 'failed',
+    error: { code: 'GOOGLE_UNAVAILABLE', message: 'repair target failed' },
+    collectedAt: '2026-08-28T10:01:00.000Z',
+  }, repairTargetRows, 'miss');
+  persistDomain(store, runId, 0, 'healthy keyword', repairTargetRows);
+  store.setRunState(runId, 'completed_with_errors');
+
+  assert.equal(store.loadDomains(runId)[0]?.firstSeenKeywordIdx, 1);
+  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  const shared = store.loadDomains(runId).find((domain) => domain.domain === 'shared.example');
+  assert.equal(shared?.firstSeenKeywordIdx, 1);
+  assert.equal(shared?.firstSeenPosition, 2);
+  store.close();
+});
+
+test('domain first-seen owner moves only when the previous owner SERP is removed by repair', () => {
+  const { store, runId } = setup();
+  const fallbackOwner = store.loadKeyword(runId, 0)!;
+  const failedFirstOwner = store.loadKeyword(runId, 1)!;
+  const firstOwnerRows = [row('failed keyword', 1, 'shared.example', 2)];
+  const fallbackRows = [row('healthy keyword', 0, 'shared.example', 1)];
+
+  store.commitKeyword(runId, {
+    ...failedFirstOwner,
+    status: 'failed',
+    error: { code: 'GOOGLE_UNAVAILABLE', message: 'first owner failed' },
+    collectedAt: '2026-08-28T10:00:00.000Z',
+  }, firstOwnerRows, 'miss');
+  persistDomain(store, runId, 1, 'failed keyword', firstOwnerRows);
+  store.commitKeyword(runId, { ...fallbackOwner, status: 'completed', collectedAt: '2026-08-28T10:01:00.000Z' }, fallbackRows, 'miss');
+  persistDomain(store, runId, 0, 'healthy keyword', fallbackRows);
+  store.setRunState(runId, 'completed_with_errors');
+
+  assert.equal(store.loadDomains(runId)[0]?.firstSeenKeywordIdx, 1);
+  beginFailedKeywordRetries(store, runId, '2026-08-29T09:00:00.000Z');
+  const shared = store.loadDomains(runId).find((domain) => domain.domain === 'shared.example');
+  assert.equal(shared?.firstSeenKeywordIdx, 0);
+  assert.equal(shared?.firstSeenKeyword, 'healthy keyword');
+  assert.equal(shared?.firstSeenPosition, 1);
   store.close();
 });
 
