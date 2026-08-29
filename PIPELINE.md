@@ -752,3 +752,46 @@ Machine-readable final status. `artifacts.runQualityJson` points at the correspo
 Ordinary completed runs are historical artifacts and are never reopened by normal resume. The one narrow exception is an explicit `--resume <run-id> --retry-failed` repair of a `completed_with_errors` discovery run, which mutates that same logical run while preserving append-only retry evidence. Fully `completed`, `failed`, and `cancelled` discovery states remain immutable.
 
 New runs use the durable research layout under `RESEARCH_OUTPUT_ROOT`; terminal discovery/enrichment directories are historical artifacts. Legacy `runs/<uuid>` / `enrichments/<uuid>` directories remain readable and resumable only where explicitly supported, but are not the layout for new work.
+
+---
+
+## V2.1 post-enrichment finalist evidence
+
+After broad discovery and deep enrichment, explicitly selected finalist clusters use a separate evidence chain. It does not replace discovery scoring and it does not issue automatic BUILD/WATCH/KILL verdicts.
+
+```text
+clustering v2
+  ↓
+representatives
+  ↓
+entrant cohort
+  ├── cohort history
+  └── traffic evidence
+        ↓
+finalist evidence matrix
+```
+
+Implemented commands:
+
+```bash
+npm run representatives -- --enrichment <enrichment-id> --clusters cluster-1,cluster-4
+npm run entrant-cohort -- --enrichment <enrichment-id>
+npm run cohort-history -- --enrichment <enrichment-id> --young-domain-max-age-days <n> --recent-web-presence-max-age-days <n> --repurpose-gap-min-days <n>
+npm run traffic-evidence -- --enrichment <enrichment-id> --input <traffic.csv> --low-base-organic-traffic-threshold <n>
+npm run finalist-evidence -- --enrichment <enrichment-id> [--decisions <decisions.json>]
+```
+
+The finalist matrix projects independent blocks for demand, SERP accessibility, organic traffic proof, entrant repeatability, moat observations, monetization/geography, and product feasibility. Missing evidence remains missing; every ratio retains its denominator; CPC/site-structure facts are descriptive rather than automatic monetization/moat verdicts; product feasibility remains `null` until a human reviews it.
+
+Human decisions are persisted separately from evidence and pinned to the representative revision plus entrant fingerprint they reviewed. `unknown` is an explicit decision and is not the same as no recorded decision. Upstream changes make old decisions stale/retired rather than silently current.
+
+Published finalist artifacts are:
+
+```text
+finalist-evidence-matrix.csv
+finalist-evidence-matrix.json
+```
+
+They are manifest-gated in `results.zip`. Representative, entrant, cohort-history, traffic, or explicit human-decision generation changes invalidate stale finalist publication before a new matrix is advertised. Raw traffic imports remain durable append-only facts and are revalidated against the current entrant generation.
+
+See `FINALIST_EVIDENCE_ACCEPTANCE.md` for the exact PR-09 contract.

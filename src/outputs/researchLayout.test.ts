@@ -160,3 +160,31 @@ test('results.zip excludes stale traffic files unless the local manifest adverti
     assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), true);
   }
 });
+
+test('results.zip excludes stale finalist matrix files unless the local manifest advertises them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-finalist-zip-'));
+  const location = await allocateResearchLocation(root, 'Finalist Zip Test', new Date('2026-08-29T00:00:00Z'));
+  const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
+  const finalistArtifacts = [
+    'finalist-evidence-matrix.csv',
+    'finalist-evidence-matrix.json',
+  ];
+  for (const artifact of finalistArtifacts) {
+    await writeFile(join(enrichmentDirectory, artifact), `stale ${artifact}`);
+  }
+  const manifestPath = join(enrichmentDirectory, 'manifest.json');
+  await writeFile(manifestPath, JSON.stringify({ artifacts: [] }, null, 2) + '\n');
+
+  let archive = await archiveResearchDirectory(location.researchDirectory);
+  let zip = await readFile(archive);
+  for (const artifact of finalistArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), false);
+  }
+
+  await writeFile(manifestPath, JSON.stringify({ artifacts: finalistArtifacts }, null, 2) + '\n');
+  archive = await archiveResearchDirectory(location.researchDirectory);
+  zip = await readFile(archive);
+  for (const artifact of finalistArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), true);
+  }
+});

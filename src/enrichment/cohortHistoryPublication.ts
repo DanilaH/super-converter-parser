@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
-  entrantCohortFingerprint,
-} from '../db/cohortHistory.js';
+import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
 import { writeTextAtomic } from '../runs/run.js';
 import type { CohortHistoryPolicy } from './cohortHistory.js';
+import { invalidateFinalistEvidencePublication } from './finalistEvidencePublication.js';
 
 export const COHORT_HISTORY_ARTIFACTS = [
   'cohort-history.csv',
@@ -32,12 +31,79 @@ export type CohortHistoryPublicationSummary = {
   policy: CohortHistoryPolicy;
 };
 
+type PublicationContext = {
+  manifestPath: string;
+  statusPath: string;
+  originalManifest: string;
+  originalStatus: string;
+  manifest: Record<string, unknown>;
+  status: Record<string, unknown>;
+};
+
 export async function publishCohortHistoryMetadata(input: {
   enrichmentDirectory: string;
   enrichmentId: string;
   sourceRunId: string;
   summary: CohortHistoryPublicationSummary;
 }): Promise<void> {
+  let context = await loadPublicationContext(input);
+
+  if (input.summary.changed) {
+    await invalidateFinalistEvidencePublication({
+      enrichmentDirectory: input.enrichmentDirectory,
+      enrichmentId: input.enrichmentId,
+      sourceRunId: input.sourceRunId,
+    });
+    context = await loadPublicationContext(input);
+  }
+
+  const manifestArtifacts = uniqueStrings([
+    ...readStringArray(context.manifest.artifacts, 'manifest.json artifacts'),
+    ...COHORT_HISTORY_ARTIFACTS,
+  ]);
+  const statusArtifacts = uniqueStrings([
+    ...readStringArray(context.status.artifacts, 'status.json artifacts'),
+    ...COHORT_HISTORY_ARTIFACTS,
+  ]);
+
+  const nextManifest: Record<string, unknown> = {
+    ...context.manifest,
+    artifacts: manifestArtifacts,
+    cohortHistory: input.summary,
+  };
+  const nextStatus: Record<string, unknown> = {
+    ...context.status,
+    artifacts: statusArtifacts,
+    cohortHistory: input.summary,
+  };
+
+  await writeTextAtomic(
+    context.statusPath,
+    JSON.stringify(nextStatus, null, 2) + '\n',
+    'enrichment status with cohort history',
+  );
+  try {
+    await writeTextAtomic(
+      context.manifestPath,
+      JSON.stringify(nextManifest, null, 2) + '\n',
+      'enrichment manifest with cohort history',
+    );
+  } catch (error) {
+    await writeTextAtomic(
+      context.statusPath,
+      context.originalStatus,
+      'restore enrichment status',
+    ).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function loadPublicationContext(input: {
+  enrichmentDirectory: string;
+  enrichmentId: string;
+  sourceRunId: string;
+  summary: CohortHistoryPublicationSummary;
+}): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
   const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
@@ -63,41 +129,14 @@ export async function publishCohortHistoryMetadata(input: {
     );
   }
 
-  const manifestArtifacts = uniqueStrings([
-    ...readStringArray(manifest.artifacts, 'manifest.json artifacts'),
-    ...COHORT_HISTORY_ARTIFACTS,
-  ]);
-  const statusArtifacts = uniqueStrings([
-    ...readStringArray(status.artifacts, 'status.json artifacts'),
-    ...COHORT_HISTORY_ARTIFACTS,
-  ]);
-
-  const nextManifest: Record<string, unknown> = {
-    ...manifest,
-    artifacts: manifestArtifacts,
-    cohortHistory: input.summary,
-  };
-  const nextStatus: Record<string, unknown> = {
-    ...status,
-    artifacts: statusArtifacts,
-    cohortHistory: input.summary,
-  };
-
-  await writeTextAtomic(
+  return {
+    manifestPath,
     statusPath,
-    JSON.stringify(nextStatus, null, 2) + '\n',
-    'enrichment status with cohort history',
-  );
-  try {
-    await writeTextAtomic(
-      manifestPath,
-      JSON.stringify(nextManifest, null, 2) + '\n',
-      'enrichment manifest with cohort history',
-    );
-  } catch (error) {
-    await writeTextAtomic(statusPath, originalStatus, 'restore enrichment status').catch(() => undefined);
-    throw error;
-  }
+    originalManifest,
+    originalStatus,
+    manifest,
+    status,
+  };
 }
 
 function fingerprintPublishedEntrant(value: Record<string, unknown>): string {

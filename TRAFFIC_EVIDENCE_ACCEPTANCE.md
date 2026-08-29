@@ -317,7 +317,7 @@ Corrupt hashes, metadata, canonical dates, normalized identities, currency state
 
 ## CLI mutation order
 
-The CLI deliberately validates the combined history before append:
+The CLI deliberately validates the combined history and public parent before mutating traffic state:
 
 ```text
 load existing imports
@@ -325,18 +325,22 @@ load existing imports
 → dedupe by snapshot id
 → revalidate current targets
 → build compatible histories / detect ambiguous revisions
+→ determine whether traffic evidence semantically changes
+→ preflight public entrant parent / fingerprint
+→ invalidate published finalist matrix when traffic changes
 → append incoming facts
 → persist policy
 → rebuild current projection from SQLite
-→ preflight public entrant parent / fingerprint
-→ write artifacts
-→ publish metadata
+→ write traffic artifacts
+→ publish traffic metadata
 → rebuild results.zip
 ```
 
-This prevents an ambiguous new revision from being appended and permanently making the append-only history unprojectable. The public-parent preflight happens before any traffic artifact write, so stale published entrant metadata cannot acquire newly written traffic files.
+This prevents an ambiguous new revision from being appended and permanently making the append-only history unprojectable. It also closes the downstream crash window: when a valid traffic change is about to mutate SQLite, any previously published finalist matrix is invalidated first, so a process failure after the traffic mutation cannot leave stale finalist evidence advertised as current.
 
-If a later policy/publication write fails after a valid append, imported raw facts remain durable. A rerun can reuse those facts; valid evidence is not deleted merely to simulate transactionality across SQLite and filesystem publication.
+The public-parent preflight also happens before traffic mutation. Stale published entrant metadata therefore cannot cause new traffic facts/policy or traffic artifacts to be attached to an old public finalist generation.
+
+If a later traffic persistence/publication write fails after a valid append, imported raw facts remain durable. A rerun can reuse those facts; valid evidence is not deleted merely to simulate transactionality across SQLite and filesystem publication. Because finalist publication was already invalidated before the mutation, downstream interpretation remains fail-closed until rebuilt.
 
 ## Publication
 
@@ -404,9 +408,18 @@ traffic files deleted
 raw SQLite traffic imports retained
 ```
 
+When traffic facts or the persisted traffic policy change and a finalist matrix is already published:
+
+```text
+finalistEvidence metadata removed before traffic SQLite mutation
+finalist artifact names removed before traffic SQLite mutation
+finalist files deleted before traffic SQLite mutation
+raw traffic facts remain append-only
+```
+
 Representative publication invalidation cascades transitively through entrant → history + traffic publication.
 
-An unchanged entrant rerun preserves valid traffic publication.
+An unchanged entrant/traffic rerun preserves valid downstream publication.
 
 ## Archive fail-closed rule
 

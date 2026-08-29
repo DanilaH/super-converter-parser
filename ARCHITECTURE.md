@@ -43,12 +43,12 @@ src/
 ├── ahrefs/          # Domain Rating provider adapter
 ├── browser/         # CDP connection, collection, CAPTCHA/preflight
 ├── cache/           # Persistent cross-run cache + identities/TTL
-├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history / traffic-evidence
+├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history / traffic-evidence / finalist-evidence
 ├── config/          # typed runtime configuration
-├── db/              # SQLite schema, migrations, RunStore
+├── db/              # SQLite schema, migrations, RunStore + feature-owned evidence extensions
 ├── diagnostics/     # parser-failure evidence
 ├── domains/         # hostname / registrable-domain normalization
-├── enrichment/      # clusters, representative/entrant/history projections, suggestions, pages, site structure
+├── enrichment/      # clusters, representative/entrant/history/traffic/finalist projections, suggestions, pages, site structure
 ├── exports/         # generic CSV/export helpers
 ├── firstseen/       # first-seen provider adapter (Wayback path)
 ├── google/          # SERP, autocomplete, PAA, related-search parsing
@@ -116,19 +116,28 @@ versioned representative-query sets
 entrant-cohort CLI
         ↓
 representative top-10 registrable-domain cohort
+        ├────────────→ cohort-history CLI
+        │                    ↓
+        │             coverage-aware RDAP / first-seen history projection
+        │
+        └────────────→ traffic-evidence CLI
+                             ↓
+                      provider-neutral domain / URL traffic snapshots
+                             ↓
+                      current target validation + compatible history / velocity projection
         ↓
-cohort-history CLI
+finalist-evidence CLI
         ↓
-coverage-aware RDAP / first-seen history projection
+independent A–G human-review blocks + generation-pinned human decisions
         ↓
-traffic-evidence CLI
-        ↓
-provider-neutral domain / URL traffic snapshots
-        ↓
-current target validation + compatible history / velocity projection
+finalist-evidence-matrix.csv / finalist-evidence-matrix.json
 ```
 
-Each child projection pins its current parent and invalidates when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, cohort-history, and traffic-evidence CSV/JSON files are published derivatives. Historical traffic imports remain durable raw facts and are revalidated against the current entrant generation rather than being deleted when finalist evidence changes. History interpretation thresholds and traffic low-base policy are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
+Each child projection pins its current parent and invalidates published downstream interpretation when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, cohort-history, traffic-evidence, and finalist-evidence CSV/JSON files are published derivatives. Historical traffic imports remain durable raw facts and are revalidated against the current entrant generation rather than being deleted when finalist evidence changes. History interpretation thresholds and traffic low-base policy are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
+
+The finalist matrix is a projection layer, not a scoring layer. Demand, SERP accessibility, organic traffic proof, entrant repeatability, moat observations, monetization/geography, and product feasibility remain independent evidence blocks. Existing Score v1 remains a broad-discovery signal and is not converted into the finalist verdict. Product feasibility remains unautomated when no trustworthy measurement exists.
+
+Human finalist decisions are persisted separately from evidence in a lazy feature-owned extension inside `enrichment.sqlite`. A decision stores the representative revision and entrant fingerprint it reviewed. Upstream evidence changes do not silently rewrite that decision as current; the matrix exposes stale/retired decision state until the operator records a new current decision.
 
 ## Browser architecture
 
@@ -506,6 +515,8 @@ Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifa
 
 Writes that represent terminal/public state are atomic enough that an interrupted write does not advertise a completed run with mismatched artifacts. `manifest.json` is the final publication marker for terminal output sets; status/manifest publication must remain consistent.
 
+Derived finalist artifacts are manifest-gated in `results.zip`. Invalidating representative, entrant, history, traffic, or human-decision generations removes stale finalist metadata/artifact advertisements before a new matrix can be published, so orphan files cannot silently become current evidence.
+
 ## Graceful shutdown
 
 On the first Ctrl+C, the system requests a graceful pause and preserves resumability. A second Ctrl+C may force termination. A paused run must print enough information to resume it.
@@ -587,7 +598,9 @@ Examples:
 - source-specific Google status/error is preserved even when the aggregate keyword error belongs to Surfer;
 - omitted domains are explicitly marked `omitted` / `domain_cap`;
 - unavailable first-seen data is distinct from registration data;
-- successful suggestion sources are retained even if another source fails.
+- successful suggestion sources are retained even if another source fails;
+- missing finalist history/traffic/site-structure/product-feasibility evidence remains missing rather than becoming a penalty;
+- an explicit human `unknown` decision remains distinct from no recorded decision, and stale decisions remain visible rather than being silently treated as current.
 
 ## Rate limiting
 

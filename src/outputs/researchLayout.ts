@@ -34,6 +34,8 @@ const MANIFEST_GATED_ENRICHMENT_ARTIFACTS = new Set([
   'traffic-evidence.csv',
   'traffic-velocity.csv',
   'traffic-evidence.json',
+  'finalist-evidence-matrix.csv',
+  'finalist-evidence-matrix.json',
 ]);
 
 export function resolveOutputRoot(

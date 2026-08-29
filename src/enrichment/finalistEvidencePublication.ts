@@ -1,38 +1,28 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
 import { writeTextAtomic } from '../runs/run.js';
-import { invalidateFinalistEvidencePublication } from './finalistEvidencePublication.js';
-import type { TrafficEvidencePolicy } from './trafficEvidence.js';
 
-export const TRAFFIC_EVIDENCE_ARTIFACTS = [
-  'traffic-evidence.csv',
-  'traffic-velocity.csv',
-  'traffic-evidence.json',
+export const FINALIST_EVIDENCE_ARTIFACTS = [
+  'finalist-evidence-matrix.csv',
+  'finalist-evidence-matrix.json',
 ] as const;
 
-export type TrafficEvidencePublicationSummary = {
-  changed: boolean;
+export type FinalistEvidencePublicationSummary = {
   version: string;
-  currentEntrantFingerprint: string;
-  importedSnapshotCount: number;
-  currentTargetSnapshotCount: number;
-  matchedSnapshotCount: number;
-  mismatchedSnapshotCount: number;
-  staleTargetSnapshotCount: number;
-  historyCount: number;
-  velocityCount: number;
-  lowBaseWarningCount: number;
-  trafficValueCurrencyMismatchCount: number;
-  policy: TrafficEvidencePolicy;
-};
-
-type PublicationParentInput = {
-  enrichmentDirectory: string;
-  enrichmentId: string;
-  sourceRunId: string;
-  currentEntrantFingerprint: string;
+  representativeRevision: number;
+  entrantFingerprint: string;
+  finalistCount: number;
+  cohortHistoryAvailableCount: number;
+  importedTrafficSnapshotCount: number;
+  matchedTrafficSnapshotCount: number | null;
+  mismatchedTrafficSnapshotCount: number | null;
+  staleTrafficTargetCount: number;
+  currentHumanDecisionCount: number;
+  staleHumanDecisionCount: number;
+  unrecordedHumanDecisionCount: number;
+  auditFlagCount: number;
 };
 
 type PublicationContext = {
@@ -44,62 +34,57 @@ type PublicationContext = {
   status: Record<string, unknown>;
 };
 
-export async function assertTrafficEvidencePublicationParent(
-  input: PublicationParentInput,
-): Promise<void> {
-  await loadPublicationContext(input);
-}
-
-export async function publishTrafficEvidenceMetadata(input: {
+export async function assertFinalistEvidencePublicationParent(input: {
   enrichmentDirectory: string;
   enrichmentId: string;
   sourceRunId: string;
-  summary: TrafficEvidencePublicationSummary;
+  representativeRevision: number;
+  entrantFingerprint: string;
 }): Promise<void> {
-  const parentInput: PublicationParentInput = {
+  await loadPublicationContext(input);
+}
+
+export async function publishFinalistEvidenceMetadata(input: {
+  enrichmentDirectory: string;
+  enrichmentId: string;
+  sourceRunId: string;
+  summary: FinalistEvidencePublicationSummary;
+}): Promise<void> {
+  const context = await loadPublicationContext({
     enrichmentDirectory: input.enrichmentDirectory,
     enrichmentId: input.enrichmentId,
     sourceRunId: input.sourceRunId,
-    currentEntrantFingerprint: input.summary.currentEntrantFingerprint,
-  };
-  let context = await loadPublicationContext(parentInput);
-
-  if (input.summary.changed) {
-    await invalidateFinalistEvidencePublication({
-      enrichmentDirectory: input.enrichmentDirectory,
-      enrichmentId: input.enrichmentId,
-      sourceRunId: input.sourceRunId,
-    });
-    context = await loadPublicationContext(parentInput);
-  }
+    representativeRevision: input.summary.representativeRevision,
+    entrantFingerprint: input.summary.entrantFingerprint,
+  });
 
   const nextManifest: Record<string, unknown> = {
     ...context.manifest,
     artifacts: uniqueStrings([
       ...readStringArray(context.manifest.artifacts, 'manifest.json artifacts'),
-      ...TRAFFIC_EVIDENCE_ARTIFACTS,
+      ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    trafficEvidence: input.summary,
+    finalistEvidence: input.summary,
   };
   const nextStatus: Record<string, unknown> = {
     ...context.status,
     artifacts: uniqueStrings([
       ...readStringArray(context.status.artifacts, 'status.json artifacts'),
-      ...TRAFFIC_EVIDENCE_ARTIFACTS,
+      ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    trafficEvidence: input.summary,
+    finalistEvidence: input.summary,
   };
 
   await writeTextAtomic(
     context.statusPath,
     JSON.stringify(nextStatus, null, 2) + '\n',
-    'enrichment status with traffic evidence',
+    'enrichment status with finalist evidence',
   );
   try {
     await writeTextAtomic(
       context.manifestPath,
       JSON.stringify(nextManifest, null, 2) + '\n',
-      'enrichment manifest with traffic evidence',
+      'enrichment manifest with finalist evidence',
     );
   } catch (error) {
     await writeTextAtomic(
@@ -111,9 +96,60 @@ export async function publishTrafficEvidenceMetadata(input: {
   }
 }
 
-async function loadPublicationContext(
-  input: PublicationParentInput,
-): Promise<PublicationContext> {
+export async function invalidateFinalistEvidencePublication(input: {
+  enrichmentDirectory: string;
+  enrichmentId: string;
+  sourceRunId: string;
+}): Promise<void> {
+  const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
+  const statusPath = join(input.enrichmentDirectory, 'status.json');
+  const originalManifest = await readFile(manifestPath, 'utf8');
+  const originalStatus = await readFile(statusPath, 'utf8');
+  const manifest = parsePublishedJson(originalManifest, 'manifest.json');
+  const status = parsePublishedJson(originalStatus, 'status.json');
+  assertArtifactIdentity(manifest, input.enrichmentId, input.sourceRunId, 'manifest.json');
+  assertArtifactIdentity(status, input.enrichmentId, input.sourceRunId, 'status.json');
+
+  const nextManifest = withoutFinalistEvidence(manifest);
+  const nextStatus = withoutFinalistEvidence(status);
+  nextManifest.artifacts = filterFinalistArtifacts(
+    readStringArray(manifest.artifacts, 'manifest.json artifacts'),
+  );
+  nextStatus.artifacts = filterFinalistArtifacts(
+    readStringArray(status.artifacts, 'status.json artifacts'),
+  );
+
+  const changed = JSON.stringify(nextManifest) !== JSON.stringify(manifest)
+    || JSON.stringify(nextStatus) !== JSON.stringify(status);
+  if (changed) {
+    await writeTextAtomic(
+      statusPath,
+      JSON.stringify(nextStatus, null, 2) + '\n',
+      'invalidate finalist evidence status',
+    );
+    try {
+      await writeTextAtomic(
+        manifestPath,
+        JSON.stringify(nextManifest, null, 2) + '\n',
+        'invalidate finalist evidence manifest',
+      );
+    } catch (error) {
+      await writeTextAtomic(statusPath, originalStatus, 'restore enrichment status').catch(() => undefined);
+      throw error;
+    }
+  }
+
+  await Promise.all(FINALIST_EVIDENCE_ARTIFACTS.map((artifact) =>
+    rm(join(input.enrichmentDirectory, artifact), { force: true })));
+}
+
+async function loadPublicationContext(input: {
+  enrichmentDirectory: string;
+  enrichmentId: string;
+  sourceRunId: string;
+  representativeRevision: number;
+  entrantFingerprint: string;
+}): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
   const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
@@ -127,17 +163,19 @@ async function loadPublicationContext(
   assertArtifactIdentity(status, input.enrichmentId, input.sourceRunId, 'status.json');
   assertArtifactIdentity(entrant, input.enrichmentId, input.sourceRunId, 'entrant-cohort.json');
   if (manifest.state !== 'completed' || status.status !== 'completed') {
-    throw new Error('Traffic evidence publication requires a completed enrichment publication');
+    throw new Error('Finalist evidence publication requires a completed enrichment publication');
   }
+  assertRepresentativeRevision(manifest, input.representativeRevision, 'manifest.json');
+  assertRepresentativeRevision(status, input.representativeRevision, 'status.json');
+  assertEntrantRevision(manifest, input.representativeRevision, 'manifest.json');
+  assertEntrantRevision(status, input.representativeRevision, 'status.json');
 
   const publishedEntrantFingerprint = fingerprintPublishedEntrant(entrant);
-  if (publishedEntrantFingerprint !== input.currentEntrantFingerprint) {
+  if (publishedEntrantFingerprint !== input.entrantFingerprint) {
     throw new Error(
-      `entrant-cohort.json fingerprint ${publishedEntrantFingerprint} does not match current traffic parent ${input.currentEntrantFingerprint}`,
+      `entrant-cohort.json fingerprint ${publishedEntrantFingerprint} does not match current finalist parent ${input.entrantFingerprint}`,
     );
   }
-  assertPublicEntrantRevision(manifest, entrant, 'manifest.json');
-  assertPublicEntrantRevision(status, entrant, 'status.json');
 
   return {
     manifestPath,
@@ -164,25 +202,38 @@ function fingerprintPublishedEntrant(value: Record<string, unknown>): string {
   return entrantCohortFingerprint(snapshot);
 }
 
-function assertPublicEntrantRevision(
-  publication: Record<string, unknown>,
-  entrant: Record<string, unknown>,
+function assertRepresentativeRevision(
+  value: Record<string, unknown>,
+  expectedRevision: number,
   label: string,
 ): void {
-  const metadata = readRecord(publication.entrantCohort, `${label} entrantCohort`);
-  const publishedRevision = readInteger(
-    metadata.representativeRevision,
-    `${label} entrantCohort.representativeRevision`,
-  );
-  const artifactRevision = readInteger(
-    entrant.representativeRevision,
-    'entrant-cohort.json representativeRevision',
-  );
-  if (publishedRevision !== artifactRevision) {
-    throw new Error(
-      `${label} entrant cohort representative revision ${publishedRevision} does not match entrant-cohort.json revision ${artifactRevision}`,
-    );
+  const representatives = readRecord(value.representativeQueries, `${label} representativeQueries`);
+  const revision = readInteger(representatives.revision, `${label} representativeQueries.revision`);
+  if (revision !== expectedRevision) {
+    throw new Error(`${label} representative revision ${revision} does not match current finalist parent ${expectedRevision}`);
   }
+}
+
+function assertEntrantRevision(
+  value: Record<string, unknown>,
+  expectedRevision: number,
+  label: string,
+): void {
+  const entrant = readRecord(value.entrantCohort, `${label} entrantCohort`);
+  const revision = readInteger(entrant.representativeRevision, `${label} entrantCohort.representativeRevision`);
+  if (revision !== expectedRevision) {
+    throw new Error(`${label} entrant revision ${revision} does not match current finalist parent ${expectedRevision}`);
+  }
+}
+
+function withoutFinalistEvidence(value: Record<string, unknown>): Record<string, unknown> {
+  const { finalistEvidence: _finalistEvidence, ...rest } = value;
+  return rest;
+}
+
+function filterFinalistArtifacts(values: string[]): string[] {
+  const invalid = new Set<string>(FINALIST_EVIDENCE_ARTIFACTS);
+  return values.filter((value) => !invalid.has(value));
 }
 
 function parsePublishedJson(content: string, label: string): Record<string, unknown> {

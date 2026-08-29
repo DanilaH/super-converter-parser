@@ -5,21 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
-import { FINALIST_EVIDENCE_ARTIFACTS } from './finalistEvidencePublication.js';
 import {
-  TRAFFIC_EVIDENCE_VERSION,
-  type TrafficEvidencePolicy,
-} from './trafficEvidence.js';
-import {
-  publishTrafficEvidenceMetadata,
-  TRAFFIC_EVIDENCE_ARTIFACTS,
-  type TrafficEvidencePublicationSummary,
-} from './trafficEvidencePublication.js';
-
-const POLICY: TrafficEvidencePolicy = {
-  version: TRAFFIC_EVIDENCE_VERSION,
-  lowBaseOrganicTrafficThreshold: 100,
-};
+  FINALIST_EVIDENCE_ARTIFACTS,
+  invalidateFinalistEvidencePublication,
+  publishFinalistEvidenceMetadata,
+  type FinalistEvidencePublicationSummary,
+} from './finalistEvidencePublication.js';
 
 function entrant(): EntrantCohortSnapshot {
   const occurrence = {
@@ -89,72 +80,55 @@ function entrant(): EntrantCohortSnapshot {
   };
 }
 
-function summary(fingerprint: string): TrafficEvidencePublicationSummary {
+function summary(parent: EntrantCohortSnapshot): FinalistEvidencePublicationSummary {
   return {
-    changed: false,
-    version: TRAFFIC_EVIDENCE_VERSION,
-    currentEntrantFingerprint: fingerprint,
-    importedSnapshotCount: 2,
-    currentTargetSnapshotCount: 2,
-    matchedSnapshotCount: 2,
-    mismatchedSnapshotCount: 0,
-    staleTargetSnapshotCount: 0,
-    historyCount: 1,
-    velocityCount: 1,
-    lowBaseWarningCount: 0,
-    trafficValueCurrencyMismatchCount: 0,
-    policy: POLICY,
+    version: '1.0.0',
+    representativeRevision: parent.representativeRevision,
+    entrantFingerprint: entrantCohortFingerprint(parent),
+    finalistCount: 1,
+    cohortHistoryAvailableCount: 0,
+    importedTrafficSnapshotCount: 0,
+    matchedTrafficSnapshotCount: null,
+    mismatchedTrafficSnapshotCount: null,
+    staleTrafficTargetCount: 0,
+    currentHumanDecisionCount: 0,
+    staleHumanDecisionCount: 0,
+    unrecordedHumanDecisionCount: 1,
+    auditFlagCount: 3,
   };
 }
 
 async function seed(directory: string, parent: EntrantCohortSnapshot): Promise<void> {
-  const artifacts = ['entrant-cohort.json', 'manifest.json', 'status.json'];
-  await writeFile(join(directory, 'entrant-cohort.json'), JSON.stringify({
-    ...parent,
-    finalistClusterCount: parent.cohorts.length,
-  }, null, 2) + '\n');
+  await writeFile(join(directory, 'entrant-cohort.json'), JSON.stringify(parent, null, 2) + '\n');
   const common = {
     enrichmentId: parent.enrichmentId,
     sourceRunId: parent.sourceRunId,
-    artifacts,
+    artifacts: ['entrant-cohort.json'],
+    representativeQueries: { revision: parent.representativeRevision },
     entrantCohort: { representativeRevision: parent.representativeRevision },
   };
   await writeFile(join(directory, 'manifest.json'), JSON.stringify({ ...common, state: 'completed' }, null, 2) + '\n');
   await writeFile(join(directory, 'status.json'), JSON.stringify({ ...common, status: 'completed' }, null, 2) + '\n');
 }
 
-async function seedFinalistPublication(directory: string): Promise<void> {
-  for (const artifact of FINALIST_EVIDENCE_ARTIFACTS) {
-    await writeFile(join(directory, artifact), 'stale finalist evidence\n');
-  }
-  for (const file of ['manifest.json', 'status.json']) {
-    const path = join(directory, file);
-    const value = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown> & { artifacts: string[] };
-    value.artifacts = [...value.artifacts, ...FINALIST_EVIDENCE_ARTIFACTS];
-    value.finalistEvidence = { version: '1.0.0' };
-    await writeFile(path, JSON.stringify(value, null, 2) + '\n');
-  }
-}
-
-test('traffic publication advertises artifacts only against the matching entrant parent', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'traffic-publication-'));
+test('finalist publication advertises matrix artifacts only against the matching parent generation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finalist-publication-'));
   try {
     const parent = entrant();
-    const fingerprint = entrantCohortFingerprint(parent);
     await seed(directory, parent);
-    await publishTrafficEvidenceMetadata({
+    await publishFinalistEvidenceMetadata({
       enrichmentDirectory: directory,
       enrichmentId: parent.enrichmentId,
       sourceRunId: parent.sourceRunId,
-      summary: summary(fingerprint),
+      summary: summary(parent),
     });
 
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as {
       artifacts: string[];
-      trafficEvidence: TrafficEvidencePublicationSummary;
+      finalistEvidence: FinalistEvidencePublicationSummary;
     };
-    assert.equal(manifest.trafficEvidence.currentEntrantFingerprint, fingerprint);
-    for (const artifact of TRAFFIC_EVIDENCE_ARTIFACTS) {
+    assert.equal(manifest.finalistEvidence.entrantFingerprint, entrantCohortFingerprint(parent));
+    for (const artifact of FINALIST_EVIDENCE_ARTIFACTS) {
       assert.equal(manifest.artifacts.includes(artifact), true);
     }
   } finally {
@@ -162,19 +136,51 @@ test('traffic publication advertises artifacts only against the matching entrant
   }
 });
 
-test('changed traffic evidence removes stale finalist publication before publishing the new generation', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'traffic-publication-finalists-'));
+test('stale finalist parent fails before manifest or status mutation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finalist-publication-stale-'));
   try {
     const parent = entrant();
-    const fingerprint = entrantCohortFingerprint(parent);
     await seed(directory, parent);
-    await seedFinalistPublication(directory);
+    const manifestPath = join(directory, 'manifest.json');
+    const statusPath = join(directory, 'status.json');
+    const originalManifest = await readFile(manifestPath, 'utf8');
+    const originalStatus = await readFile(statusPath, 'utf8');
 
-    await publishTrafficEvidenceMetadata({
+    await assert.rejects(
+      () => publishFinalistEvidenceMetadata({
+        enrichmentDirectory: directory,
+        enrichmentId: parent.enrichmentId,
+        sourceRunId: parent.sourceRunId,
+        summary: { ...summary(parent), entrantFingerprint: '0'.repeat(64) },
+      }),
+      /does not match current finalist parent/,
+    );
+    assert.equal(await readFile(manifestPath, 'utf8'), originalManifest);
+    assert.equal(await readFile(statusPath, 'utf8'), originalStatus);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('finalist invalidation removes metadata, artifact advertisements and stale files', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finalist-publication-invalidate-'));
+  try {
+    const parent = entrant();
+    await seed(directory, parent);
+    await publishFinalistEvidenceMetadata({
       enrichmentDirectory: directory,
       enrichmentId: parent.enrichmentId,
       sourceRunId: parent.sourceRunId,
-      summary: { ...summary(fingerprint), changed: true },
+      summary: summary(parent),
+    });
+    for (const artifact of FINALIST_EVIDENCE_ARTIFACTS) {
+      await writeFile(join(directory, artifact), 'matrix artifact\n');
+    }
+
+    await invalidateFinalistEvidencePublication({
+      enrichmentDirectory: directory,
+      enrichmentId: parent.enrichmentId,
+      sourceRunId: parent.sourceRunId,
     });
 
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as Record<string, unknown> & {
@@ -185,32 +191,6 @@ test('changed traffic evidence removes stale finalist publication before publish
       assert.equal(manifest.artifacts.includes(artifact), false);
       await assert.rejects(() => readFile(join(directory, artifact), 'utf8'), /ENOENT/);
     }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test('stale entrant fingerprint rejects traffic publication without mutating manifest or status', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'traffic-publication-stale-'));
-  try {
-    const parent = entrant();
-    await seed(directory, parent);
-    const manifestPath = join(directory, 'manifest.json');
-    const statusPath = join(directory, 'status.json');
-    const originalManifest = await readFile(manifestPath, 'utf8');
-    const originalStatus = await readFile(statusPath, 'utf8');
-
-    await assert.rejects(
-      () => publishTrafficEvidenceMetadata({
-        enrichmentDirectory: directory,
-        enrichmentId: parent.enrichmentId,
-        sourceRunId: parent.sourceRunId,
-        summary: { ...summary('0'.repeat(64)), changed: true },
-      }),
-      /does not match current traffic parent/,
-    );
-    assert.equal(await readFile(manifestPath, 'utf8'), originalManifest);
-    assert.equal(await readFile(statusPath, 'utf8'), originalStatus);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

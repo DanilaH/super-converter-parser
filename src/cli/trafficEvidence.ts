@@ -29,6 +29,7 @@ import {
   assertTrafficEvidencePublicationParent,
   publishTrafficEvidenceMetadata,
 } from '../enrichment/trafficEvidencePublication.js';
+import { invalidateFinalistEvidencePublication } from '../enrichment/finalistEvidencePublication.js';
 import { loadTrafficSnapshotRows } from '../input/traffic/load.js';
 import {
   archiveResearchDirectory,
@@ -158,10 +159,11 @@ async function main(): Promise<void> {
       );
     }
 
+    const previousPolicy = loadTrafficEvidencePolicy(store, args.enrichmentId);
     let policy: TrafficEvidencePolicy;
     try {
       policy = resolveTrafficEvidencePolicy({
-        previous: loadTrafficEvidencePolicy(store, args.enrichmentId),
+        previous: previousPolicy,
         ...(args.lowBaseOrganicTrafficThreshold === undefined
           ? {}
           : { lowBaseOrganicTrafficThreshold: args.lowBaseOrganicTrafficThreshold }),
@@ -202,18 +204,13 @@ async function main(): Promise<void> {
       throw inputError(error);
     }
 
-    const appendResult = incoming.length === 0
-      ? { inserted: 0, duplicates: 0 }
-      : appendTrafficSnapshots(store, args.enrichmentId, incoming);
-    saveTrafficEvidencePolicy(store, args.enrichmentId, policy);
-
-    const imports = loadTrafficImportRecords(store, args.enrichmentId);
-    const current = projectCurrentTrafficEvidence({
-      importedSnapshots: imports.map((record) => record.snapshot),
-      cohorts: entrant.cohorts,
-      policy,
-    });
     const currentEntrantFingerprint = entrantCohortFingerprint(entrant);
+    const existingSnapshotIds = new Set(existing.map((record) => record.snapshotId));
+    const trafficChanged = incoming.some(
+      (snapshot) => !existingSnapshotIds.has(trafficSnapshotId(snapshot)),
+    )
+      || previousPolicy === null
+      || JSON.stringify(previousPolicy) !== JSON.stringify(policy);
 
     try {
       await assertTrafficEvidencePublicationParent({
@@ -225,6 +222,26 @@ async function main(): Promise<void> {
     } catch (error) {
       throw inputError(error);
     }
+
+    if (trafficChanged) {
+      await invalidateFinalistEvidencePublication({
+        enrichmentDirectory: enrichmentLocation.enrichmentDirectory,
+        enrichmentId: args.enrichmentId,
+        sourceRunId: enrichment.sourceRunId,
+      });
+    }
+
+    const appendResult = incoming.length === 0
+      ? { inserted: 0, duplicates: 0 }
+      : appendTrafficSnapshots(store, args.enrichmentId, incoming);
+    saveTrafficEvidencePolicy(store, args.enrichmentId, policy);
+
+    const imports = loadTrafficImportRecords(store, args.enrichmentId);
+    const current = projectCurrentTrafficEvidence({
+      importedSnapshots: imports.map((record) => record.snapshot),
+      cohorts: entrant.cohorts,
+      policy,
+    });
 
     const artifact: TrafficEvidenceArtifact = {
       version: TRAFFIC_EVIDENCE_VERSION,
@@ -256,6 +273,7 @@ async function main(): Promise<void> {
       enrichmentId: args.enrichmentId,
       sourceRunId: enrichment.sourceRunId,
       summary: {
+        changed: trafficChanged,
         version: TRAFFIC_EVIDENCE_VERSION,
         currentEntrantFingerprint,
         importedSnapshotCount: current.importedSnapshotCount,

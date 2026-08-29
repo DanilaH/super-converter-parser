@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
 import type { ResearchConfig } from '../config/config.js';
 import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
+import { FINALIST_EVIDENCE_ARTIFACTS } from './finalistEvidencePublication.js';
 import { TRAFFIC_EVIDENCE_ARTIFACTS } from './trafficEvidencePublication.js';
 
 export const ENTRANT_COHORT_ARTIFACTS = [
@@ -14,6 +15,7 @@ export const ENTRANT_COHORT_ARTIFACTS = [
 const ENTRANT_DEPENDENT_ARTIFACTS = [
   ...COHORT_HISTORY_ARTIFACTS,
   ...TRAFFIC_EVIDENCE_ARTIFACTS,
+  ...FINALIST_EVIDENCE_ARTIFACTS,
 ] as const;
 
 export type EntrantCohortPublicationSummary = {
@@ -109,6 +111,7 @@ function withoutEntrantDependents(value: Record<string, unknown>): Record<string
   const {
     cohortHistory: _cohortHistory,
     trafficEvidence: _trafficEvidence,
+    finalistEvidence: _finalistEvidence,
     ...rest
   } = value;
   return rest;
