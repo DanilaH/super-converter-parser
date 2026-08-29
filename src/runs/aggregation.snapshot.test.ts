@@ -33,7 +33,7 @@ function serp(keyword: string, position: number, domain: string, dr: number | nu
   };
 }
 
-test('writeSnapshots emits aggregation artifacts (candidates, related, domains, report, status)', async () => {
+test('writeSnapshots emits aggregation artifacts (candidates, related, domains, quality, report, status)', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();
   store.createRun({ runId, configSnapshot: BASE_CONFIG, parserVersions: { surfer: '1.0.0', google: '1.2.0' }, input: INPUT, keywords: KEYWORDS });
@@ -85,7 +85,7 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   await writeSnapshots(store, runId, runDirectory, 'completed');
 
   const files = await readdir(runDirectory);
-  for (const name of ['candidates.csv', 'related-keywords.csv', 'domains.csv', 'report.md', 'status.json']) {
+  for (const name of ['candidates.csv', 'related-keywords.csv', 'domains.csv', 'run-quality.json', 'report.md', 'status.json']) {
     assert.ok(files.includes(name), `expected artifact ${name}`);
   }
 
@@ -114,9 +114,20 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.equal(status.scoringVersion, SCORING_VERSION);
   assert.ok(typeof status.artifacts.candidatesCsv === 'string');
   assert.ok(status.artifacts.candidatesCsv.endsWith('candidates.csv'));
+  assert.ok(status.artifacts.runQualityJson.endsWith('run-quality.json'));
   assert.equal(status.candidateReport, status.artifacts.candidatesCsv);
   assert.equal(status.counts.domains, 3);
   assert.equal(status.counts.relatedKeywords, 1);
+
+  const quality = JSON.parse(await readFile(join(runDirectory, 'run-quality.json'), 'utf8'));
+  assert.equal(quality.version, '1.0.0');
+  assert.equal(quality.runId, runId);
+  assert.equal(quality.sources.googleSerp.denominator, 3);
+  assert.equal(quality.sources.googleSerp.trustworthy, 2);
+  assert.equal(quality.sources.related.denominator, 3);
+  assert.equal(quality.sources.related.successful, 1);
+  assert.equal(quality.geo.grade, 'logical_only');
+  assert.equal(quality.bounds.relatedExpansion.explicitOmissionCount, null);
 
   // first_seen_keyword carries the real keyword text, not its index.
   assert.ok(domains.join('\n').includes('compare lists'));
