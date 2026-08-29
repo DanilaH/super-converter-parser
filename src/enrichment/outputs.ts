@@ -21,8 +21,10 @@ export type ClusterOutputOptions = {
 export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordCluster[]): Promise<void> {
   const header = [
     'cluster_id',
+    'canonical_keyword_idx',
     'canonical_keyword',
     'member_count',
+    'member_keyword_idxs',
     'members',
     'median_volume',
     'average_volume',
@@ -32,8 +34,10 @@ export function writeKeywordClustersCsv(outputPath: string, clusters: KeywordClu
   for (const cluster of clusters) {
     rows.push([
       cluster.clusterId,
+      cluster.canonicalKeywordIdx === null ? '' : String(cluster.canonicalKeywordIdx),
       cluster.canonicalKeyword,
       String(cluster.memberCount),
+      cluster.members.map((m) => m.keywordIdx === null ? '' : String(m.keywordIdx)).join('; '),
       cluster.members.map((m) => m.keyword).join('; '),
       cluster.medianVolume !== null ? String(cluster.medianVolume) : '',
       cluster.averageVolume !== null ? cluster.averageVolume.toFixed(2) : '',
@@ -59,6 +63,7 @@ export function writeKeywordClustersJson(
     clusterCount: options.clusters.length,
     clusters: options.clusters.map((c) => ({
       clusterId: c.clusterId,
+      canonicalKeywordIdx: c.canonicalKeywordIdx,
       canonicalKeyword: c.canonicalKeyword,
       memberCount: c.memberCount,
       members: c.members,
@@ -170,23 +175,25 @@ export function writeSiteStructureCsv(
     'errors',
     'cache_status',
     'fetched_at',
+    'source_keywords',
     'omitted',
     'omit_reason',
   ];
   const rows: string[][] = [header];
-  for (const record of records) {
+  for (const r of records) {
     rows.push([
-      record.domain,
-      record.homepageStatus,
-      record.robotsStatus,
-      record.sitemapType,
-      String(record.declaredSitemapCount),
-      String(record.discoveredUrlCount),
-      String(record.sampledUrls.length),
-      record.sampledUrls.join('; '),
-      record.errors.map((e) => `${e.url}: ${e.error}`).join('; '),
-      record.cacheStatus,
-      record.fetchedAt,
+      r.domain,
+      r.homepageStatus,
+      r.robotsStatus,
+      r.sitemapType,
+      String(r.declaredSitemapCount),
+      String(r.discoveredUrlCount),
+      String(r.sampledUrls.length),
+      r.sampledUrls.join('; '),
+      r.errors.map((e) => `${e.url}: ${e.error}`).join(' | '),
+      r.cacheStatus,
+      r.fetchedAt,
+      r.sourceKeywords.join('; '),
       'false',
       '',
     ]);
@@ -194,15 +201,16 @@ export function writeSiteStructureCsv(
   for (const item of omitted) {
     rows.push([
       item.domain,
-      'skipped',
-      '',
-      'none',
-      '0',
-      '0',
-      '0',
       '',
       '',
-      'none',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
       '',
       'true',
       item.reason,
