@@ -142,6 +142,29 @@ function occurrenceIdentityKey(occurrence: RawSuggestionOccurrence): string {
   return `${occurrence.source}:${parentIdentityKey(occurrence.parentKeywordIdx, occurrence.normalizedParent)}:${occurrence.normalizedSuggestion}`;
 }
 
+export function countPersistedQueryParents(
+  records: readonly Array<{ parentKeywordIdx: number | null; normalizedParent: string }>,
+): number {
+  const concreteIds = new Set<number>();
+  const concreteTexts = new Set<string>();
+  const legacyTexts = new Set<string>();
+
+  for (const record of records) {
+    if (record.parentKeywordIdx === null) {
+      legacyTexts.add(record.normalizedParent);
+      continue;
+    }
+    concreteIds.add(record.parentKeywordIdx);
+    concreteTexts.add(record.normalizedParent);
+  }
+
+  let legacyOnlyCount = 0;
+  for (const normalizedParent of legacyTexts) {
+    if (!concreteTexts.has(normalizedParent)) legacyOnlyCount += 1;
+  }
+  return concreteIds.size + legacyOnlyCount;
+}
+
 export function dedupSuggestions(
   occurrences: RawSuggestionOccurrence[],
   market: string,
@@ -1115,7 +1138,7 @@ export function buildQueryResultFromStore(
   const suggestions = dedupSuggestions(occurrences, market, hl, gl);
   const emptyCount = sourceRecords.filter((r) => r.status === 'empty').length;
   const errorCount = sourceRecords.filter((r) => r.status === 'error').length;
-  const inputCount = new Set(sourceRecords.map((record) => parentIdentityKey(record.parentKeywordIdx, record.normalizedParent))).size;
+  const inputCount = countPersistedQueryParents(sourceRecords);
 
   return {
     enrichmentId,
