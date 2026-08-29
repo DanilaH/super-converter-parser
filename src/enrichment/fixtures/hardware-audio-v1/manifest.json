@@ -1,0 +1,64 @@
+{
+  "fixtureVersion": "1.0.0",
+  "purpose": "Real Hardware/Audio V1 clustering regression evidence captured before clustering v2.",
+  "contract": {
+    "preserved": "durable keyword idx, raw/normalized keyword, market, volume/CPC, organic top-10 URL/domain/position/DR, selected domain-history, V1 final cluster expectations",
+    "derived": "pair overlap/intersection/Jaccard/edge decisions are intentionally recomputed from raw SERP by tests and are not duplicated in fixture"
+  },
+  "runs": [
+    {
+      "label": "initial",
+      "file": "initial.json",
+      "sourceRunId": "20260827173244786_76b529ae-cff3-475c-9d5b-383ecb8bb714",
+      "archiveName": "results(20260827-190920).zip",
+      "archiveSha256": "f6136de548ba100cb722073f8a44180848fff5e501989525c4f36d84632b26b4",
+      "observationCount": 12,
+      "derivedPairCount": 66,
+      "derivedV1Edges": [
+        [
+          29,
+          39
+        ]
+      ],
+      "v1ClusterCount": 11,
+      "selectedDomainHistoryCount": 5
+    },
+    {
+      "label": "residual_round_3",
+      "file": "residual-round-3.json",
+      "sourceRunId": "20260827181027044_840b14c9-08fa-401f-8d85-cbc56dac9437",
+      "archiveName": "results(20260827-190931).zip",
+      "archiveSha256": "b4964192e4176fcca68dc579b68d6e6da9b6899ac137c9910fddfdc3027f402c",
+      "observationCount": 7,
+      "derivedPairCount": 21,
+      "derivedV1Edges": [],
+      "v1ClusterCount": 7,
+      "selectedDomainHistoryCount": 4
+    },
+    {
+      "label": "targeted_round_2",
+      "file": "targeted-round-2.json",
+      "sourceRunId": "20260827182930128_6d38010e-0780-4ac8-b6b0-16b1a8dcfcac",
+      "archiveName": "results(20260827-190939).zip",
+      "archiveSha256": "4add6e902e0ec78063e9d4e3fc1c3e51a161be7ea31a772246dc4924d9ec3df4",
+      "observationCount": 5,
+      "derivedPairCount": 10,
+      "derivedV1Edges": [
+        [
+          17,
+          20
+        ]
+      ],
+      "v1ClusterCount": 4,
+      "selectedDomainHistoryCount": 4
+    }
+  ],
+  "summary": {
+    "runCount": 3,
+    "observationCount": 24,
+    "derivedPairCount": 97,
+    "derivedV1EdgeCount": 2,
+    "v1ClusterCount": 22,
+    "selectedDomainHistoryCount": 13
+  }
+}
