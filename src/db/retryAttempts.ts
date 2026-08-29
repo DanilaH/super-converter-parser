@@ -32,6 +32,13 @@ type RetryAttemptRow = {
   result_serp_rows: string | null;
 };
 
+// Explicit repair is staged inside one SQLite transaction. The CLI can therefore
+// validate config/cache/output writability against the staged pending state, but
+// a failure before the normal cache-planning phase closes the store and SQLite
+// rolls the transaction back. The first public open-attempt read after preflight
+// commits the prepared repair before browser work starts.
+const stagedKeywordRetries = new WeakMap<RunStore, string>();
+
 function dbOf(store: RunStore): Database.Database {
   // RunStore intentionally owns the SQLite connection. The retry journal is a
   // feature-owned extension schema in the same run.sqlite; this narrow adapter
@@ -45,49 +52,51 @@ function retrySchemaExists(store: RunStore): boolean {
     .get());
 }
 
+function applyKeywordRetrySchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS keyword_retry_schema (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      version INTEGER NOT NULL
+    );
+  `);
+  const row = db
+    .prepare('SELECT version FROM keyword_retry_schema WHERE singleton = 1')
+    .get() as { version: number } | undefined;
+  if (row && row.version > KEYWORD_RETRY_SCHEMA_VERSION) {
+    throw new ResearchError(
+      'DB_ERROR',
+      `Keyword retry schema version ${row.version} is newer than this build supports (${KEYWORD_RETRY_SCHEMA_VERSION}).`,
+    );
+  }
+  if (!row) {
+    db.prepare('INSERT INTO keyword_retry_schema (singleton, version) VALUES (1, ?)')
+      .run(KEYWORD_RETRY_SCHEMA_VERSION);
+  } else if (row.version < 1) {
+    throw new ResearchError('DB_ERROR', `Unsupported keyword retry schema version ${row.version}.`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS keyword_retry_attempts (
+      run_id TEXT NOT NULL,
+      keyword_idx INTEGER NOT NULL,
+      retry_no INTEGER NOT NULL,
+      requested_at TEXT NOT NULL,
+      completed_at TEXT,
+      previous_record TEXT NOT NULL,
+      previous_serp_rows TEXT NOT NULL,
+      result_record TEXT,
+      result_serp_rows TEXT,
+      PRIMARY KEY (run_id, keyword_idx, retry_no)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS keyword_retry_attempts_open
+      ON keyword_retry_attempts(run_id, keyword_idx)
+      WHERE completed_at IS NULL;
+  `);
+}
+
 export function ensureKeywordRetrySchema(store: RunStore): void {
   const db = dbOf(store);
-  const apply = db.transaction(() => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS keyword_retry_schema (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        version INTEGER NOT NULL
-      );
-    `);
-    const row = db
-      .prepare('SELECT version FROM keyword_retry_schema WHERE singleton = 1')
-      .get() as { version: number } | undefined;
-    if (row && row.version > KEYWORD_RETRY_SCHEMA_VERSION) {
-      throw new ResearchError(
-        'DB_ERROR',
-        `Keyword retry schema version ${row.version} is newer than this build supports (${KEYWORD_RETRY_SCHEMA_VERSION}).`,
-      );
-    }
-    if (!row) {
-      db.prepare('INSERT INTO keyword_retry_schema (singleton, version) VALUES (1, ?)')
-        .run(KEYWORD_RETRY_SCHEMA_VERSION);
-    } else if (row.version < 1) {
-      throw new ResearchError('DB_ERROR', `Unsupported keyword retry schema version ${row.version}.`);
-    }
-
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS keyword_retry_attempts (
-        run_id TEXT NOT NULL,
-        keyword_idx INTEGER NOT NULL,
-        retry_no INTEGER NOT NULL,
-        requested_at TEXT NOT NULL,
-        completed_at TEXT,
-        previous_record TEXT NOT NULL,
-        previous_serp_rows TEXT NOT NULL,
-        result_record TEXT,
-        result_serp_rows TEXT,
-        PRIMARY KEY (run_id, keyword_idx, retry_no)
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS keyword_retry_attempts_open
-        ON keyword_retry_attempts(run_id, keyword_idx)
-        WHERE completed_at IS NULL;
-    `);
-  });
+  const apply = db.transaction(() => applyKeywordRetrySchema(db));
   apply();
 }
 
@@ -103,6 +112,33 @@ function assertRetrySchemaReadable(store: RunStore): boolean {
     );
   }
   return true;
+}
+
+function commitPreparedKeywordRetry(store: RunStore, runId: string): void {
+  const stagedRunId = stagedKeywordRetries.get(store);
+  if (stagedRunId === undefined) return;
+  if (stagedRunId !== runId) {
+    throw new ResearchError(
+      'DB_ERROR',
+      `Run store has a staged failed-keyword repair for "${stagedRunId}", not "${runId}".`,
+    );
+  }
+  const db = dbOf(store);
+  try {
+    db.exec('COMMIT');
+    stagedKeywordRetries.delete(store);
+  } catch (error) {
+    try {
+      if (db.inTransaction) db.exec('ROLLBACK');
+    } finally {
+      stagedKeywordRetries.delete(store);
+    }
+    throw new ResearchError(
+      'DB_ERROR',
+      `Failed to commit prepared failed-keyword repair for run "${runId}".`,
+      { cause: error },
+    );
+  }
 }
 
 function mapAttemptRow(row: RetryAttemptRow): KeywordRetryAttempt {
@@ -131,6 +167,11 @@ export function loadKeywordRetryAttempts(store: RunStore, runId: string): Keywor
 }
 
 export function loadOpenKeywordRetryIndexes(store: RunStore, runId: string): number[] {
+  // This is the first retry-specific read performed by the CLI after resume
+  // config/cache/output preflight. Publishing the staged transaction here means
+  // browser failures remain resumable while earlier validation failures leave
+  // no durable repair mutation at all.
+  commitPreparedKeywordRetry(store, runId);
   if (!assertRetrySchemaReadable(store)) return [];
   return (dbOf(store)
     .prepare(
@@ -188,49 +229,59 @@ function reconcileDomainsFromCurrentSerp(db: Database.Database, runId: string): 
 }
 
 /**
- * Snapshot every currently failed keyword, clear only its current checkpoint,
- * and reopen the logical run as paused in one SQLite transaction. Completed and
- * partial keywords are never touched.
+ * Snapshot every currently failed keyword and stage its current checkpoint as
+ * pending in one uncommitted SQLite transaction. Completed and partial keywords
+ * are never touched. The caller may run read-only/config/cache/output preflight
+ * while observing the staged state. Closing the store before publication rolls
+ * everything back, including the extension schema created for the first repair.
  */
 export function beginFailedKeywordRetries(
   store: RunStore,
   runId: string,
   requestedAt: string = new Date().toISOString(),
 ): number[] {
-  ensureKeywordRetrySchema(store);
+  if (stagedKeywordRetries.has(store)) {
+    throw new ResearchError('DB_ERROR', `Run store already has a staged failed-keyword repair.`);
+  }
+
   const db = dbOf(store);
-  const failed = store.loadKeywords(runId).filter((keyword) => keyword.status === 'failed');
-  if (failed.length === 0) return [];
-  const currentSerpRows = store.loadSerpRows(runId);
-  const reopened: number[] = [];
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    applyKeywordRetrySchema(db);
+    const failed = store.loadKeywords(runId).filter((keyword) => keyword.status === 'failed');
+    if (failed.length === 0) {
+      db.exec('ROLLBACK');
+      return [];
+    }
+    const currentSerpRows = store.loadSerpRows(runId);
+    const reopened: number[] = [];
 
-  const nextRetryNo = db.prepare(
-    `SELECT COALESCE(MAX(retry_no), 0) + 1 AS retry_no
-     FROM keyword_retry_attempts WHERE run_id = ? AND keyword_idx = ?`,
-  );
-  const openAttempt = db.prepare(
-    `SELECT retry_no FROM keyword_retry_attempts
-     WHERE run_id = ? AND keyword_idx = ? AND completed_at IS NULL`,
-  );
-  const insertAttempt = db.prepare(
-    `INSERT INTO keyword_retry_attempts
-      (run_id, keyword_idx, retry_no, requested_at, previous_record, previous_serp_rows)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  );
-  const resetKeyword = db.prepare(
-    `UPDATE keywords
-     SET status = 'pending', surfer = NULL, google = NULL, error = NULL,
-         collected_at = NULL, cache_status = NULL
-     WHERE run_id = ? AND idx = ? AND status = 'failed'`,
-  );
-  const deleteSerp = db.prepare('DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?');
-  const updateRun = db.prepare(
-    `UPDATE runs
-     SET state = 'paused', updated_at = ?, pause_reason = ?
-     WHERE run_id = ?`,
-  );
+    const nextRetryNo = db.prepare(
+      `SELECT COALESCE(MAX(retry_no), 0) + 1 AS retry_no
+       FROM keyword_retry_attempts WHERE run_id = ? AND keyword_idx = ?`,
+    );
+    const openAttempt = db.prepare(
+      `SELECT retry_no FROM keyword_retry_attempts
+       WHERE run_id = ? AND keyword_idx = ? AND completed_at IS NULL`,
+    );
+    const insertAttempt = db.prepare(
+      `INSERT INTO keyword_retry_attempts
+        (run_id, keyword_idx, retry_no, requested_at, previous_record, previous_serp_rows)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const resetKeyword = db.prepare(
+      `UPDATE keywords
+       SET status = 'pending', surfer = NULL, google = NULL, error = NULL,
+           collected_at = NULL, cache_status = NULL
+       WHERE run_id = ? AND idx = ? AND status = 'failed'`,
+    );
+    const deleteSerp = db.prepare('DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?');
+    const updateRun = db.prepare(
+      `UPDATE runs
+       SET state = 'paused', updated_at = ?, pause_reason = ?
+       WHERE run_id = ?`,
+    );
 
-  const tx = db.transaction(() => {
     for (const keyword of failed) {
       if (openAttempt.get(runId, keyword.idx)) {
         throw new ResearchError(
@@ -260,9 +311,16 @@ export function beginFailedKeywordRetries(
     }
     reconcileDomainsFromCurrentSerp(db, runId);
     updateRun.run(requestedAt, 'Explicit failed-keyword repair prepared.', runId);
-  });
-  tx();
-  return reopened;
+    stagedKeywordRetries.set(store, runId);
+    return reopened;
+  } catch (error) {
+    try {
+      if (db.inTransaction) db.exec('ROLLBACK');
+    } finally {
+      stagedKeywordRetries.delete(store);
+    }
+    throw error;
+  }
 }
 
 /**
