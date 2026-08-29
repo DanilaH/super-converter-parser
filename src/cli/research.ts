@@ -670,6 +670,29 @@ export async function runCli(
         : {}),
       hooks,
       signal,
+      // Reconcile retry journal/domain state inside the engine's existing
+      // publication boundary. The engine publishes terminal artifacts before it
+      // flips the run to a terminal state; doing reconciliation here preserves
+      // that atomic-publication invariant and avoids an unsafe post-terminal
+      // rewrite from the CLI.
+      publishSnapshots: async (
+        snapshotStore,
+        snapshotRunId,
+        snapshotDirectory,
+        snapshotState,
+        snapshotAhrefs,
+        snapshotScoring,
+      ) => {
+        reconcileCompletedKeywordRetries(snapshotStore, snapshotRunId);
+        await writeSnapshots(
+          snapshotStore,
+          snapshotRunId,
+          snapshotDirectory,
+          snapshotState,
+          snapshotAhrefs,
+          snapshotScoring,
+        );
+      },
       cache: {
         store: cacheStore,
         forceRefresh: effective.forceRefresh,
@@ -682,21 +705,6 @@ export async function runCli(
       ...(ahrefs ? { ahrefs } : {}),
       requireAhrefs: runConfig.ahrefs.requireAhrefs,
     });
-
-    // Close any repair attempts that reached a terminal current checkpoint and
-    // republish from reconciled SQLite state. This also repairs domain aggregate
-    // ownership after a SERP replacement.
-    const closedRetryIdxs = reconcileCompletedKeywordRetries(store, runId);
-    if (closedRetryIdxs.length > 0) {
-      await writeSnapshots(
-        store,
-        runId,
-        runDirectory,
-        outcome.kind === 'paused' ? 'paused' : outcome.state,
-        outcome.ahrefs ?? undefined,
-        outcome.scoringCompleteness ?? undefined,
-      );
-    }
 
     if (outcome.kind === 'paused') {
       console.log('');
