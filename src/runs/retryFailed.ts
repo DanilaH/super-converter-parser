@@ -2,7 +2,7 @@ import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import { RunStore, type StoredRun } from '../db/store.js';
 import {
-  beginFailedKeywordRetries,
+  applyFailedKeywordRetries,
   isRetryRepairStateEligible,
   loadOpenKeywordRetryIndexes,
 } from '../db/retryAttempts.js';
@@ -10,8 +10,9 @@ import { ResearchError } from '../shared/errors.js';
 
 export type FailedKeywordRetryPreparation = {
   run: StoredRun;
-  reopenedKeywordIdxs: number[];
+  plannedKeywordIdxs: number[];
   openKeywordIdxs: number[];
+  requestedAt: string;
 };
 
 function assertRetryParserCompatibility(run: StoredRun): void {
@@ -27,15 +28,14 @@ function assertRetryParserCompatibility(run: StoredRun): void {
 }
 
 /**
- * Explicitly prepares only failed keyword checkpoints for repair. New repair
- * state is staged transactionally; the CLI publishes it only after resume
- * config/cache/output preflight succeeds. Closing the store first rolls the
- * preparation back. An already-open repair remains ordinary durable resume
- * state and does not need --retry-failed again.
+ * Builds a read-only repair plan. No run state, keyword checkpoint, SERP row,
+ * domain aggregate, or retry schema is changed here. The CLI can therefore run
+ * all resume config/cache/output preflight before applying operator intent.
  */
 export function prepareFailedKeywordRetry(
   store: RunStore,
   runId: string,
+  requestedAt: string = new Date().toISOString(),
 ): FailedKeywordRetryPreparation {
   const run = store.loadRun(runId);
   if (!run) {
@@ -54,34 +54,52 @@ export function prepareFailedKeywordRetry(
     );
   }
 
+  // An interrupted repair already carries durable intent. Re-entering with
+  // --retry-failed is idempotent: finish that generation first instead of
+  // opening a second attempt for another failed row mid-repair.
   const alreadyOpen = loadOpenKeywordRetryIndexes(store, runId);
-  const failed = store.loadKeywords(runId).filter((keyword) => keyword.status === 'failed');
+  if (alreadyOpen.length > 0) {
+    return {
+      run,
+      plannedKeywordIdxs: [],
+      openKeywordIdxs: alreadyOpen,
+      requestedAt,
+    };
+  }
 
+  const failed = store
+    .loadKeywords(runId)
+    .filter((keyword) => keyword.status === 'failed')
+    .map((keyword) => keyword.idx);
   if (failed.length === 0) {
-    if (alreadyOpen.length > 0) {
-      return {
-        run,
-        reopenedKeywordIdxs: [],
-        openKeywordIdxs: alreadyOpen,
-      };
-    }
     throw new ResearchError(
       'INPUT_SCHEMA_ERROR',
       `Run "${runId}" has no failed keywords to retry.`,
     );
   }
 
-  const reopenedKeywordIdxs = beginFailedKeywordRetries(store, runId);
-  const updatedRun = store.loadRun(runId);
-  if (!updatedRun) {
-    throw new ResearchError('DB_ERROR', `Run "${runId}" disappeared while preparing failed-keyword repair.`);
-  }
-
-  // Do not call loadOpenKeywordRetryIndexes() here: that read is the publication
-  // point after CLI preflight and would commit the staged transaction too early.
   return {
-    run: updatedRun,
-    reopenedKeywordIdxs,
-    openKeywordIdxs: reopenedKeywordIdxs,
+    run,
+    plannedKeywordIdxs: failed,
+    openKeywordIdxs: [],
+    requestedAt,
   };
+}
+
+/**
+ * Applies a previously validated repair plan after CLI preflight. The DB layer
+ * re-checks that every planned keyword is still failed, so a stale plan cannot
+ * silently overwrite concurrent state.
+ */
+export function applyFailedKeywordRetryPreparation(
+  store: RunStore,
+  preparation: FailedKeywordRetryPreparation,
+): number[] {
+  if (preparation.plannedKeywordIdxs.length === 0) return [];
+  return applyFailedKeywordRetries(
+    store,
+    preparation.run.runId,
+    preparation.plannedKeywordIdxs,
+    preparation.requestedAt,
+  );
 }
