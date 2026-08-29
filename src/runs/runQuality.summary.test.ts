@@ -55,7 +55,7 @@ function summary(discovered: number): AhrefsSummary {
   };
 }
 
-test('tracker summary state is exposed only when its denominator matches durable domains', () => {
+test('tracker summary state is exposed only when its denominator matches a non-empty durable domain set', () => {
   const sourceRun = run();
   const matching = buildRunQuality({
     run: sourceRun,
@@ -80,4 +80,16 @@ test('tracker summary state is exposed only when its denominator matches durable
   });
   assert.equal(mismatched.sources.ahrefs.summaryState, null);
   assert.equal(mismatched.sources.ahrefs.statuses.ok, 1, 'durable domain status remains authoritative');
+
+  const zeroDomains = buildRunQuality({
+    run: sourceRun,
+    state: 'completed',
+    keywords: [],
+    serpRows: [],
+    relatedKeywords: [],
+    domains: [],
+    ahrefs: summary(0),
+  });
+  assert.equal(zeroDomains.sources.ahrefs.summaryState, null);
+  assert.equal(zeroDomains.sources.ahrefs.resolvedCoveragePercent, null);
 });
