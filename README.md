@@ -57,6 +57,9 @@ npm run research -- --seeds input/seeds.csv --expand
 # Resume an interrupted run
 npm run research -- --resume <run-id>
 
+# Explicitly repair failed keyword checkpoints in the same logical run
+npm run research -- --resume <run-id> --retry-failed
+
 # Force selected refresh
 npm run research -- --resume <run-id> --refresh-keyword "json diff"
 
@@ -141,6 +144,9 @@ npm run research -- --seeds input/seeds.csv --refresh-keyword "json diff"
 # Continue a paused or interrupted run (original input file not required)
 npm run research -- --resume <run-id>
 
+# Reopen only failed discovery keyword checkpoints and preserve attempt history
+npm run research -- --resume <run-id> --retry-failed
+
 # Enrich a completed discovery run. Deep modules use a 5-200 keyword shortlist.
 npm run enrich -- --run <source-run-id> --modules clusters
 npm run enrich -- --run <source-run-id> --modules query_suggestions --shortlist-file input/shortlist.txt
@@ -219,26 +225,38 @@ State is committed to SQLite in the allocated discovery directory
 (`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/discovery/run.sqlite`, versioned schema,
 WAL) after every keyword, so an interrupted run is never lost. Legacy
 `runs/<run-id>/run.sqlite` stores remain resume-compatible through the legacy
-resolver. On resume:
+resolver. On ordinary resume:
 
 - `--seeds` and `--resume` are mutually exclusive; `--resume` reads the persisted queue
   and does not need the original input file;
 - `completed`/`partial`/`failed` keywords are never collected again;
 - keywords stuck in `running` (crash mid-collection) are reset to `pending`;
-- runs in terminal states (`completed*`, `failed`, `cancelled`) refuse resume and are
+- runs in terminal states (`completed`, `completed_with_errors`, `failed`, `cancelled`) refuse ordinary resume and are
   never modified;
 - a parser version mismatch between the stored run and the current code refuses resume
   (parser versions must not be mixed inside one run);
 - the persisted config snapshot supplies the semantic research settings; operational
   settings (connection, timeouts, retries, breaker) come from the current environment.
 
+Failed discovery checkpoints have one explicit repair path:
+
+```bash
+npm run research -- --resume <run-id> --retry-failed
+```
+
+`--retry-failed` requires `--resume`. It reopens only `failed` keyword checkpoints; completed and partial siblings remain untouched. A `completed_with_errors` discovery run is reopenable only through this explicit command, while fully `completed`, `failed`, and `cancelled` run states remain immutable.
+
+Repair planning is read-only. The CLI first validates parser/config compatibility, refresh input, Ahrefs requirements, cache opening, and discovery/debug directory writability. Only after those checks pass does one synchronous SQLite transaction append the previous keyword/SERP evidence to the retry journal, reset the selected failed checkpoints to `pending`, remove their current SERP rows, reconcile domain membership/first-seen ownership, and mark the run paused/resumable. Therefore a rejected config/cache/output preflight does not mutate `run.sqlite`.
+
+The applied repair is durable before browser work begins. A browser/CAPTCHA interruption can therefore continue with ordinary `--resume`; open retry attempts force a transient keyword-cache bypass so the stale failed cache entry cannot satisfy the repair. That bypass is not persisted into ordinary `refresh_keywords`. When the repaired checkpoint becomes terminal, the journal records the resulting keyword/SERP evidence. Retry numbers are monotonic per `(run_id, keyword_idx)`, and the narrow crash window between the normal keyword checkpoint and journal close is reconciled on the next resume without another browser request. Successful independent related-keyword evidence is preserved rather than erased with the primary failed checkpoint.
+
 Run-store schema changes are handled like the cache's: each migration is one atomic
 transaction (a failure rolls back and is reported as `DB_ERROR`, leaving the old
 version fully usable), and a run store from a newer schema version is refused instead
-of opened silently.
+of opened silently. The failed-keyword retry journal is a lazy versioned extension in the same `run.sqlite`: ordinary runs/readers do not create it, while the first applied repair creates it atomically with that repair.
 
 Transient errors (`GOOGLE_UNAVAILABLE`) are retried with exponential backoff and
-half-jitter up to `RETRY_MAX_ATTEMPTS`. Parser failures are never retried. A circuit
+half-jitter up to `RETRY_MAX_ATTEMPTS`. Parser failures are never retried automatically. The explicit `--retry-failed` command is an operator repair mechanism, not an expansion of the automatic retry policy. A circuit
 breaker pauses the run with a clear reason when Keyword Surfer parsing fails
 (`BREAKER_SURFER_FAILURES` of the last `BREAKER_SURFER_WINDOW`) or when Google SERP
 parsing fails `BREAKER_GOOGLE_CONSECUTIVE` times in a row; the run prints its resume
@@ -294,6 +312,7 @@ checkpoint, so a run never depends on the cache row after it is committed.
 - `--force-refresh` bypasses the cache for every keyword of the run;
   `--refresh-keyword "<query>"` (repeatable, normalized like the queue, must be one
   of the run keywords) bypasses it for that keyword only;
+- an open failed-keyword repair also bypasses the primary keyword cache for that checkpoint, even if a still-fresh failed cache row exists; this bypass is transient and is not added to the run's ordinary `refresh_keywords`;
 - refresh semantics are persisted in the run, so a paused forced-refresh run
   resumes forced even without the flags, and a resume with `--refresh-keyword`
   keeps re-collecting that keyword on later resumes;
@@ -357,7 +376,7 @@ A preflight runs before any keyword work and verifies: Research Chrome reachable
 
 ## Primary outputs
 
-Each execution creates an immutable historical research directory:
+Each fresh execution creates a historical research directory. An explicit failed-keyword repair is the narrow exception: it updates and republishes the same discovery directory for the same logical run while preserving retry history in `run.sqlite`.
 
 ```text
 <RESEARCH_OUTPUT_ROOT>/<date>-<label>/
@@ -512,6 +531,9 @@ npm run research -- --seeds input/seeds.csv
 
 # With Surfer related-keyword expansion (depth 1)
 npm run research -- --seeds input/seeds.csv --expand
+
+# Repair only failed checkpoints from a completed_with_errors discovery run
+npm run research -- --resume <run-id> --retry-failed
 
 # Machine-readable final status
 npm run research -- --seeds input/seeds.csv --json-status
