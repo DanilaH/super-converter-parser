@@ -8,11 +8,14 @@ const DEFAULT_CONFIG: ClusteringConfig = {
   algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
 };
 
+type TestInput = Omit<ClusteringInput, 'keywordIdx' | 'urls'> & { urls?: string[] };
+type TestInputWithId = Omit<ClusteringInput, 'urls'> & { urls?: string[] };
+
 function urlsForDomains(domains: string[]): string[] {
   return domains.map((domain) => `https://${domain}/tool`);
 }
 
-function withIds(inputs: Array<Omit<ClusteringInput, 'keywordIdx'>>): ClusteringInput[] {
+function withIds(inputs: TestInput[]): ClusteringInput[] {
   return inputs.map((input, keywordIdx) => ({
     ...input,
     urls: input.urls ?? urlsForDomains(input.domains),
@@ -20,7 +23,7 @@ function withIds(inputs: Array<Omit<ClusteringInput, 'keywordIdx'>>): Clustering
   }));
 }
 
-function withUrls(input: ClusteringInput): ClusteringInput {
+function withUrls(input: TestInputWithId): ClusteringInput {
   return { ...input, urls: input.urls ?? urlsForDomains(input.domains) };
 }
 
