@@ -11,7 +11,13 @@ import { runEnrichment, type EnrichmentHttpConfig, type EnrichmentPagesConfig, t
 import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from '../enrichment/cache.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
-import { CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig } from '../enrichment/clustering.js';
+import {
+  CLUSTERING_ALGORITHM_VERSION,
+  DEFAULT_CLUSTER_MIN_SHARED_URLS,
+  DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  type ClusteringConfig,
+} from '../enrichment/clustering.js';
+import { CLUSTER_URL_IDENTITY_VERSION } from '../enrichment/urlIdentity.js';
 import { createRdapClient } from '../rdap/client.js';
 import { createFirstSeenClient } from '../firstseen/client.js';
 import {
@@ -86,6 +92,8 @@ interface ParsedArgs {
   topN: number;
   minShared: number;
   minJaccard: number;
+  minSharedUrls: number;
+  minUrlJaccard: number;
   shortlist: string[];
   shortlistFile: string;
   sources: QuerySuggestionSource[];
@@ -111,6 +119,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let topN = 10;
   let minShared = 3;
   let minJaccard = 0.3;
+  let minSharedUrls = DEFAULT_CLUSTER_MIN_SHARED_URLS;
+  let minUrlJaccard = DEFAULT_CLUSTER_MIN_URL_JACCARD;
   let shortlist: string[] = [];
   let shortlistFile = '';
   let sources: QuerySuggestionSource[] = [...QUERY_SUGGESTION_SOURCES];
@@ -167,6 +177,22 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-jaccard requires a numeric value');
       }
       minJaccard = Number(value);
+    } else if (arg === '--min-shared-urls') {
+      const value = nextOptionValue(args, '--min-shared-urls');
+      if (Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-shared-urls requires a numeric value');
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed)) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared-urls must be an integer, got ${value}`);
+      }
+      minSharedUrls = parsed;
+    } else if (arg === '--min-url-jaccard') {
+      const value = nextOptionValue(args, '--min-url-jaccard');
+      if (Number.isNaN(Number(value))) {
+        throw new ResearchError('INPUT_SCHEMA_ERROR', '--min-url-jaccard requires a numeric value');
+      }
+      minUrlJaccard = Number(value);
     } else if (arg === '--shortlist') {
       const value = nextOptionValue(args, '--shortlist');
       shortlist = value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -212,7 +238,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   if (help) {
-    return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
+    return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, minSharedUrls, minUrlJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
   }
 
   if (topN <= 0) {
@@ -227,12 +253,21 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (minJaccard < 0 || minJaccard > 1) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-jaccard must be in [0, 1], got ${minJaccard}`);
   }
+  if (minSharedUrls <= 0) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared-urls must be > 0, got ${minSharedUrls}`);
+  }
+  if (minSharedUrls > topN) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-shared-urls (${minSharedUrls}) cannot exceed --top-n (${topN})`);
+  }
+  if (minUrlJaccard < 0 || minUrlJaccard > 1) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `--min-url-jaccard must be in [0, 1], got ${minUrlJaccard}`);
+  }
 
   if (shortlist.length > 0 && shortlistFile) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', '--shortlist and --shortlist-file are mutually exclusive');
   }
 
-  return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
+  return { help, sourceRunId, resumeEnrichmentId, modules, topN, minShared, minJaccard, minSharedUrls, minUrlJaccard, shortlist, shortlistFile, sources, maxSuggestions, maxParents, outputRoot };
 }
 
 function loadShortlistFile(path: string): string[] {
@@ -272,6 +307,11 @@ function printUsage(): void {
   console.log('');
   console.log('Modules: clusters, query_suggestions, domain_age, pages, site_structure');
   console.log('Options:');
+  console.log('  --top-n <n>                Ranked organic SERP window for clustering (default 10).');
+  console.log('  --min-shared <n>           Minimum shared domains for a strong pair (default 3).');
+  console.log('  --min-jaccard <0..1>       Minimum domain Jaccard for a strong pair (default 0.3).');
+  console.log(`  --min-shared-urls <n>      Minimum shared URL identities for a strong pair (default ${DEFAULT_CLUSTER_MIN_SHARED_URLS}).`);
+  console.log(`  --min-url-jaccard <0..1>   Minimum URL Jaccard for a strong pair (default ${DEFAULT_CLUSTER_MIN_URL_JACCARD}).`);
   console.log('  --shortlist <a,b,...>       Inline shortlist of 5-200 keywords.');
   console.log('  --shortlist-file <path>     TXT (one per line) or CSV with a keyword column.');
   console.log('                              Required by query_suggestions, domain_age, pages, site_structure.');
@@ -329,6 +369,33 @@ function validateShortlist(sourceStorePath: string, sourceRunId: string, rawShor
   }
 }
 
+function assertClusteringResumeCompatible(
+  store: RunStore,
+  enrichmentId: string,
+  run: ReturnType<RunStore['loadEnrichmentRun']> extends infer T ? Exclude<T, null> : never,
+): void {
+  if (!run.modules.includes('clusters')) return;
+  const clusterItem = store.loadEnrichmentItems(enrichmentId).find(
+    (item) => item.itemId === 'clusters' && item.module === 'clusters',
+  );
+  if (clusterItem?.status === 'completed') return;
+
+  const persisted = run.config.clusters;
+  if (
+    !persisted
+    || persisted.algorithmVersion !== CLUSTERING_ALGORITHM_VERSION
+    || persisted.urlIdentityVersion !== CLUSTER_URL_IDENTITY_VERSION
+    || persisted.groupingRule !== 'complete_link'
+    || persisted.edgeRule.minSharedUrls === undefined
+    || persisted.edgeRule.minUrlJaccard === undefined
+  ) {
+    throw new ResearchError(
+      'RESUME_CONFIG_MISMATCH',
+      `Cannot resume unfinished clusters with persisted algorithm ${persisted?.algorithmVersion ?? 'unknown'}; this build requires clustering ${CLUSTERING_ALGORITHM_VERSION}, URL identity ${CLUSTER_URL_IDENTITY_VERSION}, and complete-link V2 config. Start a new enrichment to avoid changing clustering semantics mid-run.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
   let store: RunStore | undefined;
@@ -364,7 +431,19 @@ async function main(): Promise<void> {
       throw new ResearchError('INPUT_SCHEMA_ERROR', '--run and --resume are mutually exclusive');
     }
     if (args.resumeEnrichmentId) {
-      const forbiddenResumeFlags = ['--modules', '--top-n', '--min-shared', '--min-jaccard', '--shortlist', '--shortlist-file', '--sources', '--max-suggestions-per-source', '--max-parents'];
+      const forbiddenResumeFlags = [
+        '--modules',
+        '--top-n',
+        '--min-shared',
+        '--min-jaccard',
+        '--min-shared-urls',
+        '--min-url-jaccard',
+        '--shortlist',
+        '--shortlist-file',
+        '--sources',
+        '--max-suggestions-per-source',
+        '--max-parents',
+      ];
       const supplied = process.argv.slice(2).filter((arg) => forbiddenResumeFlags.includes(arg));
       if (supplied.length > 0) {
         throw new ResearchError(
@@ -426,13 +505,21 @@ async function main(): Promise<void> {
       if (existingRun.state === 'completed') {
         throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment already completed: ${enrichmentId}`);
       }
+      assertClusteringResumeCompatible(store, enrichmentId, existingRun);
       sourceRunId = existingRun.sourceRunId;
       const sourceLocation = await resolveRunLocation(outputRoot, sourceRunId);
       sourceStorePath = resolve(sourceLocation.discoveryDirectory, 'run.sqlite');
       clusteringConfig = existingRun.config.clusters ?? {
         topN: 10,
-        edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+        edgeRule: {
+          minSharedDomains: 3,
+          minJaccard: 0.3,
+          minSharedUrls: DEFAULT_CLUSTER_MIN_SHARED_URLS,
+          minUrlJaccard: DEFAULT_CLUSTER_MIN_URL_JACCARD,
+        },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+        urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+        groupingRule: 'complete_link',
       };
       shortlist = existingRun.shortlistKeywords;
       const persistedShortlistRequiredBy = existingRun.modules.filter((module) =>
@@ -494,8 +581,12 @@ async function main(): Promise<void> {
         edgeRule: {
           minSharedDomains: args.minShared,
           minJaccard: args.minJaccard,
+          minSharedUrls: args.minSharedUrls,
+          minUrlJaccard: args.minUrlJaccard,
         },
         algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+        urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+        groupingRule: 'complete_link',
       };
       if (modules.includes('domain_age')) {
         domainAgeSnapshot = buildDomainAgeConfigSnapshot(config);
