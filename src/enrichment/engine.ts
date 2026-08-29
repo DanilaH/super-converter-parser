@@ -9,6 +9,7 @@ import { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
 import { clusterKeywords, CLUSTERING_ALGORITHM_VERSION, type ClusteringConfig, type ClusteringInput, type ClusteringResult } from './clustering.js';
+import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson, writePagesCsv, writePagesJson, writeSiteStructureCsv, writeSiteStructureJson } from './outputs.js';
 import {
   runDomainAgeModule,
@@ -328,8 +329,10 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       if (existingItem?.status === 'completed') {
         logger('Skipping completed clusters module');
         const clusters = enrichmentStore.loadKeywordClusters(enrichmentId);
-        const pairs = enrichmentStore.loadEnrichmentPairs(enrichmentId);
-        const exclusions = enrichmentStore.loadEnrichmentExclusions(enrichmentId);
+        const { pairs, exclusions } = loadPersistedClusteringRelations(
+          enrichmentStore,
+          enrichmentId,
+        );
         result.clusters = {
           clusters,
           pairs,
