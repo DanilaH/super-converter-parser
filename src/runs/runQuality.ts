@@ -257,7 +257,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     else if (domain.status === 'not_found') ahrefsStatuses.notFound += 1;
     else if (domain.status === 'error') ahrefsStatuses.error += 1;
     else ahrefsStatuses.notAttempted += 1;
-    if (domain.dr !== null) ahrefsNumeric += 1;
+    if (domain.status === 'ok' && domain.dr !== null) ahrefsNumeric += 1;
   }
   const ahrefsResolved = ahrefsStatuses.ok + ahrefsStatuses.notFound + ahrefsStatuses.error;
   // A tracker summary is meaningful only when there is an observed domain set
