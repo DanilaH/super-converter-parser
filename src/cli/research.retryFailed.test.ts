@@ -51,6 +51,8 @@ function completedResult(record: KeywordRecord, domain: string): CollectionResul
     },
     serpRows: [serpRow(record, domain)],
     debugArtifactPath: null,
+    // A primary repair must not replace an earlier successful related
+    // observation with this later empty/error outcome.
     related: { status: 'empty', error: null, rows: [] },
   };
 }
@@ -77,7 +79,18 @@ function failedResult(record: KeywordRecord): CollectionResult {
     // than appending duplicate SERP evidence.
     serpRows: [serpRow(record, 'stale.example')],
     debugArtifactPath: null,
-    related: { status: 'error', error: 'GOOGLE_UNAVAILABLE', rows: [] },
+    // Related collection is an independent successful fact even though the
+    // primary keyword checkpoint failed.
+    related: {
+      status: 'ok',
+      error: null,
+      rows: [{
+        keyword: 'old related idea',
+        normalizedKeyword: 'old related idea',
+        overlap: 77,
+        volume: 40,
+      }],
+    },
   };
 }
 
@@ -135,6 +148,12 @@ test('repair retries only failed keyword, bypasses stale failed cache, and prese
       firstStore.loadSerpRows(runId).map((row) => row.registrableDomain).sort(),
       ['healthy.example', 'stale.example'],
     );
+    assert.deepEqual(
+      firstStore.loadRelatedKeywords(runId)
+        .filter((row) => row.parentIdx === 1)
+        .map((row) => [row.status, row.relatedKeyword]),
+      [['ok', 'old related idea']],
+    );
     firstStore.close();
 
     const initialCalls = [...collected];
@@ -160,6 +179,13 @@ test('repair retries only failed keyword, bypasses stale failed cache, and prese
       finalStore.loadSerpRows(runId).map((row) => row.registrableDomain).sort(),
       ['fresh.example', 'healthy.example'],
       'old failed SERP row must be replaced, not appended',
+    );
+    assert.deepEqual(
+      finalStore.loadRelatedKeywords(runId)
+        .filter((row) => row.parentIdx === 1)
+        .map((row) => [row.status, row.relatedKeyword]),
+      [['ok', 'old related idea']],
+      'successful independent related evidence must survive primary repair',
     );
 
     const attempts = loadKeywordRetryAttempts(finalStore, runId);
