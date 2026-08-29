@@ -1,11 +1,6 @@
 import type { RunStore } from '../db/store.js';
 import type { ClusteredKeywordExclusion, PairwiseComparison } from './types.js';
 
-// Persisted on the completed clusters module item. Legacy cluster runs predate
-// this marker, so an empty idx-owned relation table can be distinguished from
-// "v2 relations were never written" without deleting historical text-owned rows.
-export const CLUSTER_KEYWORD_IDENTITY_SNAPSHOT = 'source_keyword_idx_v1';
-
 export type PersistedClusteringRelations = {
   pairs: PairwiseComparison[];
   exclusions: ClusteredKeywordExclusion[];
@@ -14,18 +9,27 @@ export type PersistedClusteringRelations = {
 export function loadPersistedClusteringRelations(
   store: RunStore,
   enrichmentId: string,
-  snapshotPayload: string | null,
 ): PersistedClusteringRelations {
+  const clusters = store.loadKeywordClusters(enrichmentId);
   const pairs = store.loadEnrichmentPairs(enrichmentId);
   const exclusions = store.loadEnrichmentExclusions(enrichmentId);
 
-  if (snapshotPayload !== CLUSTER_KEYWORD_IDENTITY_SNAPSHOT) {
+  // Raw store readers deliberately preserve text-owned legacy rows. A completed
+  // fresh V2 snapshot is nevertheless unambiguous: it either has an idx-owned
+  // cluster, or (when every keyword was excluded) an idx-owned exclusion. Pair
+  // rows are also useful evidence for a non-empty current relation.
+  const hasCurrentSnapshot =
+    clusters.some((cluster) => cluster.canonicalKeywordIdx !== null)
+    || pairs.some((pair) => pair.keywordAIdx !== null && pair.keywordBIdx !== null)
+    || exclusions.some((row) => row.keywordIdx !== null);
+
+  if (!hasCurrentSnapshot) {
     return { pairs, exclusions };
   }
 
-  // Raw store readers deliberately retain legacy compatibility. When the
-  // current snapshot is explicitly idx-owned, null identity rows can only be
-  // historical fallback rows returned because the current relation is empty.
+  // If one V2 relation is legitimately empty, its raw loader may fall back to
+  // historical rows. Once the snapshot is known to be current, null identities
+  // are compatibility-only evidence and cannot become current truth again.
   return {
     pairs: pairs.filter(
       (pair) => pair.keywordAIdx !== null && pair.keywordBIdx !== null,
