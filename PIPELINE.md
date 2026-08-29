@@ -29,6 +29,8 @@ aggregate trustworthy keyword-level SERP metrics
         ↓
 deterministic scoring
         ↓
+run-quality projection
+        ↓
 CSV + Markdown + JSON outputs
 ```
 
@@ -272,6 +274,48 @@ Retry history is append-only per `(run_id, keyword_idx, retry_no)`: it preserves
 
 An open repair is its own transient reason to bypass the ordinary keyword cache. This bypass is not persisted into the run's normal `refresh_keywords`, so completing a one-time repair does not turn the keyword into a permanently forced refresh. Independent successful related-keyword evidence is not erased merely because the primary keyword checkpoint is repaired.
 
+## Run-quality projection
+
+`run-quality.json` is a versioned deterministic projection over durable discovery evidence. It is not a replacement state machine and it is not another opportunity score.
+
+The projection reports explicit denominators and provider-native outcome counts for:
+
+```text
+Google SERP
+Keyword Surfer
+related-keyword observation
+Ahrefs domains
+```
+
+Coverage semantics are source-specific:
+
+- Google trustworthy coverage counts only `ok` + confirmed `empty`; fetch/parse/not-fetched/unknown remain outside trustworthy coverage;
+- Surfer coverage counts persisted successful Surfer observations independently from volume/CPC availability;
+- related coverage treats persisted `ok` and truthful `empty` as successful parent observations; `error` and `notAttempted` stay separate;
+- Ahrefs exposes resolved-provider coverage separately from numeric-DR coverage, so `not_found` can be a valid resolved provider outcome without becoming numeric DR;
+- a zero denominator yields `coveragePercent = null`, never fabricated `0%` evidence.
+
+Geo is graded conservatively:
+
+```text
+mismatch
+→ at least one persisted Google geo warning exists
+
+verified
+→ every trustworthy Google SERP observation has a detected physical location
+  and there is no mismatch
+
+logical_only
+→ trustworthy SERP evidence exists, but physical-location coverage is incomplete
+
+unknown
+→ no trustworthy Google SERP evidence exists to grade geo
+```
+
+Configured SERP/related bounds are exposed where persisted config supports them. Discovery does not persist whether each unselected related candidate was excluded by cap vs threshold vs dedupe, so `explicitOmissionCount` remains `null` with `omissionAccounting = not_persisted`; the projection must not invent that breakdown after the fact.
+
+Warnings identify incomplete/error evidence with explicit affected counts and denominators. They do not collapse sources into one aggregate health number.
+
 ## Stage 9 — Output
 
 Write all run artifacts even if some keywords failed.
@@ -290,6 +334,7 @@ Generate:
 manifest.json
 keywords.json
 serp.json
+run-quality.json
 keywords.csv
 related-keywords.csv
 serp.csv
@@ -298,6 +343,8 @@ candidates.csv
 report.md
 status.json
 ```
+
+`run-quality.json` is written before `status.json` / `manifest.json`; a failed quality projection write therefore cannot advertise a terminal run with the declared quality artifact missing. `status.json` exposes its path as `artifacts.runQualityJson`.
 
 Errors must not disappear from output. Source-specific Google SERP status/error is retained in the per-keyword JSON and surfaced in the failed/incomplete section of `report.md`. Existing CSV column contracts remain stable; unavailable numeric SERP evidence is represented as an empty cell rather than `0` or the string `null`.
 
@@ -360,6 +407,7 @@ Domains 381/932 | Cache 74% | API requests 99 | ETA ~3m
 
 [6/6] Writing outputs
 ✓ candidates.csv
+✓ run-quality.json
 ✓ report.md
 ✓ status.json
 
@@ -447,7 +495,10 @@ the allocated discovery directory, for example:
   "errors": 3,
   "candidateReport": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/candidates.csv",
   "report": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/report.md",
-  "statusFile": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/status.json"
+  "statusFile": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/status.json",
+  "artifacts": {
+    "runQualityJson": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/run-quality.json"
+  }
 }
 ```
 
@@ -658,6 +709,22 @@ status
 
 When a candidate lacks trustworthy SERP evidence, its SERP-derived numeric cells and score/tier are blank. Genuine observed zeros remain numeric zero. Exact-match and niche-domain classification must be documented if implemented.
 
+## run-quality.json
+
+Machine-readable evidence-quality projection. Version `1.0.0` includes:
+
+```text
+per-source denominators
+provider-native status counts
+trustworthy/resolved/numeric coverage percentages
+geo grade + detected-location coverage
+configured SERP/related bounds
+explicit omission-accounting availability
+warnings with affected count + denominator
+```
+
+It deliberately contains no aggregate opportunity/quality score. Missing historical config remains `null`; missing omission classification remains `null`; zero denominators produce `null` coverage.
+
 ## report.md
 
 Human-readable summary:
@@ -678,7 +745,7 @@ Do not hide errors.
 
 ## status.json
 
-Machine-readable final status.
+Machine-readable final status. `artifacts.runQualityJson` points at the corresponding `run-quality.json` projection.
 
 ## Historical behavior
 
