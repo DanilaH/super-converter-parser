@@ -8,6 +8,7 @@ import type {
 } from './types.js';
 
 export type QuerySuggestionSourceRecord = {
+  parentKeywordIdx: number | null;
   normalizedParent: string;
   source: QuerySuggestionSource;
   status: string;
@@ -40,6 +41,7 @@ export function writeQuerySuggestionsCsv(outputPath: string, result: QuerySugges
   const header = [
     'normalized_suggestion',
     'raw_text',
+    'parent_keyword_idxs',
     'parent_keywords',
     'sources',
     'volume',
@@ -57,6 +59,7 @@ export function writeQuerySuggestionsCsv(outputPath: string, result: QuerySugges
     rows.push([
       suggestion.normalizedSuggestion,
       suggestion.rawText,
+      suggestion.occurrences.map((o) => o.parentKeywordIdx === null ? '' : String(o.parentKeywordIdx)).join('; '),
       suggestion.occurrences.map((o) => o.parentKeyword).join('; '),
       suggestion.occurrences.map((o) => o.source).join('; '),
       suggestion.volume !== null ? String(suggestion.volume) : '',
