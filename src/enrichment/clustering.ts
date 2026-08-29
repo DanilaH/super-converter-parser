@@ -203,10 +203,12 @@ export function clusterKeywords(
     for (const member of memberInputs) {
       const set = domainSets.get(member.keywordIdx);
       if (!set) continue;
+      const seenDomains = new Set<string>();
       let rank = 0;
       for (const domain of member.domains.slice(0, topN)) {
         rank += 1;
-        if (!set.has(domain)) continue;
+        if (domain === '' || seenDomains.has(domain) || !set.has(domain)) continue;
+        seenDomains.add(domain);
         const existing = domainFrequency.get(domain);
         if (existing) {
           existing.count += 1;
