@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type Database from 'better-sqlite3';
 import { loadConfig } from '../config/config.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
@@ -7,7 +8,10 @@ import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
 import { RunStore } from '../db/store.js';
 import { loadKeywordRetryAttempts, loadOpenKeywordRetryIndexes } from '../db/retryAttempts.js';
 import { ResearchError } from '../shared/errors.js';
-import { prepareFailedKeywordRetry } from './retryFailed.js';
+import {
+  applyFailedKeywordRetryPreparation,
+  prepareFailedKeywordRetry,
+} from './retryFailed.js';
 
 const CONFIG = loadConfig({});
 
@@ -33,16 +37,33 @@ function markFailed(store: RunStore): void {
   });
 }
 
-test('completed_with_errors can be explicitly reopened and only failed keyword becomes pending', () => {
+test('completed_with_errors repair is planned read-only and applied explicitly', () => {
   const store = makeStore();
   markFailed(store);
   store.setRunState('run-repair-control', 'completed_with_errors');
+  const db = (store as unknown as { db: Database.Database }).db;
 
-  const result = prepareFailedKeywordRetry(store, 'run-repair-control');
-  assert.deepEqual(result.reopenedKeywordIdxs, [0]);
-  assert.deepEqual(result.openKeywordIdxs, [0]);
-  assert.equal(result.run.state, 'paused');
+  const preparation = prepareFailedKeywordRetry(
+    store,
+    'run-repair-control',
+    '2026-08-29T09:00:00.000Z',
+  );
+  assert.deepEqual(preparation.plannedKeywordIdxs, [0]);
+  assert.deepEqual(preparation.openKeywordIdxs, []);
+  assert.equal(preparation.run.state, 'completed_with_errors');
+  assert.equal(store.loadRun('run-repair-control')?.state, 'completed_with_errors');
+  assert.equal(store.loadKeyword('run-repair-control', 0)?.status, 'failed');
+  assert.equal(loadKeywordRetryAttempts(store, 'run-repair-control').length, 0);
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'keyword_retry_schema'").get(),
+    undefined,
+    'read-only preparation must not create extension schema',
+  );
+
+  assert.deepEqual(applyFailedKeywordRetryPreparation(store, preparation), [0]);
+  assert.equal(store.loadRun('run-repair-control')?.state, 'paused');
   assert.equal(store.loadKeyword('run-repair-control', 0)?.status, 'pending');
+  assert.deepEqual(loadOpenKeywordRetryIndexes(store, 'run-repair-control'), [0]);
   assert.equal(loadKeywordRetryAttempts(store, 'run-repair-control').length, 1);
   store.close();
 });
@@ -52,9 +73,10 @@ test('re-entering an interrupted repair is idempotent and does not create retry_
   markFailed(store);
   store.setRunState('run-repair-control', 'completed_with_errors');
 
-  prepareFailedKeywordRetry(store, 'run-repair-control');
+  const preparation = prepareFailedKeywordRetry(store, 'run-repair-control');
+  applyFailedKeywordRetryPreparation(store, preparation);
   const resumed = prepareFailedKeywordRetry(store, 'run-repair-control');
-  assert.deepEqual(resumed.reopenedKeywordIdxs, []);
+  assert.deepEqual(resumed.plannedKeywordIdxs, []);
   assert.deepEqual(resumed.openKeywordIdxs, [0]);
   assert.deepEqual(loadKeywordRetryAttempts(store, 'run-repair-control').map((attempt) => attempt.retryNo), [1]);
   store.close();
