@@ -184,11 +184,31 @@ function reconcileDomainsFromCurrentSerp(db: Database.Database, runId: string): 
   }
 }
 
+function isRepairablePrimaryCheckpoint(keyword: StoredKeyword): boolean {
+  if (keyword.status === 'failed') return true;
+  if (keyword.status !== 'partial' || keyword.error === null) return false;
+
+  const googleStatus = keyword.google?.serpStatus;
+  const googleIncomplete =
+    googleStatus === 'fetch_error'
+    || googleStatus === 'parse_error'
+    || googleStatus === 'not_fetched'
+    || googleStatus === 'unknown';
+  const legacyGoogleIncomplete =
+    googleStatus === undefined
+    && (keyword.error.code === 'GOOGLE_SERP_PARSE_ERROR' || keyword.error.code === 'GOOGLE_UNAVAILABLE');
+  const surferIncomplete = keyword.surfer === null;
+
+  return surferIncomplete || googleIncomplete || legacyGoogleIncomplete;
+}
+
 /**
- * Applies a previously validated list of failed keyword indexes. The caller is
- * expected to build the list read-only, complete config/cache/output preflight,
- * then call this function immediately before browser work. All current-state
- * resets and history snapshots commit atomically in one synchronous transaction.
+ * Applies a previously validated list of repairable primary keyword indexes.
+ * `failed` checkpoints remain eligible, and `partial` checkpoints are eligible
+ * when persisted source state proves Surfer or Google failed. The caller builds
+ * the list read-only, completes config/cache/output preflight, then calls this
+ * function immediately before browser work. All current-state resets and
+ * history snapshots commit atomically in one synchronous transaction.
  */
 export function applyFailedKeywordRetries(
   store: RunStore,
@@ -222,7 +242,7 @@ export function applyFailedKeywordRetries(
       `UPDATE keywords
        SET status = 'pending', surfer = NULL, google = NULL, error = NULL,
            collected_at = NULL, cache_status = NULL
-       WHERE run_id = ? AND idx = ? AND status = 'failed'`,
+       WHERE run_id = ? AND idx = ? AND status IN ('failed', 'partial')`,
     );
     const deleteSerp = db.prepare('DELETE FROM serp_rows WHERE run_id = ? AND keyword_idx = ?');
     const updateRun = db.prepare(
@@ -235,13 +255,13 @@ export function applyFailedKeywordRetries(
 
     for (const keywordIdx of uniqueIdxs) {
       if (!Number.isInteger(keywordIdx) || keywordIdx < 0) {
-        throw new ResearchError('DB_ERROR', `Invalid failed-keyword repair index ${keywordIdx}.`);
+        throw new ResearchError('DB_ERROR', `Invalid keyword repair index ${keywordIdx}.`);
       }
       const keyword = store.loadKeyword(runId, keywordIdx);
-      if (!keyword || keyword.status !== 'failed') {
+      if (!keyword || !isRepairablePrimaryCheckpoint(keyword)) {
         throw new ResearchError(
           'DB_ERROR',
-          `Keyword ${keywordIdx} in run "${runId}" is no longer failed; refusing to apply a stale repair plan.`,
+          `Keyword ${keywordIdx} in run "${runId}" is no longer failed/repairable-partial; refusing to apply a stale repair plan.`,
         );
       }
       if (openAttempt.get(runId, keywordIdx)) {
@@ -273,7 +293,7 @@ export function applyFailedKeywordRetries(
     }
 
     reconcileDomainsFromCurrentSerp(db, runId);
-    updateRun.run(requestedAt, 'Explicit failed-keyword repair prepared.', runId);
+    updateRun.run(requestedAt, 'Explicit failed/partial keyword repair prepared.', runId);
     return reopened;
   });
 
