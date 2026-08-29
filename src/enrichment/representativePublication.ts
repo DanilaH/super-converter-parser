@@ -1,6 +1,7 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
+import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
 import { ENTRANT_COHORT_ARTIFACTS } from './entrantCohortPublication.js';
 import type { RepresentativeQueryRunConfigSnapshot } from './types.js';
 
@@ -40,17 +41,20 @@ export async function publishRepresentativeMetadata(input: {
   const keepEntrantPublication =
     readEntrantRepresentativeRevision(manifest) === input.summary.revision
     && readEntrantRepresentativeRevision(status) === input.summary.revision;
-  const entrantArtifactSet = new Set<string>(ENTRANT_COHORT_ARTIFACTS);
-  const filterStaleEntrantArtifacts = (names: string[]) => keepEntrantPublication
+  const invalidatedDownstreamArtifacts = new Set<string>([
+    ...ENTRANT_COHORT_ARTIFACTS,
+    ...COHORT_HISTORY_ARTIFACTS,
+  ]);
+  const filterStaleDownstreamArtifacts = (names: string[]) => keepEntrantPublication
     ? names
-    : names.filter((name) => !entrantArtifactSet.has(name));
+    : names.filter((name) => !invalidatedDownstreamArtifacts.has(name));
 
-  const artifacts = filterStaleEntrantArtifacts(uniqueStrings([
+  const artifacts = filterStaleDownstreamArtifacts(uniqueStrings([
     ...readStringArray(manifest.artifacts, 'manifest.json artifacts'),
     'representative-queries.csv',
     'representative-queries.json',
   ]));
-  const statusArtifacts = filterStaleEntrantArtifacts(uniqueStrings([
+  const statusArtifacts = filterStaleDownstreamArtifacts(uniqueStrings([
     ...readStringArray(status.artifacts, 'status.json artifacts'),
     'representative-queries.csv',
     'representative-queries.json',
@@ -73,6 +77,8 @@ export async function publishRepresentativeMetadata(input: {
   if (!keepEntrantPublication) {
     delete nextManifest.entrantCohort;
     delete nextStatus.entrantCohort;
+    delete nextManifest.cohortHistory;
+    delete nextStatus.cohortHistory;
   }
 
   await writeTextAtomic(
@@ -92,7 +98,7 @@ export async function publishRepresentativeMetadata(input: {
   }
 
   if (!keepEntrantPublication) {
-    await Promise.all(ENTRANT_COHORT_ARTIFACTS.map((name) =>
+    await Promise.all([...invalidatedDownstreamArtifacts].map((name) =>
       rm(join(input.enrichmentDirectory, name), { force: true })));
   }
 }

@@ -43,12 +43,12 @@ src/
 ├── ahrefs/          # Domain Rating provider adapter
 ├── browser/         # CDP connection, collection, CAPTCHA/preflight
 ├── cache/           # Persistent cross-run cache + identities/TTL
-├── cli/             # research / enrich entry points
+├── cli/             # research / enrich / representatives / entrant-cohort / cohort-history
 ├── config/          # typed runtime configuration
 ├── db/              # SQLite schema, migrations, RunStore
 ├── diagnostics/     # parser-failure evidence
 ├── domains/         # hostname / registrable-domain normalization
-├── enrichment/      # clusters, suggestions, pages, site structure, HTTP safety
+├── enrichment/      # clusters, representative/entrant/history projections, suggestions, pages, site structure
 ├── exports/         # generic CSV/export helpers
 ├── firstseen/       # first-seen provider adapter (Wayback path)
 ├── google/          # SERP, autocomplete, PAA, related-search parsing
@@ -102,6 +102,26 @@ module CSV/JSON + status.json + manifest.json
 ```
 
 Deep modules are bounded independently. Domain caps must be visible in artifacts as omitted evidence, not silently discarded.
+
+The same `enrichment.sqlite` also owns the deterministic post-enrichment evidence chain for explicitly selected finalist clusters:
+
+```text
+clustering v2 evidence
+        ↓
+representatives CLI
+        ↓
+versioned representative-query sets
+        ↓
+entrant-cohort CLI
+        ↓
+representative top-10 registrable-domain cohort
+        ↓
+cohort-history CLI
+        ↓
+coverage-aware RDAP / first-seen history projection
+```
+
+Each child projection pins its current parent and invalidates when upstream evidence changes. SQLite remains the source of truth; representative, entrant-cohort, and cohort-history CSV/JSON files are published derivatives. History interpretation thresholds are explicit persisted policy rather than hidden universal defaults, and missing/omitted provider evidence stays outside known-evidence denominators.
 
 ## Browser architecture
 

@@ -1,7 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
 import type { ResearchConfig } from '../config/config.js';
+import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
 
 export const ENTRANT_COHORT_ARTIFACTS = [
   'entrant-cohort.csv',
@@ -46,22 +47,30 @@ export async function publishEntrantCohortMetadata(input: {
   assertRepresentativeRevision(manifest, input.summary.representativeRevision, 'manifest.json');
   assertRepresentativeRevision(status, input.summary.representativeRevision, 'status.json');
 
+  const manifestBase = input.summary.changed ? withoutCohortHistory(manifest) : manifest;
+  const statusBase = input.summary.changed ? withoutCohortHistory(status) : status;
   const manifestArtifacts = uniqueStrings([
-    ...readStringArray(manifest.artifacts, 'manifest.json artifacts'),
+    ...filterInvalidatedHistoryArtifacts(
+      readStringArray(manifestBase.artifacts, 'manifest.json artifacts'),
+      input.summary.changed,
+    ),
     ...ENTRANT_COHORT_ARTIFACTS,
   ]);
   const statusArtifacts = uniqueStrings([
-    ...readStringArray(status.artifacts, 'status.json artifacts'),
+    ...filterInvalidatedHistoryArtifacts(
+      readStringArray(statusBase.artifacts, 'status.json artifacts'),
+      input.summary.changed,
+    ),
     ...ENTRANT_COHORT_ARTIFACTS,
   ]);
 
   const nextManifest: Record<string, unknown> = {
-    ...manifest,
+    ...manifestBase,
     artifacts: manifestArtifacts,
     entrantCohort: input.summary,
   };
   const nextStatus: Record<string, unknown> = {
-    ...status,
+    ...statusBase,
     artifacts: statusArtifacts,
     entrantCohort: input.summary,
   };
@@ -81,6 +90,24 @@ export async function publishEntrantCohortMetadata(input: {
     await writeTextAtomic(statusPath, originalStatus, 'restore enrichment status').catch(() => undefined);
     throw error;
   }
+
+  if (input.summary.changed) {
+    await Promise.all(
+      COHORT_HISTORY_ARTIFACTS.map((artifact) =>
+        rm(join(input.enrichmentDirectory, artifact), { force: true })),
+    );
+  }
+}
+
+function withoutCohortHistory(value: Record<string, unknown>): Record<string, unknown> {
+  const { cohortHistory: _cohortHistory, ...rest } = value;
+  return rest;
+}
+
+function filterInvalidatedHistoryArtifacts(values: string[], changed: boolean): string[] {
+  if (!changed) return values;
+  const invalid = new Set<string>(COHORT_HISTORY_ARTIFACTS);
+  return values.filter((value) => !invalid.has(value));
 }
 
 function assertRepresentativeRevision(

@@ -102,3 +102,32 @@ test('results.zip includes final artifacts and excludes debug, WAL and itself', 
   assert.equal(zip.includes(Buffer.from('debug/page.html')), false);
   assert.equal(zip.includes(Buffer.from('results.zip')), false);
 });
+
+test('results.zip excludes stale cohort-history files unless the local manifest advertises them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-history-zip-'));
+  const location = await allocateResearchLocation(root, 'History Zip Test', new Date('2026-08-29T00:00:00Z'));
+  const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
+  const historyArtifacts = [
+    'cohort-history.csv',
+    'cohort-history-summary.csv',
+    'cohort-history.json',
+  ];
+  for (const artifact of historyArtifacts) {
+    await writeFile(join(enrichmentDirectory, artifact), `stale ${artifact}`);
+  }
+  const manifestPath = join(enrichmentDirectory, 'manifest.json');
+  await writeFile(manifestPath, JSON.stringify({ artifacts: [] }, null, 2) + '\n');
+
+  let archive = await archiveResearchDirectory(location.researchDirectory);
+  let zip = await readFile(archive);
+  for (const artifact of historyArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), false);
+  }
+
+  await writeFile(manifestPath, JSON.stringify({ artifacts: historyArtifacts }, null, 2) + '\n');
+  archive = await archiveResearchDirectory(location.researchDirectory);
+  zip = await readFile(archive);
+  for (const artifact of historyArtifacts) {
+    assert.equal(zip.includes(Buffer.from(`enrichment/${artifact}`)), true);
+  }
+});
