@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { RunStore } from '../db/store.js';
-import {
-  CLUSTER_KEYWORD_IDENTITY_SNAPSHOT,
-  loadPersistedClusteringRelations,
-} from './clusteringSnapshot.js';
+import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
+
+const CLUSTER_CONFIG = {
+  topN: 10,
+  edgeRule: { minSharedDomains: 3, minJaccard: 0.3 },
+  algorithmVersion: '1.0.0',
+};
 
 function createEnrichment(store: RunStore, enrichmentId: string): void {
   store.createEnrichmentRun({
@@ -41,6 +44,26 @@ function insertLegacyRelations(store: RunStore, enrichmentId: string): void {
   ).run(enrichmentId, 'old keyword', 'old keyword', 'no_serp', 0);
 }
 
+function saveCurrentSingletonCluster(store: RunStore, enrichmentId: string): void {
+  store.saveKeywordClusters(enrichmentId, [{
+    clusterId: 'cluster-1',
+    canonicalKeywordIdx: 7,
+    canonicalKeyword: 'json diff',
+    members: [{
+      keywordIdx: 7,
+      keyword: 'json diff',
+      normalizedKeyword: 'json diff',
+      volume: 100,
+      serpSize: 3,
+    }],
+    representativeDomains: ['a.com', 'b.com', 'c.com'],
+    medianVolume: 100,
+    averageVolume: 100,
+    algorithmVersion: '1.0.0',
+    config: CLUSTER_CONFIG,
+  }]);
+}
+
 test('legacy clustering relations remain readable before an idx-owned snapshot exists', () => {
   const store = RunStore.openInMemory();
   const enrichmentId = 'legacy-clusters';
@@ -53,7 +76,7 @@ test('legacy clustering relations remain readable before an idx-owned snapshot e
     assert.equal(rawPairs[0]?.keywordAIdx, null);
     assert.equal(rawExclusions[0]?.keywordIdx, null);
 
-    const current = loadPersistedClusteringRelations(store, enrichmentId, null);
+    const current = loadPersistedClusteringRelations(store, enrichmentId);
     assert.equal(current.pairs.length, 1);
     assert.equal(current.exclusions.length, 1);
     assert.equal(current.pairs[0]?.keywordAIdx, null);
@@ -63,44 +86,23 @@ test('legacy clustering relations remain readable before an idx-owned snapshot e
   }
 });
 
-test('fresh empty idx-owned snapshot does not resurrect legacy text-owned relations', () => {
+test('fresh empty relations do not resurrect legacy text-owned rows', () => {
   const store = RunStore.openInMemory();
-  const enrichmentId = 'fresh-empty-clusters';
+  const enrichmentId = 'fresh-empty-relations';
   createEnrichment(store, enrichmentId);
   insertLegacyRelations(store, enrichmentId);
 
-  // A fresh clustering generation can legitimately produce zero pair rows and
-  // zero exclusions. Keep those v2 tables empty: this is the exact case that
-  // made raw compatibility readers fall back to stale legacy rows.
+  // A one-keyword cluster legitimately has no pair rows and no exclusions.
+  // Those empty v2 relations must still supersede the historical fallback.
+  saveCurrentSingletonCluster(store, enrichmentId);
   store.saveEnrichmentPairs(enrichmentId, []);
   store.saveEnrichmentExclusions(enrichmentId, []);
-  store.upsertEnrichmentItem({
-    enrichmentId,
-    itemId: 'clusters',
-    module: 'clusters',
-    status: 'completed',
-    source: 'serp_overlap',
-    cacheStatus: 'none',
-    fetchedAt: '2026-08-29T00:00:00.000Z',
-    payload: CLUSTER_KEYWORD_IDENTITY_SNAPSHOT,
-  });
 
   try {
-    // Raw readers intentionally preserve historical compatibility, so they can
-    // still expose the legacy fallback when the current v2 relation is empty.
     assert.equal(store.loadEnrichmentPairs(enrichmentId).length, 1);
     assert.equal(store.loadEnrichmentExclusions(enrichmentId).length, 1);
 
-    const item = store.loadEnrichmentItems(enrichmentId).find(
-      (row) => row.itemId === 'clusters' && row.module === 'clusters',
-    );
-    assert.equal(item?.payload, CLUSTER_KEYWORD_IDENTITY_SNAPSHOT);
-
-    const current = loadPersistedClusteringRelations(
-      store,
-      enrichmentId,
-      item?.payload ?? null,
-    );
+    const current = loadPersistedClusteringRelations(store, enrichmentId);
     assert.deepEqual(current.pairs, []);
     assert.deepEqual(current.exclusions, []);
   } finally {
@@ -113,6 +115,7 @@ test('idx-owned snapshot preserves non-empty current relations', () => {
   const enrichmentId = 'fresh-current-clusters';
   createEnrichment(store, enrichmentId);
   insertLegacyRelations(store, enrichmentId);
+  saveCurrentSingletonCluster(store, enrichmentId);
 
   store.saveEnrichmentPairs(enrichmentId, [{
     keywordAIdx: 3,
@@ -134,11 +137,7 @@ test('idx-owned snapshot preserves non-empty current relations', () => {
   }]);
 
   try {
-    const current = loadPersistedClusteringRelations(
-      store,
-      enrichmentId,
-      CLUSTER_KEYWORD_IDENTITY_SNAPSHOT,
-    );
+    const current = loadPersistedClusteringRelations(store, enrichmentId);
     assert.deepEqual(current.pairs.map((row) => [row.keywordAIdx, row.keywordBIdx]), [[3, 4]]);
     assert.deepEqual(current.exclusions.map((row) => row.keywordIdx), [5]);
   } finally {
