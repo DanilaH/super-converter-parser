@@ -143,7 +143,7 @@ function occurrenceIdentityKey(occurrence: RawSuggestionOccurrence): string {
 }
 
 export function countPersistedQueryParents(
-  records: readonly Array<{ parentKeywordIdx: number | null; normalizedParent: string }>,
+  records: ReadonlyArray<{ parentKeywordIdx: number | null; normalizedParent: string }>,
 ): number {
   const concreteIds = new Set<number>();
   const concreteTexts = new Set<string>();
