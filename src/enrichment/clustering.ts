@@ -1,16 +1,22 @@
 import type {
+  ClusterCohesion,
+  ClusterCohesionSummary,
   ClusterEdgeRule,
   ClusterEvidence,
   ClusterMember,
+  ClusterPairClassification,
   KeywordCluster,
   ClusteringConfig,
   PairwiseComparison,
   ClusteredKeywordExclusion,
 } from './types.js';
+import { CLUSTER_URL_IDENTITY_VERSION, clusteringUrlIdentity } from './urlIdentity.js';
 
 export type { ClusteringConfig } from './types.js';
 
-export const CLUSTERING_ALGORITHM_VERSION = '1.0.0';
+export const CLUSTERING_ALGORITHM_VERSION = '2.0.0';
+export const DEFAULT_CLUSTER_MIN_SHARED_URLS = 2;
+export const DEFAULT_CLUSTER_MIN_URL_JACCARD = 0.1;
 
 export type ClusteringInput = {
   keywordIdx: number;
@@ -18,12 +24,17 @@ export type ClusteringInput = {
   normalizedKeyword: string;
   volume: number | null;
   domains: string[];
+  // Raw ranked URLs. Comparison uses the explicit versioned identity function;
+  // these values themselves remain untouched evidence.
+  urls?: string[];
 };
 
-type PairEvidence = {
-  a: number;
-  b: number;
-  evidence: ClusterEvidence;
+type StrongPairEvidence = ClusterEvidence & {
+  sharedUrls: string[];
+  urlIntersectionCount: number;
+  urlUnionCount: number;
+  urlJaccard: number;
+  classification: ClusterPairClassification;
 };
 
 export type ClusteringResult = {
@@ -42,7 +53,14 @@ export function clusterKeywords(
   config: ClusteringConfig,
 ): ClusteringResult {
   const topN = config.topN;
-  const { minSharedDomains, minJaccard } = config.edgeRule;
+  const edgeRule = effectiveEdgeRule(config.edgeRule);
+  const effectiveConfig: ClusteringConfig = {
+    ...config,
+    edgeRule,
+    algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
+    urlIdentityVersion: CLUSTER_URL_IDENTITY_VERSION,
+    groupingRule: 'complete_link',
+  };
 
   const keywordInputMap = new Map<number, ClusteringInput>();
   for (const input of inputs) {
@@ -82,75 +100,77 @@ export function clusterKeywords(
 
   const excludedCount = inputs.length - valid.length;
 
-  // Source keyword idx is the graph identity. Text is retained only as
-  // user-facing/semantic metadata and never owns an edge/member relation.
   const domainSets = new Map<number, Set<string>>();
+  const urlSets = new Map<number, Set<string>>();
   for (const input of valid) {
-    const set = new Set<string>();
-    for (let i = 0; i < Math.min(input.domains.length, topN); i += 1) {
-      set.add(input.domains[i]!);
+    domainSets.set(input.keywordIdx, new Set(input.domains.slice(0, topN)));
+
+    const urls = new Set<string>();
+    for (const rawUrl of (input.urls ?? []).slice(0, topN)) {
+      const identity = clusteringUrlIdentity(rawUrl);
+      if (identity !== null) urls.add(identity);
     }
-    domainSets.set(input.keywordIdx, set);
+    urlSets.set(input.keywordIdx, urls);
   }
 
   const keywordIds = valid.map((input) => input.keywordIdx);
-  const edges: PairEvidence[] = [];
-  const adjacency = new Map<number, Set<number>>();
   const allPairs: PairwiseComparison[] = [];
+  const pairMap = new Map<string, PairwiseComparison>();
 
   for (let i = 0; i < keywordIds.length; i += 1) {
     const a = keywordIds[i]!;
-    const setA = domainSets.get(a)!;
+    const domainsA = domainSets.get(a)!;
+    const urlsA = urlSets.get(a)!;
     const inputA = keywordInputMap.get(a)!;
+
     for (let j = i + 1; j < keywordIds.length; j += 1) {
       const b = keywordIds[j]!;
-      const setB = domainSets.get(b)!;
+      const domainsB = domainSets.get(b)!;
+      const urlsB = urlSets.get(b)!;
       const inputB = keywordInputMap.get(b)!;
 
-      let intersectionSize = 0;
-      const shared: string[] = [];
-      for (const domain of setA) {
-        if (setB.has(domain)) {
-          intersectionSize += 1;
-          shared.push(domain);
-        }
-      }
+      const domainEvidence = overlap(domainsA, domainsB);
+      const urlEvidence = overlap(urlsA, urlsB);
+      const domainStrong =
+        domainEvidence.intersectionCount >= edgeRule.minSharedDomains
+        && domainEvidence.jaccard >= edgeRule.minJaccard;
+      const urlStrong =
+        urlEvidence.intersectionCount >= edgeRule.minSharedUrls!
+        && urlEvidence.jaccard >= edgeRule.minUrlJaccard!;
+      const classification = classifyPair(
+        domainStrong,
+        urlStrong,
+        domainEvidence.intersectionCount,
+        urlEvidence.intersectionCount,
+      );
+      const isEdge = classification === 'strong';
 
-      const unionSize = setA.size + setB.size - intersectionSize;
-      const jaccard = unionSize === 0 ? 0 : intersectionSize / unionSize;
-      const isEdge = intersectionSize >= minSharedDomains && jaccard >= minJaccard;
-
-      shared.sort();
       const pairAIdx = Math.min(a, b);
       const pairBIdx = Math.max(a, b);
       const pairAInput = pairAIdx === a ? inputA : inputB;
       const pairBInput = pairBIdx === b ? inputB : inputA;
-      allPairs.push({
+      const pair: PairwiseComparison = {
         keywordAIdx: pairAIdx,
         keywordBIdx: pairBIdx,
         keywordA: pairAInput.normalizedKeyword,
         keywordB: pairBInput.normalizedKeyword,
-        intersectionCount: intersectionSize,
-        unionCount: unionSize,
-        jaccard,
-        sharedDomains: shared,
+        // V1 compatibility aliases remain the domain metrics.
+        intersectionCount: domainEvidence.intersectionCount,
+        unionCount: domainEvidence.unionCount,
+        jaccard: domainEvidence.jaccard,
+        sharedDomains: domainEvidence.shared,
+        sharedUrls: urlEvidence.shared,
+        urlIntersectionCount: urlEvidence.intersectionCount,
+        urlUnionCount: urlEvidence.unionCount,
+        urlJaccard: urlEvidence.jaccard,
+        domainIntersectionCount: domainEvidence.intersectionCount,
+        domainUnionCount: domainEvidence.unionCount,
+        domainJaccard: domainEvidence.jaccard,
+        classification,
         isEdge,
-      });
-
-      if (!isEdge) continue;
-
-      const evidence: ClusterEvidence = {
-        sharedDomains: shared,
-        intersectionCount: intersectionSize,
-        unionCount: unionSize,
-        jaccard,
       };
-      edges.push({ a, b, evidence });
-
-      if (!adjacency.has(a)) adjacency.set(a, new Set());
-      if (!adjacency.has(b)) adjacency.set(b, new Set());
-      adjacency.get(a)!.add(b);
-      adjacency.get(b)!.add(a);
+      allPairs.push(pair);
+      pairMap.set(pairKey(pairAIdx, pairBIdx), pair);
     }
   }
 
@@ -162,41 +182,7 @@ export function clusterKeywords(
   const compareKeywordIds = (a: number, b: number): number =>
     compareInputs(keywordInputMap.get(a)!, keywordInputMap.get(b)!);
 
-  const visited = new Set<number>();
-  const components: number[][] = [];
-
-  for (const keywordIdx of keywordIds) {
-    if (visited.has(keywordIdx)) continue;
-    if (!adjacency.has(keywordIdx)) {
-      components.push([keywordIdx]);
-      visited.add(keywordIdx);
-      continue;
-    }
-    const component: number[] = [];
-    const queue: number[] = [keywordIdx];
-    visited.add(keywordIdx);
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      component.push(current);
-      const neighbors = adjacency.get(current);
-      if (neighbors) {
-        for (const neighbor of neighbors) {
-          if (!visited.has(neighbor)) {
-            visited.add(neighbor);
-            queue.push(neighbor);
-          }
-        }
-      }
-    }
-    component.sort(compareKeywordIds);
-    components.push(component);
-  }
-
-  const pairJaccardMap = new Map<string, number>();
-  for (const pair of allPairs) {
-    if (pair.keywordAIdx === null || pair.keywordBIdx === null) continue;
-    pairJaccardMap.set(pairKey(pair.keywordAIdx, pair.keywordBIdx), pair.jaccard);
-  }
+  const groups = buildCompleteLinkGroups(keywordIds, pairMap, compareKeywordIds);
 
   const rawClusters: Array<{
     members: number[];
@@ -204,23 +190,19 @@ export function clusterKeywords(
     representativeDomains: string[];
     medianVolume: number | null;
     averageVolume: number | null;
+    cohesion: ClusterCohesion;
   }> = [];
 
-  for (const memberIds of components) {
-    const memberInputs = memberIds
-      .map((id) => keywordInputMap.get(id)!)
-      .filter(Boolean);
-
+  for (const memberIds of groups) {
+    const memberInputs = memberIds.map((id) => keywordInputMap.get(id)!).filter(Boolean);
     const memberVolumes = memberInputs
       .map((member) => member.volume)
       .filter((volume): volume is number => volume !== null && volume !== undefined);
 
-    const medianVolume =
-      memberVolumes.length > 0 ? median(memberVolumes) : null;
-    const averageVolume =
-      memberVolumes.length > 0
-        ? memberVolumes.reduce((sum, volume) => sum + volume, 0) / memberVolumes.length
-        : null;
+    const medianVolume = memberVolumes.length > 0 ? median(memberVolumes) : null;
+    const averageVolume = memberVolumes.length > 0
+      ? memberVolumes.reduce((sum, volume) => sum + volume, 0) / memberVolumes.length
+      : null;
 
     const domainFrequency = new Map<string, { count: number; rankSum: number }>();
     for (const member of memberInputs) {
@@ -246,7 +228,7 @@ export function clusterKeywords(
         const avgRankA = a[1].rankSum / a[1].count;
         const avgRankB = b[1].rankSum / b[1].count;
         if (avgRankA !== avgRankB) return avgRankA - avgRankB;
-        return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+        return a[0].localeCompare(b[0]);
       })
       .map(([domain]) => domain);
 
@@ -255,22 +237,22 @@ export function clusterKeywords(
       let bestScore = -1;
       let bestVolume = -1;
       for (const memberIdx of memberIds) {
-        let jaccardSum = 0;
+        let domainJaccardSum = 0;
         for (const otherIdx of memberIds) {
           if (memberIdx === otherIdx) continue;
-          jaccardSum += pairJaccardMap.get(pairKey(memberIdx, otherIdx)) ?? 0;
+          domainJaccardSum += pairDomainJaccard(pairMap.get(pairKey(memberIdx, otherIdx)));
         }
         const member = keywordInputMap.get(memberIdx)!;
-        const volume = member.volume ?? null;
+        const volume = member.volume ?? -1;
         const currentCanonical = keywordInputMap.get(canonicalKeywordIdx)!;
         const lexicalOrder = compareInputs(member, currentCanonical);
         if (
-          jaccardSum > bestScore ||
-          (jaccardSum === bestScore && (volume ?? -1) > bestVolume) ||
-          (jaccardSum === bestScore && (volume ?? -1) === bestVolume && lexicalOrder < 0)
+          domainJaccardSum > bestScore
+          || (domainJaccardSum === bestScore && volume > bestVolume)
+          || (domainJaccardSum === bestScore && volume === bestVolume && lexicalOrder < 0)
         ) {
-          bestScore = jaccardSum;
-          bestVolume = volume ?? -1;
+          bestScore = domainJaccardSum;
+          bestVolume = volume;
           canonicalKeywordIdx = memberIdx;
         }
       }
@@ -282,6 +264,7 @@ export function clusterKeywords(
       representativeDomains,
       medianVolume,
       averageVolume,
+      cohesion: clusterCohesion(memberIds, pairMap),
     });
   }
 
@@ -291,10 +274,7 @@ export function clusterKeywords(
   });
 
   const clusters: KeywordCluster[] = rawClusters.map((rawCluster, idx) => {
-    const memberInputs = rawCluster.members
-      .map((memberIdx) => keywordInputMap.get(memberIdx)!)
-      .filter(Boolean);
-
+    const memberInputs = rawCluster.members.map((memberIdx) => keywordInputMap.get(memberIdx)!).filter(Boolean);
     const clusterMembers: ClusterMember[] = memberInputs.map((member) => ({
       keywordIdx: member.keywordIdx,
       keyword: member.keyword,
@@ -313,6 +293,7 @@ export function clusterKeywords(
       medianVolume: rawCluster.medianVolume,
       averageVolume: rawCluster.averageVolume,
       memberCount: rawCluster.members.length,
+      cohesion: rawCluster.cohesion,
     };
   });
 
@@ -320,11 +301,162 @@ export function clusterKeywords(
     clusters,
     pairs: allPairs,
     exclusions,
-    config,
+    config: effectiveConfig,
     algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
     inputCount: inputs.length,
     excludedCount,
-    edgeCount: edges.length,
+    edgeCount: allPairs.filter((pair) => pair.isEdge).length,
+  };
+}
+
+function effectiveEdgeRule(rule: ClusterEdgeRule): ClusterEdgeRule & {
+  minSharedUrls: number;
+  minUrlJaccard: number;
+} {
+  return {
+    ...rule,
+    minSharedUrls: rule.minSharedUrls ?? DEFAULT_CLUSTER_MIN_SHARED_URLS,
+    minUrlJaccard: rule.minUrlJaccard ?? DEFAULT_CLUSTER_MIN_URL_JACCARD,
+  };
+}
+
+function overlap(a: Set<string>, b: Set<string>): {
+  shared: string[];
+  intersectionCount: number;
+  unionCount: number;
+  jaccard: number;
+} {
+  const shared = [...a].filter((value) => b.has(value)).sort();
+  const unionCount = a.size + b.size - shared.length;
+  return {
+    shared,
+    intersectionCount: shared.length,
+    unionCount,
+    jaccard: unionCount === 0 ? 0 : shared.length / unionCount,
+  };
+}
+
+function classifyPair(
+  domainStrong: boolean,
+  urlStrong: boolean,
+  sharedDomains: number,
+  sharedUrls: number,
+): ClusterPairClassification {
+  if (domainStrong && urlStrong) return 'strong';
+  if (domainStrong) return 'domain_only';
+  if (urlStrong) return 'url_only';
+  if (sharedDomains > 0 || sharedUrls > 0) return 'weak';
+  return 'none';
+}
+
+function buildCompleteLinkGroups(
+  keywordIds: number[],
+  pairs: Map<string, PairwiseComparison>,
+  compareKeywordIds: (a: number, b: number) => number,
+): number[][] {
+  let groups = keywordIds.map((keywordIdx) => [keywordIdx]);
+
+  while (true) {
+    const candidates: Array<{
+      aIndex: number;
+      bIndex: number;
+      merged: number[];
+      minUrlJaccard: number;
+      minDomainJaccard: number;
+      meanUrlJaccard: number;
+      meanDomainJaccard: number;
+    }> = [];
+
+    for (let aIndex = 0; aIndex < groups.length; aIndex += 1) {
+      for (let bIndex = aIndex + 1; bIndex < groups.length; bIndex += 1) {
+        const a = groups[aIndex]!;
+        const b = groups[bIndex]!;
+        const crossPairs = a.flatMap((aIdx) => b.map((bIdx) => pairs.get(pairKey(aIdx, bIdx))));
+        if (crossPairs.some((pair) => pair?.isEdge !== true)) continue;
+
+        const urlValues = crossPairs.map(pairUrlJaccard);
+        const domainValues = crossPairs.map(pairDomainJaccard);
+        candidates.push({
+          aIndex,
+          bIndex,
+          merged: [...a, ...b].sort(compareKeywordIds),
+          minUrlJaccard: Math.min(...urlValues),
+          minDomainJaccard: Math.min(...domainValues),
+          meanUrlJaccard: mean(urlValues),
+          meanDomainJaccard: mean(domainValues),
+        });
+      }
+    }
+
+    if (candidates.length === 0) break;
+    candidates.sort((a, b) =>
+      b.minUrlJaccard - a.minUrlJaccard
+      || b.minDomainJaccard - a.minDomainJaccard
+      || b.meanUrlJaccard - a.meanUrlJaccard
+      || b.meanDomainJaccard - a.meanDomainJaccard
+      || compareIdArrays(a.merged, b.merged, compareKeywordIds),
+    );
+
+    const chosen = candidates[0]!;
+    groups = groups.filter((_, index) => index !== chosen.aIndex && index !== chosen.bIndex);
+    groups.push(chosen.merged);
+    groups.sort((a, b) => compareIdArrays(a, b, compareKeywordIds));
+  }
+
+  for (const group of groups) group.sort(compareKeywordIds);
+  return groups.sort((a, b) => compareIdArrays(a, b, compareKeywordIds));
+}
+
+function compareIdArrays(
+  a: number[],
+  b: number[],
+  compareKeywordIds: (a: number, b: number) => number,
+): number {
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const comparison = compareKeywordIds(a[index]!, b[index]!);
+    if (comparison !== 0) return comparison;
+  }
+  return a.length - b.length;
+}
+
+function clusterCohesion(memberIds: number[], pairs: Map<string, PairwiseComparison>): ClusterCohesion {
+  if (memberIds.length < 2) {
+    return { pairCount: 0, urlJaccard: null, domainJaccard: null };
+  }
+
+  const urlValues: number[] = [];
+  const domainValues: number[] = [];
+  for (let aIndex = 0; aIndex < memberIds.length; aIndex += 1) {
+    for (let bIndex = aIndex + 1; bIndex < memberIds.length; bIndex += 1) {
+      const pair = pairs.get(pairKey(memberIds[aIndex]!, memberIds[bIndex]!));
+      if (!pair) continue;
+      urlValues.push(pairUrlJaccard(pair));
+      domainValues.push(pairDomainJaccard(pair));
+    }
+  }
+
+  return {
+    pairCount: urlValues.length,
+    urlJaccard: summarize(urlValues),
+    domainJaccard: summarize(domainValues),
+  };
+}
+
+function pairUrlJaccard(pair: PairwiseComparison | undefined): number {
+  return pair?.urlJaccard ?? 0;
+}
+
+function pairDomainJaccard(pair: PairwiseComparison | undefined): number {
+  return pair?.domainJaccard ?? pair?.jaccard ?? 0;
+}
+
+function summarize(values: number[]): ClusterCohesionSummary | null {
+  if (values.length === 0) return null;
+  return {
+    min: Math.min(...values),
+    median: median(values),
+    mean: mean(values),
   };
 }
 
@@ -339,4 +471,8 @@ function median(values: number[]): number {
     return (sorted[mid - 1]! + sorted[mid]!) / 2;
   }
   return sorted[mid]!;
+}
+
+function mean(values: number[]): number {
+  return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
