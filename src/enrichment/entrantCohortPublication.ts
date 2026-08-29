@@ -1,25 +1,35 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeTextAtomic } from '../runs/run.js';
-import { ENTRANT_COHORT_ARTIFACTS } from './entrantCohortPublication.js';
-import type { RepresentativeQueryRunConfigSnapshot } from './types.js';
+import type { ResearchConfig } from '../config/config.js';
 
-export type RepresentativePublicationSummary = {
-  revision: number;
+export const ENTRANT_COHORT_ARTIFACTS = [
+  'entrant-cohort.csv',
+  'entrant-cohort-occurrences.csv',
+  'entrant-cohort.json',
+] as const;
+
+export type EntrantCohortPublicationSummary = {
   changed: boolean;
-  setVersion: string;
-  targetCount: number;
-  setCount: number;
-  queryCount: number;
-  manualOverrideCount: number;
+  version: string;
+  representativeRevision: number;
+  serpTopN: number;
+  finalistClusterCount: number;
+  uniqueDomainCount: number;
+  observedOccurrenceCount: number;
+  excludedOccurrenceCount: number;
+  weakDomainCount: number;
+  knownDrDomainCount: number;
+  repeatedDomainCount: number;
+  survivorshipWarning: string;
+  drThresholds: ResearchConfig['scoring']['drThresholds'];
 };
 
-export async function publishRepresentativeMetadata(input: {
+export async function publishEntrantCohortMetadata(input: {
   enrichmentDirectory: string;
   enrichmentId: string;
   sourceRunId: string;
-  config: RepresentativeQueryRunConfigSnapshot;
-  summary: RepresentativePublicationSummary;
+  summary: EntrantCohortPublicationSummary;
 }): Promise<void> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
@@ -31,76 +41,62 @@ export async function publishRepresentativeMetadata(input: {
   assertArtifactIdentity(manifest, input.enrichmentId, input.sourceRunId, 'manifest.json');
   assertArtifactIdentity(status, input.enrichmentId, input.sourceRunId, 'status.json');
   if (manifest.state !== 'completed' || status.status !== 'completed') {
-    throw new Error('Representative queries require a completed enrichment publication');
+    throw new Error('Entrant cohort publication requires a completed enrichment publication');
   }
-  if (!isRecord(manifest.config)) {
-    throw new Error('manifest.json config must be an object');
-  }
+  assertRepresentativeRevision(manifest, input.summary.representativeRevision, 'manifest.json');
+  assertRepresentativeRevision(status, input.summary.representativeRevision, 'status.json');
 
-  const keepEntrantPublication =
-    readEntrantRepresentativeRevision(manifest) === input.summary.revision
-    && readEntrantRepresentativeRevision(status) === input.summary.revision;
-  const entrantArtifactSet = new Set<string>(ENTRANT_COHORT_ARTIFACTS);
-  const filterStaleEntrantArtifacts = (names: string[]) => keepEntrantPublication
-    ? names
-    : names.filter((name) => !entrantArtifactSet.has(name));
-
-  const artifacts = filterStaleEntrantArtifacts(uniqueStrings([
+  const manifestArtifacts = uniqueStrings([
     ...readStringArray(manifest.artifacts, 'manifest.json artifacts'),
-    'representative-queries.csv',
-    'representative-queries.json',
-  ]));
-  const statusArtifacts = filterStaleEntrantArtifacts(uniqueStrings([
+    ...ENTRANT_COHORT_ARTIFACTS,
+  ]);
+  const statusArtifacts = uniqueStrings([
     ...readStringArray(status.artifacts, 'status.json artifacts'),
-    'representative-queries.csv',
-    'representative-queries.json',
-  ]));
+    ...ENTRANT_COHORT_ARTIFACTS,
+  ]);
 
   const nextManifest: Record<string, unknown> = {
     ...manifest,
-    config: {
-      ...manifest.config,
-      representative_queries: input.config,
-    },
-    artifacts,
-    representativeQueries: input.summary,
+    artifacts: manifestArtifacts,
+    entrantCohort: input.summary,
   };
   const nextStatus: Record<string, unknown> = {
     ...status,
     artifacts: statusArtifacts,
-    representativeQueries: input.summary,
+    entrantCohort: input.summary,
   };
-  if (!keepEntrantPublication) {
-    delete nextManifest.entrantCohort;
-    delete nextStatus.entrantCohort;
-  }
 
   await writeTextAtomic(
     statusPath,
     JSON.stringify(nextStatus, null, 2) + '\n',
-    'enrichment status with representative queries',
+    'enrichment status with entrant cohort',
   );
   try {
     await writeTextAtomic(
       manifestPath,
       JSON.stringify(nextManifest, null, 2) + '\n',
-      'enrichment manifest with representative queries',
+      'enrichment manifest with entrant cohort',
     );
   } catch (error) {
     await writeTextAtomic(statusPath, originalStatus, 'restore enrichment status').catch(() => undefined);
     throw error;
   }
-
-  if (!keepEntrantPublication) {
-    await Promise.all(ENTRANT_COHORT_ARTIFACTS.map((name) =>
-      rm(join(input.enrichmentDirectory, name), { force: true })));
-  }
 }
 
-function readEntrantRepresentativeRevision(value: Record<string, unknown>): number | null {
-  if (!isRecord(value.entrantCohort)) return null;
-  const revision = value.entrantCohort.representativeRevision;
-  return typeof revision === 'number' && Number.isInteger(revision) ? revision : null;
+function assertRepresentativeRevision(
+  value: Record<string, unknown>,
+  expectedRevision: number,
+  label: string,
+): void {
+  if (!isRecord(value.representativeQueries)) {
+    throw new Error(`${label} has no published representative-query metadata`);
+  }
+  const revision = value.representativeQueries.revision;
+  if (revision !== expectedRevision) {
+    throw new Error(
+      `${label} representative revision ${String(revision)} does not match entrant cohort revision ${expectedRevision}`,
+    );
+  }
 }
 
 function parsePublishedJson(content: string, label: string): Record<string, unknown> {
@@ -131,7 +127,7 @@ function readStringArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
-function uniqueStrings(values: string[]): string[] {
+function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
