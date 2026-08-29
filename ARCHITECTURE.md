@@ -328,6 +328,31 @@ Discovery state lives in `run.sqlite`; enrichment state lives in `enrichment.sql
 - completed checkpoints are not re-fetched merely because a mutable cross-run cache entry changed;
 - omitted work is terminal evidence, not successful measurement.
 
+### Failed-keyword repair journal
+
+Ordinary resume does not reopen terminal failed keyword checkpoints. Discovery has one explicit repair path:
+
+```text
+npm run research -- --resume <run-id> --retry-failed
+```
+
+The path is intentionally narrow:
+
+- `completed_with_errors` may be reopened only through this explicit flag; `completed`, `failed`, and `cancelled` run states remain immutable;
+- a read-only repair plan is built first from the durable failed keyword indexes;
+- persisted parser/config semantics, refresh input, Ahrefs requirements, cache open, and discovery/debug directory writability are validated before the plan mutates `run.sqlite`;
+- the plan is then revalidated and applied synchronously in one SQLite transaction immediately before browser work;
+- only planned `failed` checkpoints are reset to `pending`; completed/partial siblings are untouched;
+- the previous keyword record and its SERP rows are copied into append-only attempt history before current SERP evidence is cleared;
+- current domain membership/first-seen ownership is reconciled from the surviving current SERP rows so removed failed SERPs cannot leave ghost domains;
+- a stale plan aborts the whole repair transaction rather than partially reopening a batch.
+
+Retry history is stored in the same `run.sqlite` under the feature-owned, independently versioned `keyword_retry_schema` / `keyword_retry_attempts` extension. The core discovery schema version is not bumped merely to make an operator who never uses failed repair create those tables. Ordinary reads do not create the extension schema.
+
+An open retry attempt is durable repair intent. It transiently forces the corresponding keyword cache decision to `refreshed` for that invocation, but is not copied into the run's persistent `refresh_keywords`. Therefore an interrupted repair continues with ordinary `--resume` and still bypasses the stale failed keyword cache, while a completed repair does not become a permanent forced refresh.
+
+If the process dies after a repaired keyword checkpoint commits but before the attempt journal is closed, the next resume reconciles the open attempt from the current durable keyword/SERP state without performing a second browser request.
+
 ---
 
 ## Configuration
@@ -436,13 +461,19 @@ A discovery run stopped partway through must continue unfinished work:
 npm run research -- --resume <run-id>
 ```
 
+A discovery run that reached `completed_with_errors` may explicitly repair only its failed keywords without replaying successful siblings:
+
+```text
+npm run research -- --resume <run-id> --retry-failed
+```
+
 A deep-enrichment run resumes by enrichment ID:
 
 ```text
 npm run enrich -- --resume <enrichment-id>
 ```
 
-Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifacts.
+Resume correctness comes from SQLite checkpoints, not from re-reading CSV artifacts. Ordinary resume leaves terminal keyword checkpoints untouched; failed-keyword repair is the explicit exception described above and preserves prior-attempt evidence before reopening current state.
 
 ## Atomic publication
 
