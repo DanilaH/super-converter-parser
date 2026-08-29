@@ -242,6 +242,36 @@ See `SCORING.md`.
 
 The arithmetic formula, weights, thresholds, and tier boundaries are unchanged, but `SCORING_VERSION` is `1.1.0` because score eligibility now requires trustworthy SERP evidence. A partial keyword with valid Surfer demand and a Google parse/fetch failure remains visible but receives `score=null` rather than being scored as an empty/easy SERP. Trustworthy SERP evidence is necessary but the existing keyword-status rule still applies: failed/non-terminal keywords remain unscored.
 
+## Explicit failed-keyword repair
+
+A normal `--resume` never reopens terminal failed keyword checkpoints. Repair is an explicit operator action:
+
+```bash
+npm run research -- --resume <run-id> --retry-failed
+```
+
+Only failed discovery keywords are eligible. Previously completed/partial keywords stay untouched, and `completed`, `failed`, and `cancelled` run states remain immutable. A `completed_with_errors` run may be reopened only through this explicit repair path.
+
+The repair control flow is deliberately ordered:
+
+```text
+read-only repair plan
+→ validate persisted parser/config contract
+→ validate refresh/Ahrefs/cache/output writability
+→ atomically journal old keyword + SERP evidence and reset failed checkpoints to pending
+→ mark run paused/resumable
+→ force cache bypass for open repair checkpoints
+→ browser collection / ordinary executeRun
+→ close retry journal from terminal current checkpoints
+→ republish artifacts from reconciled SQLite state
+```
+
+Rejected config/cache/output preflight leaves `run.sqlite` unchanged because mutation happens only at the atomic apply step. Once applied, the open retry attempt is durable before browser work begins, so a browser/CAPTCHA interruption can continue with ordinary `--resume` without losing operator intent.
+
+Retry history is append-only per `(run_id, keyword_idx, retry_no)`: it preserves the previous keyword record and SERP rows and, after completion, the resulting record and rows. Retry numbers are monotonic. Old SERP rows are replaced rather than appended, stale domain membership is removed, and a domain's previous first-seen keyword owner is retained while that owner still has current SERP evidence.
+
+An open repair is its own transient reason to bypass the ordinary keyword cache. This bypass is not persisted into the run's normal `refresh_keywords`, so completing a one-time repair does not turn the keyword into a permanently forced refresh. Independent successful related-keyword evidence is not erased merely because the primary keyword checkpoint is repaired.
+
 ## Stage 9 — Output
 
 Write all run artifacts even if some keywords failed.
@@ -652,7 +682,6 @@ Machine-readable final status.
 
 ## Historical behavior
 
-Never overwrite a completed run. New runs use the durable research layout under
-`RESEARCH_OUTPUT_ROOT`; terminal discovery/enrichment directories are historical
-artifacts. Legacy `runs/<uuid>` / `enrichments/<uuid>` directories remain readable
-and resumable only where explicitly supported, but are not the layout for new work.
+Ordinary completed runs are historical artifacts and are never reopened by normal resume. The one narrow exception is an explicit `--resume <run-id> --retry-failed` repair of a `completed_with_errors` discovery run, which mutates that same logical run while preserving append-only retry evidence. Fully `completed`, `failed`, and `cancelled` discovery states remain immutable.
+
+New runs use the durable research layout under `RESEARCH_OUTPUT_ROOT`; terminal discovery/enrichment directories are historical artifacts. Legacy `runs/<uuid>` / `enrichments/<uuid>` directories remain readable and resumable only where explicitly supported, but are not the layout for new work.
