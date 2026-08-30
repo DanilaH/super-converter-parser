@@ -25,6 +25,7 @@ export const WAYBACK_SOURCE = 'wayback';
 export const WAYBACK_DEFAULT_ENDPOINT = 'https://web.archive.org/cdx/search/cdx';
 
 const MAX_ATTEMPTS = 3;
+const CIRCUIT_OPEN_HTTP_STATUSES = new Set([403, 451]);
 
 export function parseWaybackTimestamp(ts: string): string | null {
   const digits = ts.replace(/[^0-9]/g, '');
@@ -117,6 +118,24 @@ function errorResult(
   };
 }
 
+function unavailableResult(
+  domain: string,
+  fetchedAt: string,
+  sourceReason: string,
+): FirstSeenResult {
+  return {
+    domain,
+    firstSeenDate: null,
+    status: 'unavailable',
+    error: null,
+    source: WAYBACK_SOURCE,
+    sourceReason,
+    fetchedAt,
+    requestCount: 0,
+    httpStatus: null,
+  };
+}
+
 export function createWaybackClient(
   config: FirstSeenClientConfig,
   now: () => number = Date.now,
@@ -129,9 +148,21 @@ export function createWaybackClient(
   // Per-host rate limiter: tracks the next time a request can be made. Unlike
   // the retry-only minDelayMs, this limits ALL requests to the Wayback CDX host.
   let nextAvailableAt = 0;
+  // Provider-level circuit breaker shared by every domain resolved through this
+  // client instance. Exhausting the configured per-domain retry budget with
+  // consecutive transport failures proves enough provider-level unavailability
+  // for this enrichment; later domains stay explicitly unavailable rather than
+  // repeating the same timeout sequence. The threshold is therefore the already
+  // persisted/configurable `maxAttempts`, not a hidden second threshold.
+  let consecutiveNetworkFailures = 0;
+  let circuitOpenReason: string | null = null;
 
   return async (domain: string): Promise<FirstSeenResult> => {
     const fetchedAt = new Date(now()).toISOString();
+    if (circuitOpenReason !== null) {
+      return unavailableResult(domain, fetchedAt, circuitOpenReason);
+    }
+
     let lastAttempt = 0;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -157,6 +188,10 @@ export function createWaybackClient(
         const raw = await response.text();
         bodyRead = true;
         clearTimeout(timer);
+        // Any complete HTTP response proves that the provider is reachable at the
+        // transport layer, so an earlier network-failure streak is no longer
+        // consecutive. HTTP/provider semantics are handled separately below.
+        consecutiveNetworkFailures = 0;
         let data: unknown;
         try {
           data = JSON.parse(raw) as unknown;
@@ -172,6 +207,9 @@ export function createWaybackClient(
                 : backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random),
             );
             continue;
+          }
+          if (CIRCUIT_OPEN_HTTP_STATUSES.has(response.status)) {
+            circuitOpenReason = `Wayback provider circuit open after HTTP ${response.status}`;
           }
           return errorResult(
             domain,
@@ -231,6 +269,17 @@ export function createWaybackClient(
         };
       } catch {
         if (!bodyRead) clearTimeout(timer);
+        consecutiveNetworkFailures += 1;
+        if (consecutiveNetworkFailures >= attempts) {
+          circuitOpenReason = `Wayback provider circuit open after ${attempts} consecutive network failures (configured maxAttempts exhausted)`;
+          return errorResult(
+            domain,
+            fetchedAt,
+            attempt,
+            null,
+            'network error contacting Wayback CDX; provider circuit opened',
+          );
+        }
         if (attempt < attempts) {
           await sleep(backoffMs(attempt, config.baseDelayMs, config.maxDelayMs, random));
           continue;
