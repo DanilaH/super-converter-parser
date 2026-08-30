@@ -20,8 +20,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Node 20/npm 10 bundles node-gyp 10, which cannot discover VS 2026 on windows-latest.
-        # Keep VS2022 until the Node/npm native-build toolchain is upgraded.
+        # Keep Windows 2022 as the stable native-addon baseline; runtime LTS
+        # upgrades are intentionally independent from runner-image upgrades.
         os: [ubuntu-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
