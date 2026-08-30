@@ -7,6 +7,7 @@
   "scripts": {
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
+    "research:append": "tsx src/cli/appendResearch.ts",
     "enrich": "tsx src/cli/enrich.ts",
     "representatives": "tsx src/cli/representatives.ts",
     "entrant-cohort": "tsx src/cli/entrantCohort.ts",
