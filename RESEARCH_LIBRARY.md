@@ -37,6 +37,8 @@ npm run library:publish -- --enrichment <id> --output-root <absolute-path>
 
 Publication is explicit. A research is not automatically merged into the library merely because discovery/enrichment completed. This prevents temporary, experimental, synthetic, or operator-unreviewed results from silently becoming portfolio history.
 
+When a top-level research has been extended through `research:append`, only an enrichment whose `sourceRunId` equals that research container's `currentRunId` may be published. Historical enrichments stay available inside the research folder but cannot accidentally become the newest library version.
+
 ## Publication identity and history
 
 A publication fingerprint is SHA-256 over the current public discovery artifacts plus the artifacts advertised by the current enrichment manifest.
@@ -47,8 +49,10 @@ Consequences:
 
 - publishing the same public snapshot twice is idempotent;
 - changing traffic evidence, human decisions, clustering outputs, or another published artifact creates a new immutable publication;
-- when a new snapshot comes from the same enrichment id, it records `supersedes_publication_id` pointing to the previous library snapshot;
+- publications from the same top-level research directory form one `supersedes_publication_id` chain, even when an appended batch required a new source run and a new enrichment id;
 - old versions are retained rather than overwritten.
+
+The same-folder lineage uses the already-persisted `research_relative_path` in schema v1, so existing `library.sqlite` files do not require a schema migration when research batches are introduced.
 
 ## Publication truth
 

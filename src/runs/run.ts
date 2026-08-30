@@ -115,8 +115,17 @@ export type RunManifest = {
 // group, volume, competition, and CPC provenance.
 export type MicrosoftSource = { type: 'microsoft' } & MicrosoftOccurrence;
 
+export type SeedSource = {
+  type: 'seed';
+  rowNumbers: number[];
+  // Present for research-container batches. Historical/fresh single-input runs
+  // legitimately omit these fields and remain backward compatible.
+  batchId?: string;
+  inputPath?: string;
+};
+
 export type KeywordSource =
-  | { type: 'seed'; rowNumbers: number[] }
+  | SeedSource
   | MicrosoftSource
   | { type: 'surfer_related'; parentKeyword: string; overlap?: number | null; rowNumbers?: number[] };
 
