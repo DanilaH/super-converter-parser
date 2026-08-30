@@ -267,6 +267,11 @@ Use these instead of treating this README as a duplicate specification:
 7. `*_ACCEPTANCE.md` and methodology regression documents — feature-specific acceptance contracts and frozen-corpus evidence.
 8. [`AGENTS.md`](./AGENTS.md) — repository rules for coding agents.
 
+### Future planning (not current runtime/CLI contracts)
+
+- [`V3_COMMERCIAL_EVIDENCE_SPEC.md`](./V3_COMMERCIAL_EVIDENCE_SPEC.md) — next-major-version commercial evidence scope and explicit runner boundary.
+- [`COMMERCIAL_DATA_PROVIDER_MATRIX.md`](./COMMERCIAL_DATA_PROVIDER_MATRIX.md) — free-first provider/access audit; provider constraints must be re-verified before implementation.
+
 ## Proven integration
 
 The original spike proved the browser-risky path: Playwright/CDP can control a dedicated Research Chrome profile, Keyword Surfer data is accessible to automation, and organic results can be parsed without confusing Surfer annotations with organic links. Production discovery, enrichment, append/finalization, and Research Library behavior are now governed by the durable contracts and acceptance documents above rather than by the historical single-query spike.
