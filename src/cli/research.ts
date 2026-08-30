@@ -164,7 +164,7 @@ function printUsage(): void {
   console.log('  --seeds <path>       Path to a CSV file with a required "keyword" column.');
   console.log('  --microsoft <path>   Path to a Microsoft Keyword Planner CSV export (requires a "Keyword" column).');
   console.log('  --resume <run-id>    Continue a paused or interrupted run (--seeds is not required).');
-  console.log('  --retry-failed       With --resume, reopen only failed keyword checkpoints and preserve their attempt history.');
+  console.log('  --retry-failed       With --resume, repair failed or provably incomplete partial primary checkpoints, preserving attempt history.');
   console.log('  --force-refresh      Ignore the persistent cache for every keyword of this run.');
   console.log('  --expand             Enable Keyword Surfer related-keyword expansion (depth 1).');
   console.log('  --expand-surfer      Alias for --expand (clarity flag).');
@@ -436,7 +436,7 @@ export async function runCli(
           // The applied run is now paused and must satisfy the same parser/state
           // contract as every ordinary resume before browser work begins.
           validateResume(store, runId);
-          console.log(`  ↻ reopened ${reopenedRetryIdxs.length} failed keyword checkpoint(s)`);
+          console.log(`  ↻ reopened ${reopenedRetryIdxs.length} repairable keyword checkpoint(s)`);
         } else if (retryPreparation.openKeywordIdxs.length > 0) {
           // Re-entering --retry-failed while a repair is already open is an
           // idempotent continuation, not a new retry generation.
