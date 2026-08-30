@@ -1,9 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  createWaybackClient,
-  WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD,
-} from './wayback.js';
+import { createWaybackClient } from './wayback.js';
 import type { FirstSeenClientConfig } from './types.js';
 
 function baseConfig(fetchImpl: typeof fetch): FirstSeenClientConfig {
@@ -26,33 +23,33 @@ function cdxResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-test('opens provider circuit after repeated network failures and skips later domains', async () => {
+test('opens provider circuit when the configured network retry budget is exhausted', async () => {
   let calls = 0;
   const fetchImpl = (async () => {
     calls += 1;
     throw new TypeError('network unreachable');
   }) as unknown as typeof fetch;
   const config = baseConfig(fetchImpl);
-  config.maxAttempts = WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD;
+  config.maxAttempts = 3;
   const client = createWaybackClient(config);
 
   const failed = await client('first.example');
   assert.equal(failed.status, 'error');
-  assert.equal(failed.requestCount, WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD);
+  assert.equal(failed.requestCount, config.maxAttempts);
   assert.match(failed.error ?? '', /circuit opened/);
-  assert.equal(calls, WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD);
+  assert.equal(calls, config.maxAttempts);
 
   const skipped = await client('second.example');
   assert.equal(skipped.status, 'unavailable');
   assert.equal(skipped.requestCount, 0);
   assert.equal(skipped.httpStatus, null);
   assert.match(skipped.sourceReason ?? '', /circuit open.*network failures/);
-  assert.equal(calls, WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD);
+  assert.equal(calls, config.maxAttempts);
 });
 
 test('successful HTTP response resets the consecutive network-failure streak', async () => {
   let calls = 0;
-  const outcomes: Array<'network' | 'network' | 'ok' | 'network' | 'network' | 'ok'> = [
+  const outcomes: Array<'network' | 'ok'> = [
     'network',
     'network',
     'ok',
@@ -67,15 +64,11 @@ test('successful HTTP response resets the consecutive network-failure streak', a
     return cdxResponse([['timestamp'], ['20100101000000']]);
   }) as unknown as typeof fetch;
   const config = baseConfig(fetchImpl);
-  config.maxAttempts = 1;
+  config.maxAttempts = 3;
   const client = createWaybackClient(config);
 
-  assert.equal((await client('one.example')).status, 'error');
-  assert.equal((await client('two.example')).status, 'error');
-  assert.equal((await client('three.example')).status, 'ok');
-  assert.equal((await client('four.example')).status, 'error');
-  assert.equal((await client('five.example')).status, 'error');
-  assert.equal((await client('six.example')).status, 'ok');
+  assert.equal((await client('one.example')).status, 'ok');
+  assert.equal((await client('two.example')).status, 'ok');
   assert.equal(calls, 6);
 });
 
