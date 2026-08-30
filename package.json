@@ -7,8 +7,10 @@
   "scripts": {
     "probe": "tsx src/spike.ts",
     "research": "tsx src/cli/research.ts",
+    "discovery:full": "tsx src/cli/research.ts --expand",
     "research:append": "tsx src/cli/appendResearch.ts",
     "enrich": "tsx src/cli/enrich.ts",
+    "enrich:full": "tsx src/cli/enrich.ts --modules clusters,query_suggestions,domain_age,pages,site_structure",
     "representatives": "tsx src/cli/representatives.ts",
     "entrant-cohort": "tsx src/cli/entrantCohort.ts",
     "cohort-history": "tsx src/cli/cohortHistory.ts",
