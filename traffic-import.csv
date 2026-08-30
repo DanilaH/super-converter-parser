@@ -1,0 +1,9 @@
+target_cluster_id,scope,entity,observed_at,provider_data_date,market,source,organic_traffic,traffic_value,traffic_value_currency,provenance
+cluster-1,domain,canva.com,2026-08-29,2026-08-25,US,synthetic,1250000,45000.50,USD,synthetic-test-data
+cluster-1,domain,favicomatic.com,2026-08-29,2026-08-25,US,synthetic,85000,3200.00,USD,synthetic-test-data
+cluster-1,domain,convertico.com,2026-08-29,2026-08-25,US,synthetic,42000,1800.75,USD,synthetic-test-data
+cluster-2,domain,convertio.co,2026-08-29,2026-08-25,US,synthetic,380000,15200.00,USD,synthetic-test-data
+cluster-2,domain,cloudconvert.com,2026-08-29,2026-08-25,US,synthetic,520000,22100.00,USD,synthetic-test-data
+cluster-2,domain,ezgif.com,2026-08-29,2026-08-25,US,synthetic,890000,31500.00,USD,synthetic-test-data
+cluster-4,domain,realfavicongenerator.net,2026-08-29,2026-08-25,US,synthetic,125000,4800.00,USD,synthetic-test-data
+cluster-4,domain,favicon.io,2026-08-29,2026-08-25,US,synthetic,95000,3600.00,USD,synthetic-test-data

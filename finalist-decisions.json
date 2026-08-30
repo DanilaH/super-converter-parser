@@ -1,0 +1,17 @@
+[
+  {
+    "clusterId": "cluster-1",
+    "buildDecision": "build",
+    "seoProductRole": "acquisition_anchor"
+  },
+  {
+    "clusterId": "cluster-2",
+    "buildDecision": "build",
+    "seoProductRole": "strong_supporting_tool"
+  },
+  {
+    "clusterId": "cluster-4",
+    "buildDecision": "watch",
+    "seoProductRole": "completeness_tool"
+  }
+]
