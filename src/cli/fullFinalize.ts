@@ -3,6 +3,16 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
+import { RunStore } from '../db/store.js';
+import { loadRepresentativeQueryState } from '../db/representativeSets.js';
+import { loadEntrantCohortState } from '../db/entrantCohorts.js';
+import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { loadTrafficEvidencePolicy, loadTrafficImportRecords } from '../db/trafficEvidence.js';
+import { loadFinalistDecisions } from '../db/finalistDecisions.js';
+import {
+  resolveEnrichmentLocation,
+  resolveOutputRoot,
+} from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
 loadDotEnv();
@@ -28,6 +38,13 @@ type ParsedArgs = {
   lowBaseOrganicTrafficThreshold: string | null;
   decisions: string | null;
   publishWithoutDecisions: boolean;
+};
+
+type PersistedFinalizationState = {
+  hasReusableTraffic: boolean;
+  allFinalistsHaveCurrentDecisions: boolean;
+  finalistCount: number;
+  currentDecisionCount: number;
 };
 
 function nextValue(args: string[], option: string): string {
@@ -104,13 +121,14 @@ function printUsage(): void {
   console.log('    --decisions decisions.json');
   console.log('');
   console.log('Pipeline:');
-  console.log('  representatives -> entrant cohort -> cohort history -> optional traffic -> finalist evidence -> library publish');
+  console.log('  representatives -> entrant cohort -> cohort history -> optional/reused traffic -> finalist evidence -> library publish');
   console.log('');
   console.log('Notes:');
   console.log('  - First representative run still needs --clusters or --all-clusters; reruns may reuse persisted scope.');
   console.log('  - First cohort-history run still needs all three explicit policy thresholds; reruns may reuse them.');
-  console.log('  - Traffic is optional. Without --traffic, persisted traffic is reused if available; otherwise traffic remains missing.');
-  console.log('  - Library publication requires --decisions by default. Use --publish-without-decisions only deliberately.');
+  console.log('  - Traffic is optional. Existing persisted traffic is automatically re-projected; otherwise missing traffic stays missing.');
+  console.log('  - Library publication happens when every current finalist has a current human decision.');
+  console.log('    --publish-without-decisions is an explicit escape hatch for deliberate incomplete publication.');
   console.log('');
   console.log('Options:');
   console.log('  --enrichment <id>                         Completed enrichment id.');
@@ -124,7 +142,7 @@ function printUsage(): void {
   console.log('  --traffic <path>                          Optional canonical traffic CSV import.');
   console.log('  --low-base-organic-traffic-threshold <n>  Traffic warning policy; required by traffic CLI on first import.');
   console.log('  --decisions <path>                        Human finalist decisions JSON.');
-  console.log('  --publish-without-decisions               Allow explicit publication with no decisions file.');
+  console.log('  --publish-without-decisions               Deliberately allow incomplete publication.');
   console.log('  --output-root <path>                      Durable output root.');
 }
 
@@ -154,8 +172,49 @@ async function runCliFile(label: string, filename: string, args: string[]): Prom
       resolveCode(exitCode ?? EXIT_INTERNAL);
     });
   });
+  if (code === EXIT_INVALID_INPUT) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `${label} rejected the current inputs.`);
+  }
   if (code !== EXIT_OK) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `${label} failed with exit code ${code}.`);
+    throw new Error(`${label} failed with exit code ${code}.`);
+  }
+}
+
+async function inspectPersistedState(parsed: ParsedArgs): Promise<PersistedFinalizationState> {
+  const outputRoot = resolveOutputRoot(parsed.outputRoot);
+  const location = await resolveEnrichmentLocation(outputRoot, parsed.enrichmentId);
+  const store = RunStore.openReadOnly(join(location.enrichmentDirectory, 'enrichment.sqlite'));
+  try {
+    const trafficPolicy = loadTrafficEvidencePolicy(store, parsed.enrichmentId);
+    const trafficImports = loadTrafficImportRecords(store, parsed.enrichmentId);
+    const representatives = loadRepresentativeQueryState(store, parsed.enrichmentId);
+    const entrant = loadEntrantCohortState(store, parsed.enrichmentId);
+    const decisions = loadFinalistDecisions(store, parsed.enrichmentId);
+
+    const finalistIds = representatives?.sets.map((set) => set.clusterId) ?? [];
+    let currentDecisionCount = 0;
+    if (representatives && entrant) {
+      const fingerprint = entrantCohortFingerprint(entrant);
+      const currentDecisionIds = new Set(
+        decisions
+          .filter(
+            (decision) => decision.representativeRevision === representatives.revision
+              && decision.entrantFingerprint === fingerprint,
+          )
+          .map((decision) => decision.clusterId),
+      );
+      currentDecisionCount = finalistIds.filter((clusterId) => currentDecisionIds.has(clusterId)).length;
+    }
+
+    return {
+      hasReusableTraffic: trafficPolicy !== null && trafficImports.length > 0,
+      finalistCount: finalistIds.length,
+      currentDecisionCount,
+      allFinalistsHaveCurrentDecisions:
+        finalistIds.length > 0 && currentDecisionCount === finalistIds.length,
+    };
+  } finally {
+    store.close();
   }
 }
 
@@ -185,11 +244,11 @@ async function main(): Promise<void> {
   ];
   await runCliFile('Cohort history', 'cohortHistory.ts', historyArgs);
 
-  if (parsed.trafficInput !== null) {
+  const beforeTraffic = await inspectPersistedState(parsed);
+  if (parsed.trafficInput !== null || beforeTraffic.hasReusableTraffic) {
     const trafficArgs = [
       ...common,
-      '--input',
-      parsed.trafficInput,
+      ...(parsed.trafficInput ? ['--input', parsed.trafficInput] : []),
       ...(parsed.lowBaseOrganicTrafficThreshold
         ? ['--low-base-organic-traffic-threshold', parsed.lowBaseOrganicTrafficThreshold]
         : []),
@@ -198,7 +257,7 @@ async function main(): Promise<void> {
   } else {
     console.log('');
     console.log('=== Traffic evidence ===');
-    console.log('No --traffic file supplied; skipping import. Finalist evidence will reuse persisted traffic when available, otherwise keep traffic missing.');
+    console.log('No imported traffic exists and no --traffic file was supplied; traffic evidence remains missing by design.');
   }
 
   const finalistArgs = [
@@ -207,10 +266,14 @@ async function main(): Promise<void> {
   ];
   await runCliFile('Finalist evidence', 'finalistEvidence.ts', finalistArgs);
 
-  if (parsed.decisions === null && !parsed.publishWithoutDecisions) {
+  const finalState = await inspectPersistedState(parsed);
+  if (!finalState.allFinalistsHaveCurrentDecisions && !parsed.publishWithoutDecisions) {
     console.log('');
-    console.log('Finalist matrix is current, but library publication was intentionally skipped because no --decisions file was supplied.');
-    console.log('Re-run this same command with --decisions <path>, or pass --publish-without-decisions deliberately.');
+    console.log(
+      `Finalist matrix is current, but library publication was skipped: `
+      + `${finalState.currentDecisionCount}/${finalState.finalistCount} finalist(s) have current human decisions.`,
+    );
+    console.log('Supply --decisions <path>, or pass --publish-without-decisions deliberately.');
     return;
   }
 
