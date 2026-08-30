@@ -94,6 +94,26 @@ test('HTTP 403 and 451 open the provider circuit immediately', async () => {
   }
 });
 
+test('ordinary HTTP provider errors do not open the circuit', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return calls === 1
+      ? cdxResponse({}, 500)
+      : cdxResponse([['timestamp'], ['20120101000000']]);
+  }) as unknown as typeof fetch;
+  const client = createWaybackClient(baseConfig(fetchImpl));
+
+  const serverError = await client('server-error.example');
+  assert.equal(serverError.status, 'error');
+  assert.equal(serverError.httpStatus, 500);
+
+  const next = await client('healthy.example');
+  assert.equal(next.status, 'ok');
+  assert.equal(next.firstSeenDate, '2012-01-01T00:00:00Z');
+  assert.equal(calls, 2);
+});
+
 test('HTTP 429 retry behavior does not open the provider circuit', async () => {
   let calls = 0;
   const fetchImpl = (async () => {
