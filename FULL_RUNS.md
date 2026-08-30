@@ -27,6 +27,18 @@ Normal discovery already performs the implemented primary discovery work:
 
 Therefore the only extra discovery capability currently activated by the `full` alias is related-keyword expansion (`--expand`). Ahrefs remains optional unless the operator explicitly supplies `--require-ahrefs`; the full alias does not turn an optional external dependency into a blocking one.
 
+## Append another seed batch to the same research
+
+A research that is already in use can be extended without creating another top-level research folder:
+
+```bash
+npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
+```
+
+Append is intentionally not hidden inside `discovery:full`: it is an explicit mutation of one logical research container. The command stores the input batch, de-duplicates normalized keywords, forks a new immutable combined discovery snapshot only when the batch adds new keywords, carries previous checkpoints/evidence forward, and collects only the new pending keywords.
+
+Use the **current run ID printed by `research:append`** for the next enrichment. Previous enrichment directories remain historical snapshots and are not rewritten. See `RESEARCH_BATCHES.md` for the durable lineage and failure contract.
+
 ## Full enrichment
 
 ```bash
@@ -135,11 +147,13 @@ The common workflow is therefore:
 ```text
 discovery:full
     ↓
-enrich:full
+research:append (optional; repeat as needed)
+    ↓
+enrich:full against the current discovery run
     ↓
 choose finalist clusters / review evidence
     ↓
 finalize:full
 ```
 
-Discovery and enrichment can be fully automated because their inputs and evidence rules are deterministic. Finalization contains explicit methodology choices, optional external traffic, and human BUILD/WATCH/REJECT decisions, so the one-command orchestrator forwards those choices instead of inventing them.
+Discovery and enrichment can be fully automated because their inputs and evidence rules are deterministic. Batch append stays explicit because it advances the immutable discovery lineage of an existing research. Finalization contains explicit methodology choices, optional external traffic, and human BUILD/WATCH/REJECT decisions, so the one-command orchestrator forwards those choices instead of inventing them.
