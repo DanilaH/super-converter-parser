@@ -331,7 +331,9 @@ test('all-duplicate batch is recorded without creating another discovery run', a
   assert.ok(manifest);
   assert.equal(manifest.batches.length, 2);
   assert.equal(manifest.batches[1]?.resultRunId, INITIAL_RUN_ID);
-  await access(join(source.researchDirectory, 'results.zip'));
+  const storedPath = manifest.batches[1]?.input.storedPath;
+  assert.ok(storedPath);
+  await access(join(source.researchDirectory, storedPath));
 });
 
 test('research batch lock rejects concurrent append and is reusable after release', async () => {
