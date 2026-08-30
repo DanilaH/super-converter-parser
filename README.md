@@ -176,7 +176,7 @@ npm run research -- --resume <run-id>
 npm run research -- --resume <run-id> --retry-failed
 ```
 
-Use `npm run research -- --help` for the complete current option/environment list.
+Use `npm run research -- --help` for the main discovery CLI flags. `.env.example` is the authoritative copyable list of current environment settings and defaults.
 
 ## Enrichment CLI controls
 
