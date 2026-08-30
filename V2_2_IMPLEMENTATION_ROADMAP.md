@@ -27,7 +27,8 @@ A V2.2 release is successful when, after a real research run, the operator can q
 ```text
 What is the current discovery generation?
 What work is complete / partial / failed / repairable?
-What is the current enrichment generation and which modules are complete?
+Which enrichment generation(s) belong to the current discovery snapshot,
+  and is one current/latest generation deterministically identifiable?
 What finalist/finalization evidence is current or missing?
 What important evidence coverage gaps could change interpretation?
 What changed between two immutable research generations?
@@ -472,15 +473,17 @@ A provider is not “working” until a real enrichment in the operator environm
 
 ### Goal
 
-One command should explain where a **logical research** currently stands without requiring the operator to remember run/enrichment IDs or manually open several JSON/SQLite files.
+One command should explain where a **logical research** currently stands without requiring the operator to remember enrichment IDs or manually open several JSON/SQLite files.
 
 Expected surface:
 
 ```bash
-npm run research:status -- --research <research-id-or-name>
+npm run research:status -- --research <research-id-or-run-id>
 ```
 
-Exact ID/name resolution should reuse current output-index/research-container rules rather than introducing another locator system.
+Resolution must reuse the current research-container/output-index contract. `RESEARCH_BATCHES.md` already guarantees a stable `researchId` and permits run IDs belonging to the same research container. Human-readable folder/name lookup is **not** a V2.2 requirement unless an existing resolver already exposes it unambiguously.
+
+Do not add fuzzy/name search merely to make this command look friendlier.
 
 ### Read-only rule
 
@@ -506,6 +509,19 @@ Do not define truth by parsing terminal logs. Do not make derived CSV files auth
 
 Existing `status.json`, `manifest.json`, and `run-quality.json` may be reused where their publication contract is exactly the fact being reported, but the new command must not become dependent on a derived artifact when the underlying durable state is already available.
 
+### Enrichment-generation selection
+
+`research.json` identifies `currentRunId`; it does not by itself prove that an arbitrary enrichment is “current”.
+
+For enrichments associated with the current discovery run:
+
+- reuse deterministic persisted generation/index ordering if the existing layout contract provides one;
+- if exactly one eligible enrichment is deterministically current/latest, label it as such;
+- if multiple candidates remain ambiguous under persisted metadata, report the ambiguity and their IDs/generations instead of silently choosing one;
+- never infer currentness from filesystem modification time.
+
+This rule prevents `research:status` from manufacturing a lineage pointer that does not exist.
+
 ### Minimum output
 
 Discovery:
@@ -522,12 +538,13 @@ high-signal discovery warnings from existing quality semantics
 Enrichment:
 
 ```text
-current enrichment generation associated with currentRunId
+enrichment generation(s) associated with currentRunId
+current/latest marker only when deterministically resolved
 modules requested
 module/target completion state
 first-seen / RDAP observed coverage where available
 caps / omissions
-current enrichment state
+enrichment state
 ```
 
 Finalization/evidence:
@@ -554,7 +571,7 @@ A deterministic workflow-navigation hint is allowed, for example:
 
 ```text
 repair 4 repairable discovery checkpoints
-resume current enrichment
+resume enrichment <id>
 select finalist scope
 record 2 missing finalist decisions
 publish current completed research
@@ -573,7 +590,7 @@ Provide a stable JSON mode if it can reuse existing CLI conventions cleanly. The
 
 ### Gate
 
-Given fixture research states covering incomplete discovery, repairable failures, partial enrichment, stale downstream evidence, incomplete decisions, and a fully publishable research, the command must produce deterministic state and next-action output without network access.
+Given fixture research states covering incomplete discovery, repairable failures, partial/ambiguous enrichment generations, stale downstream evidence, incomplete decisions, and a fully publishable research, the command must produce deterministic state and next-action output without network access.
 
 ---
 
@@ -667,8 +684,10 @@ Expose the factual value of immutable discovery/enrichment generations already s
 Expected surface:
 
 ```bash
-npm run research:diff -- --research <id-or-name> --from <generation> --to <generation>
+npm run research:diff -- --research <research-id-or-run-id> --from <generation> --to <generation>
 ```
+
+Research resolution follows the same existing container/index rules as `research:status`. Do not add fuzzy/name lookup as part of diffing.
 
 The command may infer adjacent/current generations only where unambiguous. Explicit `--from`/`--to` must remain available for auditability.
 
@@ -782,8 +801,9 @@ If PR-02 was promoted, the run must include live historical-source evidence.
 The final review should be able to answer yes to:
 
 ```text
-Can the operator find the current research state without remembering IDs?
+Can the operator find the current research state without remembering enrichment IDs?
 Are repairable failures distinguished from terminal-but-not-repairable partial state?
+Are ambiguous enrichment generations surfaced rather than guessed?
 Are important evidence gaps visibly denominated?
 Are omitted/capped/unavailable facts impossible to mistake for zero/negative evidence?
 Can two immutable generations be compared factually?
@@ -875,7 +895,7 @@ V2.2 is releasable when:
 
 1. PR-01 has a recorded evidence-backed promote/defer decision;
 2. PR-02 is either merged with real live evidence or explicitly skipped because the spike did not justify productionization;
-3. `research:status` reliably projects the current logical research state;
+3. `research:status` reliably projects the current logical research state without inventing ambiguous lineage;
 4. important deep/finalist evidence gaps are visibly denominated and never converted into negative evidence;
 5. immutable generations have a deterministic factual diff;
 6. a real research workflow has exercised the integrated operator surfaces;
