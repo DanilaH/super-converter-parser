@@ -23,7 +23,6 @@ import type { FirstSeenClient, FirstSeenClientConfig, FirstSeenResult } from './
 
 export const WAYBACK_SOURCE = 'wayback';
 export const WAYBACK_DEFAULT_ENDPOINT = 'https://web.archive.org/cdx/search/cdx';
-export const WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD = 3;
 
 const MAX_ATTEMPTS = 3;
 const CIRCUIT_OPEN_HTTP_STATUSES = new Set([403, 451]);
@@ -150,8 +149,11 @@ export function createWaybackClient(
   // the retry-only minDelayMs, this limits ALL requests to the Wayback CDX host.
   let nextAvailableAt = 0;
   // Provider-level circuit breaker shared by every domain resolved through this
-  // client instance. A globally unreachable CDX endpoint should be proven once,
-  // not by repeating the same timeout sequence for every shortlisted domain.
+  // client instance. Exhausting the configured per-domain retry budget with
+  // consecutive transport failures proves enough provider-level unavailability
+  // for this enrichment; later domains stay explicitly unavailable rather than
+  // repeating the same timeout sequence. The threshold is therefore the already
+  // persisted/configurable `maxAttempts`, not a hidden second threshold.
   let consecutiveNetworkFailures = 0;
   let circuitOpenReason: string | null = null;
 
@@ -268,8 +270,8 @@ export function createWaybackClient(
       } catch {
         if (!bodyRead) clearTimeout(timer);
         consecutiveNetworkFailures += 1;
-        if (consecutiveNetworkFailures >= WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD) {
-          circuitOpenReason = `Wayback provider circuit open after ${WAYBACK_NETWORK_FAILURE_CIRCUIT_THRESHOLD} consecutive network failures`;
+        if (consecutiveNetworkFailures >= attempts) {
+          circuitOpenReason = `Wayback provider circuit open after ${attempts} consecutive network failures (configured maxAttempts exhausted)`;
           return errorResult(
             domain,
             fetchedAt,
