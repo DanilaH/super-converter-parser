@@ -234,6 +234,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       maxParents = parsed;
     } else if (arg && arg.startsWith('-')) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
+    } else if (arg) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Unexpected positional argument: ${arg}`);
     }
   }
 
