@@ -111,6 +111,46 @@ export function resolveRetryDelayMs(
   return Math.min(requestedMs, Math.max(0, maxDelayMs));
 }
 
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'UND_ERR_ABORTED',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+]);
+
+export function isRetryableHttpStatus(status: number): boolean {
+  return RETRYABLE_HTTP_STATUSES.has(status);
+}
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const direct = (error as { code?: unknown }).code;
+  if (typeof direct === 'string') return direct;
+  const cause = (error as { cause?: unknown }).cause;
+  if (typeof cause !== 'object' || cause === null) return null;
+  const nested = (cause as { code?: unknown }).code;
+  return typeof nested === 'string' ? nested : null;
+}
+
+function isAbortFailure(error: unknown, controller: AbortController): boolean {
+  if (controller.signal.aborted) return true;
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  return errorCode(error) === 'UND_ERR_ABORTED';
+}
+
+export function isRetryableNetworkFailure(error: unknown, controller: AbortController): boolean {
+  if (isAbortFailure(error, controller)) return true;
+  const code = errorCode(error);
+  return code !== null && RETRYABLE_NETWORK_CODES.has(code);
+}
+
 interface PinnedConnectContext {
   validatedIp: string;
   servername: string;
@@ -319,8 +359,14 @@ export async function boundedFetch(
         } catch (error) {
           clearTimeout(attemptTimer);
           const message = error instanceof Error ? error.message : String(error);
-          if (retry < cfg.maxRetries && message.includes('abort')) {
-            await new Promise((resolve) => setTimeout(resolve, cfg.baseRetryDelayMs * (retry + 1)));
+          const aborted = isAbortFailure(error, attemptController);
+          if (retry < cfg.maxRetries && isRetryableNetworkFailure(error, attemptController)) {
+            const delayMs = resolveRetryDelayMs(
+              null,
+              cfg.baseRetryDelayMs * (retry + 1),
+              cfg.timeoutMs,
+            );
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
             continue;
           }
           return {
@@ -330,10 +376,10 @@ export async function boundedFetch(
             redirectChain,
             body: null,
             error: message,
-            aborted: message.includes('abort'),
+            aborted,
             retryAfter: null,
             bodyError: false,
-            failureReason: message.includes('abort') ? 'timeout' : 'network',
+            failureReason: aborted ? 'timeout' : 'network',
           };
         }
 
@@ -341,19 +387,20 @@ export async function boundedFetch(
         const contentType = response.headers.get('content-type');
         retryAfter = cfg.respectRetryAfter ? response.headers.get('retry-after') : null;
 
+        if (isRetryableHttpStatus(status) && retry < cfg.maxRetries) {
+          await drainBody(response, attemptController);
+          clearTimeout(attemptTimer);
+          const delayMs = resolveRetryDelayMs(
+            retryAfter,
+            cfg.baseRetryDelayMs * (retry + 1),
+            cfg.timeoutMs,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+
         if (status === 429 || (status === 503 && retryAfter)) {
-          if (retry < cfg.maxRetries) {
-            await drainBody(response, attemptController);
-            clearTimeout(attemptTimer);
-            const delayMs = resolveRetryDelayMs(
-              retryAfter,
-              cfg.baseRetryDelayMs * (retry + 1),
-              cfg.timeoutMs,
-            );
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-            continue;
-          }
-          await cleanupTerminalResponse(response, attemptController!, attemptTimer);
+          await cleanupTerminalResponse(response, attemptController, attemptTimer);
           return {
             status,
             contentType,
