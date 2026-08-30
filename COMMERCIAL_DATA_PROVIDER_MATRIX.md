@@ -53,7 +53,8 @@ UNKNOWN
 
 | Provider/source | Primary commercial evidence | Official API / structured access | Auth / approval | Cost class | Historical | Recommended mode | V3 baseline? | Notes |
 |---|---|---|---|---|---|---|---|---|
-| Existing Google SERP collection | commercial query SERPs, paid-result observations where visible, commercial competitors | existing runner collection path | existing runner setup | FREE_BASELINE | snapshot only unless stored over time | AUTO | yes | `ads not observed` must never mean `no ads exist`; SERP ad visibility can vary by geo/session/time |
+| Existing Google organic SERP collection | organic SERP composition, competitor discovery, landing-page evidence | existing runner collection path | existing runner setup | FREE_BASELINE | snapshot only unless stored over time | AUTO | yes | current collector is organic-focused; it must not be treated as evidence that paid ads/shopping were collected or absent |
+| Future commercial SERP observation | sampled search ads, shopping/commercial elements, advertiser observations where visible | V3 extension/new collection contract | likely existing Research Chrome setup | FREE_BASELINE | snapshots once persisted | AUTO after design/validation | yes | observation semantics only; geo/session/time variability matters and `not observed` must never mean `does not exist` |
 | Existing Surfer evidence | demand/CPC proxy and related language | existing runner path | existing setup | FREE_BASELINE | limited | AUTO | yes | commercial proxy only; CPC is not proof of sales |
 | Competitor/provider public websites | pricing, plans, services, CTAs, trial/free, quote/book/buy flows | ordinary public web pages | none for public pages | FREE_BASELINE | current snapshot | AUTO where permission-compatible; otherwise MANUAL_IMPORT | yes | likely highest-value new source; respect robots/terms/policies and existing SSRF/safety contracts |
 | JSON-LD / structured page data | Product/Offer/SoftwareApplication price, currency, rating, review count, availability | embedded structured data | none | FREE_BASELINE | current snapshot | AUTO | yes | deterministic extraction preferred; may be stale/incomplete |
@@ -87,7 +88,8 @@ The current expected zero-subscription baseline is:
 
 ```text
 existing runner SEO data
-    + public Google SERP observations
+    + existing organic Google SERP evidence
+    + V3 commercial SERP observations once that collector is implemented
     + competitor/provider websites
     + structured data
     + pricing/service/CTA/checkout evidence
@@ -95,13 +97,13 @@ existing runner SEO data
     + one or more official/public ecosystem adapters where the niche supports them
 ```
 
-This should already support useful answers such as:
+This should support useful answers such as:
 
 ```text
 Are paid offers present?
 How many independent providers did we observe?
 What prices and billing models are publicly advertised?
-Are ads observed?
+Are ads observed when the commercial SERP collector is enabled?
 Is marketplace/adoption evidence present?
 Have paid offers persisted historically?
 ```
@@ -301,7 +303,7 @@ Before V3 code implementation, deepen the audit in this order:
 
 ```text
 1. competitor pricing/service-page automation constraints
-2. current SERP ad-observation reliability in the existing collector
+2. design and validate V3 commercial SERP observation without assuming current organic parser support
 3. Common Crawl index/WARC retrieval cost and practical query strategy
 4. one marketplace aligned with an actual candidate niche
 5. Google Ads access only if existing CPC/bid evidence proves insufficient
