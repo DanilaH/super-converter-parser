@@ -207,13 +207,18 @@ async function loadEnrichments(researchDirectory: string, currentRunId: string):
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath, { readonly: true, fileMustExist: true });
-      const row = db.prepare(
+      const rows = db.prepare(
         `SELECT enrichment_id, source_run_id, state, created_at, updated_at, modules, error
          FROM enrichment_runs
-         ORDER BY rowid DESC
-         LIMIT 1`,
-      ).get() as EnrichmentRunRow | undefined;
-      if (!row) continue;
+         ORDER BY rowid ASC`,
+      ).all() as EnrichmentRunRow[];
+      if (rows.length !== 1) {
+        throw new ResearchError(
+          'DB_ERROR',
+          `Enrichment directory \"${candidate.entry.name}\" must contain exactly one enrichment run record; found ${rows.length}.`,
+        );
+      }
+      const row = rows[0]!;
 
       const store = RunStore.openReadOnly(dbPath);
       let itemCounts: EnrichmentModuleStatusCounts;
@@ -250,22 +255,55 @@ async function loadEnrichments(researchDirectory: string, currentRunId: string):
   return enrichments;
 }
 
-async function readManifestArtifacts(enrichmentDirectory: string): Promise<{ artifacts: Set<string>; warning: string | null }> {
+type ManifestRead = {
+  artifacts: Set<string>;
+  warning: string | null;
+  manifest: Record<string, unknown> | null;
+};
+
+async function readManifestArtifacts(enrichmentDirectory: string): Promise<ManifestRead> {
   const path = join(enrichmentDirectory, 'manifest.json');
   try {
     const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      return { artifacts: new Set(), warning: 'enrichment manifest is not an object' };
+      return { artifacts: new Set(), warning: 'enrichment manifest is not an object', manifest: null };
     }
-    const artifacts = (value as Record<string, unknown>).artifacts;
+    const manifest = value as Record<string, unknown>;
+    const artifacts = manifest.artifacts;
     if (!Array.isArray(artifacts) || artifacts.some((item) => typeof item !== 'string')) {
-      return { artifacts: new Set(), warning: 'enrichment manifest has no valid artifacts list' };
+      return { artifacts: new Set(), warning: 'enrichment manifest has no valid artifacts list', manifest };
     }
-    return { artifacts: new Set(artifacts as string[]), warning: null };
+    return { artifacts: new Set(artifacts as string[]), warning: null, manifest };
   } catch (error) {
-    if (isEnoent(error)) return { artifacts: new Set(), warning: 'enrichment manifest is missing' };
-    return { artifacts: new Set(), warning: error instanceof Error ? error.message : String(error) };
+    if (isEnoent(error)) return { artifacts: new Set(), warning: 'enrichment manifest is missing', manifest: null };
+    return {
+      artifacts: new Set(),
+      warning: error instanceof Error ? error.message : String(error),
+      manifest: null,
+    };
   }
+}
+
+export function buildLibraryPublicationSummary(manifest: Record<string, unknown>): unknown {
+  return {
+    modules: Array.isArray(manifest.modules) ? manifest.modules : [],
+    summary: manifest.summary ?? null,
+    representativeQueries: manifest.representativeQueries ?? null,
+    entrantCohort: manifest.entrantCohort ?? null,
+    cohortHistory: manifest.cohortHistory ?? null,
+    trafficEvidence: manifest.trafficEvidence ?? null,
+    finalistEvidence: manifest.finalistEvidence ?? null,
+  };
+}
+
+export function storedPublicationSummaryMatches(storedSummaryJson: string, currentSummary: unknown): boolean {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(storedSummaryJson) as unknown;
+  } catch {
+    return false;
+  }
+  return JSON.stringify(stored) === JSON.stringify(currentSummary);
 }
 
 async function inspectFinalization(
@@ -331,6 +369,7 @@ async function inspectFinalization(
 
 async function inspectLibraryPublication(
   outputRoot: string,
+  researchDirectory: string,
   enrichment: ResearchEnrichmentStatus | null,
   finalization: FinalizationStatus,
 ): Promise<LibraryPublicationStatus> {
@@ -366,17 +405,32 @@ async function inspectLibraryPublication(
     };
   }
 
+  const currentManifest = await readManifestArtifacts(join(researchDirectory, enrichment.directoryName));
+  if (currentManifest.manifest === null) {
+    return {
+      published: false,
+      publicationId: null,
+      publishedAt: null,
+      reason: 'current_manifest_unavailable',
+      lookupError: currentManifest.warning,
+    };
+  }
+  const currentSummary = buildLibraryPublicationSummary(currentManifest.manifest);
+
   let db: Database.Database | null = null;
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    const row = db.prepare(
-      `SELECT publication_id, published_at
+    const rows = db.prepare(
+      `SELECT publication_id, published_at, summary_json
        FROM publications
        WHERE enrichment_id = ?
-       ORDER BY published_at DESC, rowid DESC
-       LIMIT 1`,
-    ).get(enrichment.enrichmentId) as { publication_id: string; published_at: string } | undefined;
-    if (!row) {
+       ORDER BY published_at DESC, rowid DESC`,
+    ).all(enrichment.enrichmentId) as Array<{
+      publication_id: string;
+      published_at: string;
+      summary_json: string;
+    }>;
+    if (rows.length === 0) {
       return {
         published: false,
         publicationId: null,
@@ -385,11 +439,33 @@ async function inspectLibraryPublication(
         lookupError: null,
       };
     }
+    for (const row of rows) {
+      try {
+        JSON.parse(row.summary_json);
+      } catch (error) {
+        return {
+          published: false,
+          publicationId: null,
+          publishedAt: null,
+          reason: 'library_lookup_failed',
+          lookupError: `Publication ${row.publication_id} has invalid summary_json: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      if (storedPublicationSummaryMatches(row.summary_json, currentSummary)) {
+        return {
+          published: true,
+          publicationId: row.publication_id,
+          publishedAt: row.published_at,
+          reason: null,
+          lookupError: null,
+        };
+      }
+    }
     return {
-      published: true,
-      publicationId: row.publication_id,
-      publishedAt: row.published_at,
-      reason: null,
+      published: false,
+      publicationId: null,
+      publishedAt: null,
+      reason: 'current_snapshot_not_published',
       lookupError: null,
     };
   } catch (error) {
@@ -453,15 +529,15 @@ function nextActionFor(input: {
   if (input.finalization.state === 'not_started' || input.finalization.state === 'in_progress') {
     return {
       code: 'run_finalization',
-      message: `Finalization for ${input.enrichment.enrichmentId} is ${input.finalization.state}.`,
-      command: `npm run finalize:full -- --enrichment ${input.enrichment.enrichmentId} ...`,
+      message: `Finalization for ${input.enrichment.enrichmentId} is ${input.finalization.state}; run finalize:full with the required explicit finalist scope/history policy for this research.`,
+      command: null,
     };
   }
   if (input.finalization.state === 'awaiting_decisions') {
     return {
       code: 'supply_decisions',
-      message: `${input.finalization.currentDecisionCount}/${input.finalization.finalistCount} finalist(s) have current human decisions.`,
-      command: `npm run finalize:full -- --enrichment ${input.enrichment.enrichmentId} --decisions <path> ...`,
+      message: `${input.finalization.currentDecisionCount}/${input.finalization.finalistCount} finalist(s) have current human decisions; re-run finalize:full with an explicit --decisions file.`,
+      command: null,
     };
   }
   if (!input.library.published) {
@@ -539,7 +615,7 @@ export async function buildResearchStatus(input: {
         reason: 'legacy_layout',
         lookupError: null,
       }
-    : await inspectLibraryPublication(input.outputRoot, currentEnrichment, finalization);
+    : await inspectLibraryPublication(input.outputRoot, target.researchDirectory, currentEnrichment, finalization);
 
   if (library.published) finalization.state = 'published';
 

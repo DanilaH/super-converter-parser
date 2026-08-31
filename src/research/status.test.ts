@@ -15,8 +15,10 @@ import {
 } from '../outputs/researchLayout.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import {
+  buildLibraryPublicationSummary,
   buildResearchStatus,
   generationFromDirectoryName,
+  storedPublicationSummaryMatches,
 } from './status.js';
 
 const CONFIG = loadConfig({});
@@ -236,4 +238,64 @@ test('status selects the highest persisted enrichment generation for the current
   assert.equal(status.enrichments[1]?.itemCounts.query_suggestions?.pending, 1);
   assert.equal(status.nextAction.code, 'resume_enrichment');
   assert.match(status.nextAction.command ?? '', /enrichment_status_2/);
+});
+
+test('Library publication matching rejects stale same-enrichment metadata', () => {
+  const oldManifest = {
+    modules: ['clusters'],
+    summary: { clusterCount: 2 },
+    representativeQueries: { revision: 1 },
+    entrantCohort: { representativeRevision: 1 },
+    cohortHistory: null,
+    trafficEvidence: null,
+    finalistEvidence: { currentHumanDecisionCount: 1 },
+  };
+  const currentManifest = {
+    ...oldManifest,
+    finalistEvidence: { currentHumanDecisionCount: 2 },
+  };
+  const stored = JSON.stringify(buildLibraryPublicationSummary(oldManifest));
+  assert.equal(storedPublicationSummaryMatches(stored, buildLibraryPublicationSummary(oldManifest)), true);
+  assert.equal(storedPublicationSummaryMatches(stored, buildLibraryPublicationSummary(currentManifest)), false);
+  assert.equal(storedPublicationSummaryMatches('{broken', buildLibraryPublicationSummary(oldManifest)), false);
+});
+
+test('status fails closed when one immutable enrichment directory contains multiple run identities', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'research-status-corrupt-enrichment-'));
+  const location = await allocateResearchLocation(outputRoot, 'status corrupt enrichment', new Date('2026-08-30T00:00:00Z'));
+  const runId = 'run_status_corrupt_enrichment';
+  await createDiscovery({
+    outputRoot,
+    researchDirectory: location.researchDirectory,
+    directory: location.discoveryDirectory,
+    runId,
+    statuses: ['completed'],
+    state: 'completed',
+  });
+  await writeContainer(location.researchDirectory, runId, runId);
+
+  const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
+  const store = RunStore.open(join(enrichmentDirectory, 'enrichment.sqlite'));
+  store.createEnrichmentRun({
+    enrichmentId: 'enrichment_corrupt_a',
+    sourceRunId: runId,
+    modules: ['clusters'],
+    config: '{}',
+    sourceRunDirectory: location.discoveryDirectory,
+    enrichmentDirectory,
+  });
+  store.createEnrichmentRun({
+    enrichmentId: 'enrichment_corrupt_b',
+    sourceRunId: runId,
+    modules: ['clusters'],
+    config: '{}',
+    sourceRunDirectory: location.discoveryDirectory,
+    enrichmentDirectory,
+  });
+  store.close();
+
+  await assert.rejects(
+    buildResearchStatus({ outputRoot, targetRunId: runId }),
+    /must contain exactly one enrichment run record; found 2/,
+  );
 });

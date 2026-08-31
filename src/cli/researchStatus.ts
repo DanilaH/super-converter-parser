@@ -121,9 +121,9 @@ export function renderResearchStatus(status: ResearchStatus): string {
 
   lines.push('', 'Research Library');
   if (status.library.published) {
-    lines.push(`  Publication: ${status.library.publicationId ?? 'unknown'}${status.library.publishedAt ? ` @ ${status.library.publishedAt}` : ''}`);
+    lines.push(`  Current publication: ${status.library.publicationId ?? 'unknown'}${status.library.publishedAt ? ` @ ${status.library.publishedAt}` : ''}`);
   } else {
-    lines.push(`  Publication: none${status.library.reason ? ` (${status.library.reason})` : ''}`);
+    lines.push(`  Current publication: none${status.library.reason ? ` (${status.library.reason})` : ''}`);
   }
   if (status.library.lookupError) lines.push(`  Lookup warning: ${status.library.lookupError}`);
 
