@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/cli/historicalSourceSpike.ts",
+    "src/spikes/historicalSources/**/*.ts"
+  ]
+}
