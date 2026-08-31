@@ -1,4 +1,4 @@
-name: V2.2 historical source live smoke
+name: V2.2 historical source live benchmark
 
 on:
   push:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -18,13 +18,13 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Run bounded live smoke
-        run: npm run spike:history -- --output data/spikes/live-smoke --collection-mode latest --max-domains 8 --request-budget 20
+      - name: Run decision-sized annual benchmark
+        run: npm run spike:history -- --output data/spikes/live-decision --collection-mode annual --max-collections 48 --request-budget 2500
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v2-2-history-live-smoke
-          path: data/spikes/live-smoke
+          name: v2-2-history-live-decision
+          path: data/spikes/live-decision
           if-no-files-found: warn
           retention-days: 7
