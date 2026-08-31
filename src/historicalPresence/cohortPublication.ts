@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
 import type { CohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
+import { invalidateFinalistEvidencePublication } from '../enrichment/finalistEvidencePublication.js';
 import { writeTextAtomic } from '../runs/run.js';
 
 export const COHORT_HISTORICAL_PRESENCE_ARTIFACTS = [
@@ -15,6 +16,14 @@ export async function publishCohortHistoricalPresenceMetadata(input: {
   snapshot: CohortHistoricalPresenceSnapshot;
   changed: boolean;
 }): Promise<void> {
+  if (input.changed) {
+    await invalidateFinalistEvidencePublication({
+      enrichmentDirectory: input.enrichmentDirectory,
+      enrichmentId: input.snapshot.enrichmentId,
+      sourceRunId: input.snapshot.sourceRunId,
+    });
+  }
+
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
   const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
