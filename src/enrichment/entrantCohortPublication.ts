@@ -5,6 +5,7 @@ import type { ResearchConfig } from '../config/config.js';
 import { COHORT_HISTORY_ARTIFACTS } from './cohortHistoryPublication.js';
 import { FINALIST_EVIDENCE_ARTIFACTS } from './finalistEvidencePublication.js';
 import { TRAFFIC_EVIDENCE_ARTIFACTS } from './trafficEvidencePublication.js';
+import { COHORT_HISTORICAL_PRESENCE_ARTIFACTS } from '../historicalPresence/cohortPublication.js';
 
 export const ENTRANT_COHORT_ARTIFACTS = [
   'entrant-cohort.csv',
@@ -13,6 +14,7 @@ export const ENTRANT_COHORT_ARTIFACTS = [
 ] as const;
 
 const ENTRANT_DEPENDENT_ARTIFACTS = [
+  ...COHORT_HISTORICAL_PRESENCE_ARTIFACTS,
   ...COHORT_HISTORY_ARTIFACTS,
   ...TRAFFIC_EVIDENCE_ARTIFACTS,
   ...FINALIST_EVIDENCE_ARTIFACTS,
@@ -109,6 +111,7 @@ export async function publishEntrantCohortMetadata(input: {
 
 function withoutEntrantDependents(value: Record<string, unknown>): Record<string, unknown> {
   const {
+    historicalPresence: _historicalPresence,
     cohortHistory: _cohortHistory,
     trafficEvidence: _trafficEvidence,
     finalistEvidence: _finalistEvidence,
