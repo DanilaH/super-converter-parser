@@ -1,9 +1,9 @@
 # V2.2 Implementation Roadmap
 
-**Status:** engineering implementation complete; release pending operator live acceptance  
+**Status:** COMPLETE / RELEASE ACCEPTED  
 **Repository:** `DanilaH/super-converter-parser`  
 **Release identity:** `V2.2 — Operator & Evidence Quality`  
-**Detailed planning history:** preserved in git history prior to this closeout revision  
+**Detailed planning history:** preserved in git history prior to the closeout revisions  
 **Release acceptance:** [`V2_2_RELEASE_ACCEPTANCE.md`](./V2_2_RELEASE_ACCEPTANCE.md)
 
 ## 1. Purpose
@@ -16,7 +16,7 @@ V2.2 improves the already-operational V2.1 runner in three narrow areas:
 
 V2.2 does **not** expand into V3 commercial evidence, product/business recommendations, automatic BUILD/WATCH/REJECT decisions, a dashboard, a generic provider framework, or broad persistence redesign.
 
-## 2. Current implementation state
+## 2. Final implementation state
 
 ```text
 PR-01  Historical-source spike                 COMPLETE -> DEFER provider
@@ -25,12 +25,14 @@ PR-03  research:status                         COMPLETE
 PR-04  Deep/finalist evidence coverage         COMPLETE
 PR-05  Immutable generation diff               COMPLETE
 PR-06  Deterministic integration/cold review   COMPLETE
-LIVE   Real operator research acceptance       PENDING
+LIVE   Real operator research acceptance       PASS
+RC     Cumulative Ubuntu + Windows CI           PASS
+V2.2   Release                                 READY TO MERGE
 ```
 
-The engineering work is complete on `v2.2-work`. V2.2 must not be called released until the remaining real operator-machine acceptance pass is executed and reviewed.
+The final operator-machine acceptance used the actual Research Chrome / Keyword Surfer path and is recorded with exact run/enrichment IDs in `V2_2_RELEASE_ACCEPTANCE.md`.
 
-## 3. PR-01 — Historical-source spike
+## 3. Historical-source decision
 
 Result: [`V2_2_HISTORICAL_SOURCE_SPIKE_RESULT.md`](./V2_2_HISTORICAL_SOURCE_SPIKE_RESULT.md).
 
@@ -40,29 +42,19 @@ Decision:
 DEFER historical provider
 ```
 
-The bounded experiment found strong incremental value from Common Crawl on GitHub-hosted live runs, but the required operator-machine access proof was not performed. Therefore production integration was deliberately not started.
+The bounded experiment found strong incremental value from Common Crawl on GitHub-hosted live runs, but production integration was not justified under the V2.2 evidence gate. This is a completed gate outcome, not unfinished V2.2 work.
 
 Important semantics remain:
 
 - RDAP registration date is not web first-seen;
 - Wayback implementation exists but is not a proven stable live operator baseline;
-- Common Crawl annual/bounded observations are sampled historical presence, not exact first-seen;
+- Common Crawl bounded/sampled observations are not exact first-seen;
 - unavailable / not_found / error remain distinct;
-- no provider is promoted merely because fixture parsing or GitHub-hosted access works.
+- no provider is forced into production simply to eliminate missing evidence.
 
-## 4. PR-02 — Production historical provider
-
-State: **SKIPPED / DEFERRED**.
-
-This is a successful evidence-gate outcome, not an unfinished implementation task. V2.2 may ship with explicit missing/unavailable first-seen evidence rather than forcing a weak or unproven provider into production.
-
-A future operator-machine Common Crawl smoke may reopen this decision. If it does, use the smallest production historical-presence representation justified by the evidence; do not alias sampled presence into the existing exact-looking `firstSeenDate` semantics.
-
-## 5. PR-03 — `research:status`
+## 4. `research:status`
 
 State: **COMPLETE**.
-
-Current command:
 
 ```bash
 npm run research:status -- --research <research-id-or-any-run-id>
@@ -70,28 +62,22 @@ npm run research:status -- --research <research-id-or-any-run-id>
 
 Implemented contract:
 
-- resolves a stable research id or historical discovery run id to `research.json.currentRunId`;
-- reads durable discovery/enrichment SQLite state;
-- reports immutable discovery/enrichment generations;
+- resolves a stable research id or historical discovery run id to the current logical research;
+- reads durable discovery/enrichment state;
+- reports immutable generations and current/latest enrichment only when deterministically resolvable;
 - reuses existing discovery quality and repairability semantics;
-- reports persisted finalization/human-decision progress;
-- checks Research Library publication against the exact current public snapshot fingerprint;
+- reports deep evidence coverage and finalization/human-decision progress;
+- verifies Research Library publication against the exact current public snapshot fingerprint;
 - provides deterministic workflow navigation only, never a business/opportunity recommendation;
 - remains read-only.
 
-## 6. PR-04 — Deep evidence coverage
+The real operator pass confirmed that historical run IDs resolve to the current discovery generation without requiring the operator to remember enrichment IDs.
+
+## 5. Deep evidence coverage
 
 State: **COMPLETE**.
 
-`research:status` now exposes deep evidence uncertainty from already-persisted finalist/downstream state, including where available:
-
-- representative URL coverage;
-- entrant DR coverage;
-- page-identity coverage;
-- cohort-history checked / omitted / unobserved state;
-- RDAP registration coverage;
-- first-seen coverage and provider unavailable/error state;
-- traffic evidence presence/currentness/mismatch/domain-scope coverage.
+`research:status` exposes persisted uncertainty including representative URL, entrant DR/page identity, cohort history, RDAP, first-seen/provider state, traffic presence/currentness/mismatch, caps and omissions where available.
 
 Hard rule:
 
@@ -100,46 +86,26 @@ coverage warning = uncertainty explanation
 coverage warning != negative evidence
 ```
 
-Missing, unavailable, omitted, mismatched, or unobserved evidence is never silently converted to zero or absence.
+The live dataset exercised unsupported RDAP, unavailable first-seen, cap omissions, a real page network error and incomplete human decisions. These remained explicit missing/error states rather than becoming zero or fabricated evidence.
 
-## 7. PR-05 — Immutable generation diff
+## 6. Immutable generation diff
 
 State: **COMPLETE**.
-
-Current surface:
 
 ```bash
 npm run research:diff -- --research <research-id-or-run-id> --from discovery:1 --to discovery:2
 npm run research:diff -- --research <research-id-or-run-id> --from enrichment:1 --to enrichment:2
 ```
 
-Generation refs are explicit and same-kind. Bare numbers and discovery-vs-enrichment comparisons fail closed instead of guessing.
+The diff is factual only. It does not infer opportunity strength, semantic cluster continuity, split/merge narratives, or business decisions.
 
-Implemented factual comparison includes:
+The real operator append produced discovery generation 1 with 30 keywords and generation 2 with 44 keywords. The live diff reported 14 additions, zero removals and Google SERP coverage 30/30 -> 44/44 while the older generation remained unchanged.
 
-Discovery:
-
-- keyword additions/removals;
-- persisted keyword status changes;
-- Google SERP evidence coverage changes.
-
-Enrichment:
-
-- module changes;
-- persisted cluster additions/removals;
-- same-`clusterId` membership/canonical changes;
-- representative-query changes;
-- entrant-domain changes;
-- history coverage/omissions;
-- traffic snapshot presence/currentness.
-
-The diff is descriptive only. Persisted `clusterId` matching does not imply semantic continuity, and the command does not infer split/merge narratives, opportunity strength, or business conclusions.
-
-## 8. PR-06 — Engineering integration
+## 7. Engineering integration
 
 State: **COMPLETE**.
 
-The deterministic integration fixture exercises one persisted logical research through:
+The deterministic integration fixture exercises:
 
 ```text
 discovery generation 1
@@ -153,42 +119,41 @@ discovery generation 1
   -> verify old generations remain unchanged
 ```
 
-During PR-06, Windows CI exposed a pre-existing timing race in CAPTCHA/SIGINT tests. The production pause/resume contract was not changed. The tests were fixed to synchronize SIGINT to actual collector entry instead of assuming a fixed 400 ms delay represented the same lifecycle point on every OS.
+During PR-06, Windows CI exposed a pre-existing timing race in CAPTCHA/SIGINT tests. The production pause/resume contract was not changed; the tests were synchronized to actual collector entry rather than a fixed wall-clock delay.
 
-Final exact-head PR-06 CI passed `npm ci`, strict TypeScript, and the complete test suite on Ubuntu and Windows.
+Final constituent and cumulative release-candidate CI passed `npm ci`, strict TypeScript, and the complete test suite on Ubuntu and Windows.
 
-See [`V2_2_RELEASE_ACCEPTANCE.md`](./V2_2_RELEASE_ACCEPTANCE.md) for the evidence record and workflow IDs.
+## 8. Operator live acceptance
 
-## 9. Remaining release gate — operator live research
+State: **PASS**.
 
-This is now the **only mandatory V2.2 release task**.
-
-Run a representative research in the actual operator environment using the real Research Chrome / Keyword Surfer path:
+The final live acceptance research was:
 
 ```text
-1. discovery:full
-2. research:append if a useful second batch exists
-3. --retry-failed only if real primary failures are repairable
-4. enrich:full against the current discovery run
-5. choose real finalist scope
-6. finalize:full with explicit history policy
-7. research:status
-8. research:diff for real immutable generations
-9. Research Library publication only when genuine current human decisions are complete
+research:
+  20260831143913996_357a43e8-597f-4da1-8eb0-30faee966303
+
+current discovery:
+  generation 2
+  20260831144905330_e02ba8a3-799b-49d8-a45e-3a9db3d5ddca
+  44/44 completed keywords
+
+current enrichment:
+  generation 1
+  20260831150111426_14b5a777-3aac-447a-96e7-41f1da3ebe71
+
+finalization:
+  awaiting_decisions
+  0/2 current human decisions
 ```
 
-The live pass must answer:
+The run exercised real Search Chrome/Keyword Surfer collection, Surfer expansion, append, an actual CDP process death followed by resume, a real Google CAPTCHA pause/manual solve/resume, enrichment, finalist/finalization state, status, diff and truthful Library blocking.
 
-- Can current research state be understood without remembering enrichment IDs?
-- Are repairable failures distinguishable from non-repairable terminal state?
-- Are important evidence gaps clear on a real dataset?
-- Can omitted/unavailable evidence be mistaken for zero or negative evidence?
-- Is generation diff useful on real append/re-enrichment history?
-- Does any concrete operator friction justify a **small** targeted fix?
+No blocking product defect or operator friction requiring a V2.2 fix was found.
 
-If the run exposes a defect, fix that defect and repeat the affected gate. Do not invent extra V2.2 features merely because a release pass exists.
+See `V2_2_RELEASE_ACCEPTANCE.md` for the complete evidence record.
 
-## 10. Hard scope boundary
+## 9. Hard scope boundary preserved
 
 Still out of V2.2:
 
@@ -218,7 +183,7 @@ Future commercial-evidence planning remains in:
 
 Neither document is a current V2.2 runtime contract.
 
-## 11. Preserved invariants
+## 10. Preserved invariants
 
 ```text
 SQLite durable truth -> CSV/JSON/MD/ZIP derived
@@ -234,18 +199,20 @@ no fake provenance
 derived ZIP failure does not roll back durable truth
 ```
 
-`research:status` and `research:diff` remain read-only and must not mutate research state.
+`research:status` and `research:diff` remain read-only.
 
-## 12. Release decision
+## 11. Release decision
 
-Current state:
+Final state:
 
 ```text
 ENGINEERING IMPLEMENTATION: COMPLETE
 DETERMINISTIC INTEGRATION: PASS
+CUMULATIVE CROSS-PLATFORM CI: PASS
+OPERATOR LIVE ACCEPTANCE: PASS
 HISTORICAL PROVIDER: DEFER
-OPERATOR LIVE ACCEPTANCE: PENDING
-V2.2 RELEASE: NOT YET DECLARED
+V3 COMMERCIAL WORK: OUT OF V2.2 SCOPE
+V2.2 RELEASE: READY TO MERGE
 ```
 
-The next action is **not another implementation PR by default**. It is the real operator-machine research pass documented in `V2_2_RELEASE_ACCEPTANCE.md`.
+The next release action is the existing release PR `#94: v2.2-work -> main`. No additional V2.2 feature work is required unless the final merge itself exposes a concrete repository integration problem.
