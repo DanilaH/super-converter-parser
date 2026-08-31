@@ -9,6 +9,7 @@
     "research": "tsx src/cli/research.ts",
     "discovery:full": "tsx src/cli/research.ts --expand",
     "research:append": "tsx src/cli/appendResearch.ts",
+    "research:status": "tsx src/cli/researchStatus.ts",
     "enrich": "tsx src/cli/enrich.ts",
     "enrich:full": "tsx src/cli/enrich.ts --modules clusters,query_suggestions,domain_age,pages,site_structure",
     "finalize:full": "tsx src/cli/fullFinalize.ts",
