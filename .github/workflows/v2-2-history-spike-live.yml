@@ -1,4 +1,4 @@
-name: V2.2 historical source live benchmark
+name: V2.2 historical source recovery benchmark
 
 on:
   push:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  benchmark:
+  recovery:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -18,13 +18,45 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Run decision-sized annual benchmark
-        run: npm run spike:history -- --output data/spikes/live-decision --collection-mode annual --max-collections 48 --request-budget 2500
+      - name: Build recovery fixture from first-run unavailable domains
+        shell: python
+        run: |
+          import csv
+          from pathlib import Path
+
+          wanted = {
+              'pixoate.com', 'qr-code-generator.com', 'qr-codes.com', 'qrcodekit.com',
+              'qrexplore.com', 'quickchart.io', 'quotewerks.com', 'realtimesoundmeter.org',
+              'reddit.com', 'redragonshop.com', 'renderform.io', 'screentester.io',
+              'scrolltest.net', 'shlink.io', 'simplepdf.com', 'sound-tester.com',
+              'szynalski.com', 'tenna.com', 'testufo.com', 'tonal.fm', 'typequicker.com',
+              'webcammictest.com', 'websitecostcalculator.app', 'xbitlabs.com',
+              'youtube.com', 'zoho.com',
+          }
+          source = Path('fixtures/v2-2/historical-source-domains.csv')
+          target = Path('data/spikes/recovery-input.csv')
+          target.parent.mkdir(parents=True, exist_ok=True)
+          with source.open(newline='', encoding='utf-8-sig') as src:
+              reader = csv.DictReader(src)
+              rows = [row for row in reader if row['domain'].strip().lower() in wanted]
+              if not reader.fieldnames:
+                  raise SystemExit('missing CSV header')
+          found = {row['domain'].strip().lower() for row in rows}
+          missing = sorted(wanted - found)
+          if missing:
+              raise SystemExit(f'missing recovery domains: {missing}')
+          with target.open('w', newline='', encoding='utf-8') as dst:
+              writer = csv.DictWriter(dst, fieldnames=reader.fieldnames)
+              writer.writeheader()
+              writer.writerows(rows)
+          print(f'recovery rows={len(rows)} unique_domains={len(found)}')
+      - name: Run recovery annual benchmark
+        run: npm run spike:history -- --input data/spikes/recovery-input.csv --output data/spikes/live-recovery --collection-mode annual --max-domains 26 --max-collections 48 --request-budget 1200
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v2-2-history-live-decision
-          path: data/spikes/live-decision
+          name: v2-2-history-live-recovery
+          path: data/spikes/live-recovery
           if-no-files-found: warn
           retention-days: 7
