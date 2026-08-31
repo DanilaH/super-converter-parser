@@ -88,6 +88,20 @@ function state(): CohortHistoricalPresenceState {
   };
 }
 
+function matrix(): FinalistEvidenceMatrix {
+  return {
+    version: '1.0.0', finalistCount: 1, sourceRunQuality: {}, staleTrafficTargetCount: 0,
+    staleHumanDecisionCount: 0, retiredHumanDecisions: [],
+    finalists: [{
+      clusterId: 'cluster-1', canonicalKeyword: 'x', representativeKeywordIds: [1],
+      evidence: {
+        entrantRepeatability: { history: { preserved: true } },
+      },
+      humanDecision: {}, auditFlags: [],
+    }],
+  } as unknown as FinalistEvidenceMatrix;
+}
+
 test('status projection treats missing collection as uncertainty with unique-domain denominator', () => {
   const projected = projectSampledHistoricalPresenceCoverage({ cohorts, state: null });
   assert.equal(projected?.semantics, SAMPLED_HISTORICAL_PRESENCE_SEMANTICS);
@@ -116,19 +130,31 @@ test('not_found stays an observed provider outcome and is not converted into an 
   assert.equal(projected?.warnings.some((warning) => warning.message.includes('proof of absence')), false);
 });
 
+test('not_attempted remains unobserved and is excluded from checked coverage', () => {
+  const sample = state();
+  const domain = sample.collection.domains.find((item) => item.registrableDomain === 'c.test');
+  assert.ok(domain?.result);
+  domain.result.status = 'not_attempted';
+  domain.result.sourceReason = 'No provider request was attempted.';
+  sample.collection.summary.unavailableDomainCount = 0;
+  sample.collection.summary.statusCounts = { ok: 1, not_found: 1, not_attempted: 1 };
+
+  const projected = projectSampledHistoricalPresenceCoverage({ cohorts, state: sample });
+  assert.deepEqual(projected?.checkedCoverage, { numerator: 2, denominator: 4, ratio: 0.5 });
+  assert.equal(projected?.warnings[0]?.code, 'SAMPLED_HISTORICAL_PRESENCE_NOT_ATTEMPTED');
+
+  const finalist = attachSampledHistoricalPresenceToFinalistMatrix({
+    matrix: matrix(),
+    cohorts,
+    state: sample,
+  }).finalists[0]!;
+  assert.equal(finalist.evidence.sampledHistoricalPresence.checkedDomainCount, 2);
+  assert.equal(finalist.evidence.sampledHistoricalPresence.unobservedDomainCount, 1);
+  assert.equal(finalist.evidence.sampledHistoricalPresence.omittedDomainCount, 1);
+});
+
 test('finalist projection adds a separate sampled-history block without replacing existing cohort history', () => {
-  const matrix = {
-    version: '1.0.0', finalistCount: 1, sourceRunQuality: {}, staleTrafficTargetCount: 0,
-    staleHumanDecisionCount: 0, retiredHumanDecisions: [],
-    finalists: [{
-      clusterId: 'cluster-1', canonicalKeyword: 'x', representativeKeywordIds: [1],
-      evidence: {
-        entrantRepeatability: { history: { preserved: true } },
-      },
-      humanDecision: {}, auditFlags: [],
-    }],
-  } as unknown as FinalistEvidenceMatrix;
-  const projected = attachSampledHistoricalPresenceToFinalistMatrix({ matrix, cohorts, state: state() });
+  const projected = attachSampledHistoricalPresenceToFinalistMatrix({ matrix: matrix(), cohorts, state: state() });
   const finalist = projected.finalists[0]!;
   assert.deepEqual((finalist.evidence.entrantRepeatability.history as unknown as { preserved: boolean }).preserved, true);
   assert.equal(finalist.evidence.sampledHistoricalPresence.semantics, SAMPLED_HISTORICAL_PRESENCE_SEMANTICS);
