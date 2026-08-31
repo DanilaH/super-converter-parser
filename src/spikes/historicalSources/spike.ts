@@ -32,9 +32,7 @@ export type HistoricalDomainGroup = {
   observations: HistoricalDomainObservation[];
 };
 
-export type TimedWaybackResult = FirstSeenResult & {
-  latencyMs: number;
-};
+export type TimedWaybackResult = FirstSeenResult & { latencyMs: number };
 
 export type HistoricalDomainEvidence = {
   domain: string;
@@ -60,20 +58,12 @@ export type HistoricalProviderSummary = {
   ok: number;
   notFound: number;
   unavailable: number;
+  notAttempted: number;
   error: number;
   coveragePercent: number | null;
   requestCount: number;
   p50LatencyMs: number | null;
   p95LatencyMs: number | null;
-};
-
-export type RegistrationContextSummary = {
-  denominator: number;
-  observed: number;
-  unsupportedOrMissing: number;
-  error: number;
-  conflict: number;
-  coveragePercent: number | null;
 };
 
 export type HistoricalSpikeResult = {
@@ -96,7 +86,14 @@ export type HistoricalSpikeResult = {
     semanticNote: string;
   };
   providerSummary: {
-    registrationContext: RegistrationContextSummary;
+    registrationContext: {
+      denominator: number;
+      observed: number;
+      unsupportedOrMissing: number;
+      error: number;
+      conflict: number;
+      coveragePercent: number | null;
+    };
     commonCrawl: HistoricalProviderSummary;
     wayback: HistoricalProviderSummary;
   };
@@ -126,6 +123,13 @@ export type HistoricalSpikeDeps = {
   };
   wayback: FirstSeenClient;
   now?: () => number;
+  onProgress?: (progress: {
+    completed: number;
+    total: number;
+    domain: string;
+    commonCrawlStatus: HistoricalSourceStatus;
+    waybackStatus: FirstSeenResult['status'];
+  }) => void;
 };
 
 export type HistoricalSpikeOptions = {
@@ -138,26 +142,13 @@ export type HistoricalSpikeOptions = {
 };
 
 const REQUIRED_COLUMNS = [
-  'domain',
-  'dataset',
-  'source_run_id',
-  'source_enrichment_id',
-  'registration_date',
-  'registration_status',
-  'source_keywords',
-  'source_ranks',
-  'observed_at',
+  'domain', 'dataset', 'source_run_id', 'source_enrichment_id',
+  'registration_date', 'registration_status', 'source_keywords', 'source_ranks', 'observed_at',
 ] as const;
 
 function splitList(value: string, delimiter: ',' | '|'): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split(delimiter)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ).sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(value.split(delimiter).map((item) => item.trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function validateDomain(raw: string, rowNumber: number): string {
@@ -181,19 +172,12 @@ function nullableIso(raw: string, field: string, rowNumber: number): string | nu
 }
 
 export function parseHistoricalDomainFixture(content: string): HistoricalDomainObservation[] {
-  const records = parse(content, {
-    columns: true,
-    skip_empty_lines: true,
-    bom: true,
-    trim: false,
-  }) as Array<Record<string, string>>;
-
+  const records = parse(content, { columns: true, skip_empty_lines: true, bom: true, trim: false }) as Array<Record<string, string>>;
   if (records.length === 0) throw new Error('Historical-source fixture is empty.');
+
   const columns = new Set(Object.keys(records[0] ?? {}));
   for (const required of REQUIRED_COLUMNS) {
-    if (!columns.has(required)) {
-      throw new Error(`Historical-source fixture is missing required column "${required}".`);
-    }
+    if (!columns.has(required)) throw new Error(`Historical-source fixture is missing required column "${required}".`);
   }
 
   return records.map((record, index) => {
@@ -220,24 +204,18 @@ export function parseHistoricalDomainFixture(content: string): HistoricalDomainO
 }
 
 export function groupHistoricalDomains(rows: HistoricalDomainObservation[]): HistoricalDomainGroup[] {
-  const grouped = new Map<string, HistoricalDomainObservation[]>();
-  for (const row of rows) {
-    const existing = grouped.get(row.domain) ?? [];
-    existing.push(row);
-    grouped.set(row.domain, existing);
-  }
+  const byDomain = new Map<string, HistoricalDomainObservation[]>();
+  for (const row of rows) byDomain.set(row.domain, [...(byDomain.get(row.domain) ?? []), row]);
 
-  return [...grouped.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([domain, observations]) => ({
-      domain,
-      datasets: Array.from(new Set(observations.map((row) => row.dataset))).sort((a, b) => a.localeCompare(b)),
-      sourceRunIds: Array.from(new Set(observations.map((row) => row.sourceRunId))).sort((a, b) => a.localeCompare(b)),
-      sourceEnrichmentIds: Array.from(new Set(observations.map((row) => row.sourceEnrichmentId))).sort((a, b) => a.localeCompare(b)),
-      sourceKeywords: Array.from(new Set(observations.flatMap((row) => row.sourceKeywords))).sort((a, b) => a.localeCompare(b)),
-      sourceRanks: Array.from(new Set(observations.flatMap((row) => row.sourceRanks))).sort((a, b) => a.localeCompare(b)),
-      observations,
-    }));
+  return [...byDomain.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([domain, observations]) => ({
+    domain,
+    datasets: Array.from(new Set(observations.map((row) => row.dataset))).sort(),
+    sourceRunIds: Array.from(new Set(observations.map((row) => row.sourceRunId))).sort(),
+    sourceEnrichmentIds: Array.from(new Set(observations.map((row) => row.sourceEnrichmentId))).sort(),
+    sourceKeywords: Array.from(new Set(observations.flatMap((row) => row.sourceKeywords))).sort(),
+    sourceRanks: Array.from(new Set(observations.flatMap((row) => row.sourceRanks))).sort(),
+    observations,
+  }));
 }
 
 function percent(observed: number, denominator: number): number | null {
@@ -247,8 +225,7 @@ function percent(observed: number, denominator: number): number | null {
 function percentile(values: number[], ratio: number): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
-  return sorted[index] ?? null;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1))] ?? null;
 }
 
 function summarizeHistoricalSource(
@@ -256,39 +233,38 @@ function summarizeHistoricalSource(
   requestCounts: number[],
   latencyValues: number[],
 ): HistoricalProviderSummary {
-  const counts = { ok: 0, not_found: 0, unavailable: 0, error: 0 };
+  const counts: Record<HistoricalSourceStatus, number> = {
+    ok: 0,
+    not_found: 0,
+    unavailable: 0,
+    not_attempted: 0,
+    error: 0,
+  };
   for (const status of statuses) counts[status] += 1;
   return {
     denominator: statuses.length,
     ok: counts.ok,
     notFound: counts.not_found,
     unavailable: counts.unavailable,
+    notAttempted: counts.not_attempted,
     error: counts.error,
     coveragePercent: percent(counts.ok, statuses.length),
-    requestCount: requestCounts.reduce((sum, count) => sum + count, 0),
+    requestCount: requestCounts.reduce((sum, value) => sum + value, 0),
     p50LatencyMs: percentile(latencyValues, 0.5),
     p95LatencyMs: percentile(latencyValues, 0.95),
   };
 }
 
-function resolveRegistration(group: HistoricalDomainGroup): {
-  date: string | null;
-  status: string;
-  conflict: boolean;
-} {
-  const observedDates = Array.from(
-    new Set(
-      group.observations
-        .filter((item) => item.registrationStatus === 'ok' && item.registrationDate !== null)
-        .map((item) => item.registrationDate as string),
-    ),
-  ).sort((a, b) => Date.parse(a) - Date.parse(b));
+function registrationFor(group: HistoricalDomainGroup): { date: string | null; status: string; conflict: boolean } {
+  const dates = Array.from(new Set(group.observations
+    .filter((item) => item.registrationStatus === 'ok' && item.registrationDate !== null)
+    .map((item) => item.registrationDate as string)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
   const statuses = Array.from(new Set(group.observations.map((item) => item.registrationStatus)));
-  const conflict = observedDates.length > 1;
   return {
-    date: conflict ? null : observedDates[0] ?? null,
-    status: observedDates.length > 0 ? 'ok' : statuses.length === 1 ? statuses[0] as string : 'mixed',
-    conflict,
+    date: dates.length > 1 ? null : dates[0] ?? null,
+    status: dates.length > 0 ? 'ok' : statuses.length === 1 ? (statuses[0] ?? 'unknown') : 'mixed',
+    conflict: dates.length > 1,
   };
 }
 
@@ -325,15 +301,15 @@ function unavailableCommonCrawl(domain: string, reason: string): CommonCrawlDoma
   };
 }
 
-function failedWayback(domain: string, message: string, fetchedAt: string, latencyMs: number): TimedWaybackResult {
+function failedWayback(domain: string, error: unknown, nowMs: number, latencyMs: number): TimedWaybackResult {
   return {
     domain,
     firstSeenDate: null,
     status: 'error',
-    error: message,
+    error: error instanceof Error ? error.message : String(error),
     source: 'wayback',
     sourceReason: null,
-    fetchedAt,
+    fetchedAt: new Date(nowMs).toISOString(),
     requestCount: 0,
     httpStatus: null,
     latencyMs,
@@ -363,44 +339,35 @@ export async function runHistoricalSourceSpike(
   }
 
   const plannedCollectionChecksUpperBound = groups.length * selectedCollections.length;
-  if (
-    !options.allowLargeScan &&
-    plannedCollectionChecksUpperBound > options.requestBudget
-  ) {
+  if (!options.allowLargeScan && plannedCollectionChecksUpperBound > options.requestBudget) {
     throw new Error(
       `Historical-source Common Crawl plan requires up to ${plannedCollectionChecksUpperBound} collection checks, above request budget ${options.requestBudget}. Reduce domains/collections or explicitly allow a larger scan.`,
     );
   }
 
-  const evidence: HistoricalDomainEvidence[] = [];
+  const domains: HistoricalDomainEvidence[] = [];
   const waybackLatencies: number[] = [];
-
   for (const group of groups) {
     const commonCrawl = collectionListError
       ? unavailableCommonCrawl(group.domain, `Common Crawl collection list unavailable: ${collectionListError}`)
       : await deps.commonCrawl.lookupDomain(group.domain, selectedCollections);
 
-    const waybackStarted = now();
+    const startedAt = now();
     let wayback: TimedWaybackResult;
     try {
-      const result = await deps.wayback(group.domain);
-      const latencyMs = Math.max(0, now() - waybackStarted);
-      wayback = { ...result, latencyMs };
-      if (result.requestCount > 0) waybackLatencies.push(latencyMs);
+      const raw = await deps.wayback(group.domain);
+      const latencyMs = Math.max(0, now() - startedAt);
+      wayback = { ...raw, latencyMs };
+      if (raw.requestCount > 0) waybackLatencies.push(latencyMs);
     } catch (error) {
-      const latencyMs = Math.max(0, now() - waybackStarted);
-      wayback = failedWayback(
-        group.domain,
-        error instanceof Error ? error.message : String(error),
-        new Date(now()).toISOString(),
-        latencyMs,
-      );
+      const endedAt = now();
+      wayback = failedWayback(group.domain, error, endedAt, Math.max(0, endedAt - startedAt));
     }
 
-    const registration = resolveRegistration(group);
+    const registration = registrationFor(group);
     const commonCrawlDate = commonCrawl.earliestSampledCaptureAt;
     const waybackDate = wayback.firstSeenDate;
-    evidence.push({
+    domains.push({
       domain: group.domain,
       datasets: group.datasets,
       sourceRunIds: group.sourceRunIds,
@@ -418,32 +385,29 @@ export async function runHistoricalSourceSpike(
       waybackVsRegistrationDays: daysBetween(waybackDate, registration.date),
       archiveDeltaDays: daysBetween(commonCrawlDate, waybackDate),
     });
+
+    deps.onProgress?.({
+      completed: domains.length,
+      total: groups.length,
+      domain: group.domain,
+      commonCrawlStatus: commonCrawl.status,
+      waybackStatus: wayback.status,
+    });
   }
 
-  const registrationObserved = evidence.filter((item) => item.registrationStatus === 'ok' && item.registrationDate !== null).length;
-  const registrationErrors = evidence.filter((item) => item.registrationStatus === 'error').length;
-  const registrationConflicts = evidence.filter((item) => item.registrationConflict).length;
+  const registrationObserved = domains.filter((item) => item.registrationStatus === 'ok' && item.registrationDate !== null).length;
+  const registrationErrors = domains.filter((item) => item.registrationStatus === 'error').length;
   const commonCrawlSummary = summarizeHistoricalSource(
-    evidence.map((item) => item.commonCrawl.status),
-    evidence.map((item) => item.commonCrawl.requestCount),
-    evidence.flatMap((item) => item.commonCrawl.requestLatenciesMs),
+    domains.map((item) => item.commonCrawl.status),
+    domains.map((item) => item.commonCrawl.requestCount),
+    domains.flatMap((item) => item.commonCrawl.requestLatenciesMs),
   );
   const waybackSummary = summarizeHistoricalSource(
-    evidence.map((item) => item.wayback.status),
-    evidence.map((item) => item.wayback.requestCount),
+    domains.map((item) => item.wayback.status),
+    domains.map((item) => item.wayback.requestCount),
     waybackLatencies,
   );
-
-  const both = evidence.filter((item) => item.commonCrawl.status === 'ok' && item.wayback.status === 'ok');
-  const commonCrawlEarlier = both.filter((item) => {
-    const delta = item.archiveDeltaDays;
-    return delta !== null && delta < 0;
-  }).length;
-  const waybackEarlier = both.filter((item) => {
-    const delta = item.archiveDeltaDays;
-    return delta !== null && delta > 0;
-  }).length;
-  const sameTimestamp = both.filter((item) => item.archiveDeltaDays === 0).length;
+  const both = domains.filter((item) => item.commonCrawl.status === 'ok' && item.wayback.status === 'ok');
 
   return {
     version: '1.0.0',
@@ -451,7 +415,7 @@ export async function runHistoricalSourceSpike(
     input: {
       observationRows: options.rows.length,
       uniqueDomains: groups.length,
-      datasets: Array.from(new Set(options.rows.map((row) => row.dataset))).sort((a, b) => a.localeCompare(b)),
+      datasets: Array.from(new Set(options.rows.map((row) => row.dataset))).sort(),
     },
     commonCrawlScope: {
       mode: options.collectionMode,
@@ -463,35 +427,35 @@ export async function runHistoricalSourceSpike(
       requestBudget: options.requestBudget,
       largeScanExplicitlyAllowed: options.allowLargeScan,
       semanticNote: options.collectionMode === 'all'
-        ? 'All selected per-crawl CDXJ indexes are checked oldest-first. A one-record domain query proves presence in the earliest matching crawl but does not prove the first capture timestamp inside that crawl.'
+        ? 'All selected per-crawl CDXJ indexes are checked oldest-first. limit=1 proves presence in the earliest matching crawl but not the first capture timestamp inside that crawl.'
         : options.collectionMode === 'latest'
           ? 'Only the latest crawl is checked. This measures current Common Crawl coverage, not historical first-seen.'
           : 'Annual mode samples the oldest crawl of each year plus recent crawls. earliestSampledCaptureAt is bounded sampled evidence, not an exact first-ever Common Crawl timestamp.',
     },
     providerSummary: {
       registrationContext: {
-        denominator: evidence.length,
+        denominator: domains.length,
         observed: registrationObserved,
-        unsupportedOrMissing: evidence.length - registrationObserved - registrationErrors,
+        unsupportedOrMissing: domains.length - registrationObserved - registrationErrors,
         error: registrationErrors,
-        conflict: registrationConflicts,
-        coveragePercent: percent(registrationObserved, evidence.length),
+        conflict: domains.filter((item) => item.registrationConflict).length,
+        coveragePercent: percent(registrationObserved, domains.length),
       },
       commonCrawl: commonCrawlSummary,
       wayback: waybackSummary,
     },
     comparison: {
       bothArchiveSourcesObserved: both.length,
-      commonCrawlOnlyObserved: evidence.filter((item) => item.commonCrawl.status === 'ok' && item.wayback.status !== 'ok').length,
-      waybackOnlyObserved: evidence.filter((item) => item.commonCrawl.status !== 'ok' && item.wayback.status === 'ok').length,
-      neitherArchiveSourceObserved: evidence.filter((item) => item.commonCrawl.status !== 'ok' && item.wayback.status !== 'ok').length,
-      commonCrawlEarlier,
-      waybackEarlier,
-      sameTimestamp,
-      commonCrawlBeforeRegistration: evidence.filter((item) => item.commonCrawlBeforeRegistration === true).length,
-      waybackBeforeRegistration: evidence.filter((item) => item.waybackBeforeRegistration === true).length,
+      commonCrawlOnlyObserved: domains.filter((item) => item.commonCrawl.status === 'ok' && item.wayback.status !== 'ok').length,
+      waybackOnlyObserved: domains.filter((item) => item.commonCrawl.status !== 'ok' && item.wayback.status === 'ok').length,
+      neitherArchiveSourceObserved: domains.filter((item) => item.commonCrawl.status !== 'ok' && item.wayback.status !== 'ok').length,
+      commonCrawlEarlier: both.filter((item) => item.archiveDeltaDays !== null && item.archiveDeltaDays < 0).length,
+      waybackEarlier: both.filter((item) => item.archiveDeltaDays !== null && item.archiveDeltaDays > 0).length,
+      sameTimestamp: both.filter((item) => item.archiveDeltaDays === 0).length,
+      commonCrawlBeforeRegistration: domains.filter((item) => item.commonCrawlBeforeRegistration === true).length,
+      waybackBeforeRegistration: domains.filter((item) => item.waybackBeforeRegistration === true).length,
     },
-    domains: evidence,
+    domains,
     decisionGate: {
       status: 'pending_human_review',
       allowedDecisions: ['PROMOTE common_crawl', 'DEFER historical provider'],
@@ -500,39 +464,20 @@ export async function runHistoricalSourceSpike(
   };
 }
 
-function csvBool(value: boolean | null): string {
-  return value === null ? '' : value ? 'true' : 'false';
-}
-
-function csvNumber(value: number | null): string {
+function cell(value: string | number | boolean | null): string {
   return value === null ? '' : String(value);
 }
 
 export function renderHistoricalSpikeCsv(result: HistoricalSpikeResult): string {
   const rows: string[][] = [[
-    'domain',
-    'datasets',
-    'source_run_ids',
-    'source_enrichment_ids',
-    'registration_date',
-    'registration_status',
-    'registration_conflict',
-    'common_crawl_status',
-    'common_crawl_earliest_sampled_capture_at',
-    'common_crawl_earliest_matched_collection',
-    'common_crawl_history_complete_for_selected_collections',
-    'common_crawl_request_count',
-    'wayback_status',
-    'wayback_first_seen_date',
-    'wayback_request_count',
-    'wayback_latency_ms',
-    'common_crawl_vs_registration_days',
-    'wayback_vs_registration_days',
-    'common_crawl_vs_wayback_days',
-    'common_crawl_before_registration',
-    'wayback_before_registration',
-    'source_keywords',
-    'source_ranks',
+    'domain', 'datasets', 'source_run_ids', 'source_enrichment_ids',
+    'registration_date', 'registration_status', 'registration_conflict',
+    'common_crawl_status', 'common_crawl_earliest_sampled_capture_at',
+    'common_crawl_earliest_matched_collection', 'common_crawl_history_complete_for_selected_collections',
+    'common_crawl_request_count', 'wayback_status', 'wayback_first_seen_date',
+    'wayback_request_count', 'wayback_latency_ms', 'common_crawl_vs_registration_days',
+    'wayback_vs_registration_days', 'common_crawl_vs_wayback_days',
+    'common_crawl_before_registration', 'wayback_before_registration', 'source_keywords', 'source_ranks',
   ]];
 
   for (const item of result.domains) {
@@ -541,40 +486,41 @@ export function renderHistoricalSpikeCsv(result: HistoricalSpikeResult): string 
       item.datasets.join('|'),
       item.sourceRunIds.join('|'),
       item.sourceEnrichmentIds.join('|'),
-      item.registrationDate ?? '',
+      cell(item.registrationDate),
       item.registrationStatus,
-      item.registrationConflict ? 'true' : 'false',
+      cell(item.registrationConflict),
       item.commonCrawl.status,
-      item.commonCrawl.earliestSampledCaptureAt ?? '',
-      item.commonCrawl.earliestMatchedCollectionId ?? '',
-      item.commonCrawl.historyCompleteForSelectedCollections ? 'true' : 'false',
-      String(item.commonCrawl.requestCount),
+      cell(item.commonCrawl.earliestSampledCaptureAt),
+      cell(item.commonCrawl.earliestMatchedCollectionId),
+      cell(item.commonCrawl.historyCompleteForSelectedCollections),
+      cell(item.commonCrawl.requestCount),
       item.wayback.status,
-      item.wayback.firstSeenDate ?? '',
-      String(item.wayback.requestCount),
-      String(item.wayback.latencyMs),
-      csvNumber(item.commonCrawlVsRegistrationDays),
-      csvNumber(item.waybackVsRegistrationDays),
-      csvNumber(item.archiveDeltaDays),
-      csvBool(item.commonCrawlBeforeRegistration),
-      csvBool(item.waybackBeforeRegistration),
+      cell(item.wayback.firstSeenDate),
+      cell(item.wayback.requestCount),
+      cell(item.wayback.latencyMs),
+      cell(item.commonCrawlVsRegistrationDays),
+      cell(item.waybackVsRegistrationDays),
+      cell(item.archiveDeltaDays),
+      cell(item.commonCrawlBeforeRegistration),
+      cell(item.waybackBeforeRegistration),
       item.sourceKeywords.join('|'),
       item.sourceRanks.join('|'),
     ]);
   }
-
   return renderCsv(rows);
 }
 
+function percentageCell(value: number | null): string {
+  return value === null ? 'n/a' : `${value}%`;
+}
+
 function summaryRow(name: string, summary: HistoricalProviderSummary): string {
-  return `| ${name} | ${summary.ok}/${summary.denominator} | ${summary.coveragePercent ?? 'n/a'}% | ${summary.notFound} | ${summary.unavailable} | ${summary.error} | ${summary.requestCount} | ${summary.p50LatencyMs ?? 'n/a'} | ${summary.p95LatencyMs ?? 'n/a'} |`;
+  return `| ${name} | ${summary.ok}/${summary.denominator} | ${percentageCell(summary.coveragePercent)} | ${summary.notFound} | ${summary.unavailable} | ${summary.notAttempted} | ${summary.error} | ${summary.requestCount} | ${summary.p50LatencyMs ?? 'n/a'} | ${summary.p95LatencyMs ?? 'n/a'} |`;
 }
 
 export function renderHistoricalSpikeMarkdown(result: HistoricalSpikeResult): string {
-  const cc = result.providerSummary.commonCrawl;
-  const wayback = result.providerSummary.wayback;
   const rdap = result.providerSummary.registrationContext;
-  const lines = [
+  return [
     '# V2.2 Historical Source Spike',
     '',
     `Generated: ${result.generatedAt}`,
@@ -584,7 +530,7 @@ export function renderHistoricalSpikeMarkdown(result: HistoricalSpikeResult): st
     `- ${result.input.observationRows} persisted observation rows`,
     `- ${result.input.uniqueDomains} unique real observed domains`,
     `- datasets: ${result.input.datasets.join(', ')}`,
-    `- persisted RDAP registration coverage: ${rdap.observed}/${rdap.denominator} (${rdap.coveragePercent ?? 'n/a'}%)`,
+    `- persisted RDAP registration coverage: ${rdap.observed}/${rdap.denominator} (${percentageCell(rdap.coveragePercent)})`,
     '',
     '## Common Crawl scan scope',
     '',
@@ -598,12 +544,12 @@ export function renderHistoricalSpikeMarkdown(result: HistoricalSpikeResult): st
     '',
     '## Live archive-source results',
     '',
-    '| Source | Observed | Coverage | Not found | Unavailable | Error | HTTP requests | p50 latency ms | p95 latency ms |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
-    summaryRow('Common Crawl', cc),
-    summaryRow('Wayback', wayback),
+    '| Source | Observed | Coverage | Not found | Unavailable | Not attempted | Error | Requests | p50 latency ms | p95 latency ms |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    summaryRow('Common Crawl', result.providerSummary.commonCrawl),
+    summaryRow('Wayback', result.providerSummary.wayback),
     '',
-    'Latency semantics differ by source: Common Crawl latency is measured per actual CDX/collection-list HTTP request; Wayback latency is measured per domain call because the existing provider encapsulates its retries.',
+    'Common Crawl latency is measured per actual domain CDX request; the one-time collection-list request is not included. Wayback latency is measured per domain call because the existing provider encapsulates its retries.',
     '',
     '## Cross-source observations',
     '',
@@ -619,12 +565,12 @@ export function renderHistoricalSpikeMarkdown(result: HistoricalSpikeResult): st
     '',
     '## Truth constraints',
     '',
-    '- Archive presence is not domain registration and is not product-launch time.',
+    '- Archive/index presence is not domain registration and is not product-launch time.',
     '- A first returned capture is not proof of first existence.',
     '- Common Crawl has separate per-crawl CDXJ indexes; non-`all` modes intentionally provide bounded sampled history.',
     '- `not_found` means no capture was observed in the checked scope; it is not proof that the domain was absent from the web.',
-    '- `unavailable` and `error` remain separate from `not_found`.',
-    '- Persisted RDAP registration context is comparison evidence; it is not used to back-fill archive first-seen.',
+    '- `unavailable`, `not_attempted`, and `error` remain separate from `not_found`.',
+    '- Persisted RDAP registration context is comparison evidence; it never back-fills archive first-seen.',
     '',
     '## Decision gate',
     '',
@@ -639,6 +585,5 @@ export function renderHistoricalSpikeMarkdown(result: HistoricalSpikeResult): st
     '',
     result.decisionGate.note,
     '',
-  ];
-  return lines.join('\n');
+  ].join('\n');
 }
