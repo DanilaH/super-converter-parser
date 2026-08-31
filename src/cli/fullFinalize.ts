@@ -121,10 +121,11 @@ function printUsage(): void {
   console.log('    --decisions decisions.json');
   console.log('');
   console.log('Pipeline:');
-  console.log('  representatives -> entrant cohort -> cohort history -> optional/reused traffic -> finalist evidence -> library publish');
+  console.log('  representatives -> entrant cohort -> sampled historical presence -> cohort history -> optional/reused traffic -> finalist evidence -> library publish');
   console.log('');
   console.log('Notes:');
   console.log('  - First representative run still needs --clusters or --all-clusters; reruns may reuse persisted scope.');
+  console.log('  - Common Crawl sampled history uses bounded safe defaults and an isolated cache; its timestamp is not an exact first-seen date.');
   console.log('  - First cohort-history run still needs all three explicit policy thresholds; reruns may reuse them.');
   console.log('  - Traffic is optional. Existing persisted traffic is automatically re-projected; otherwise missing traffic stays missing.');
   console.log('  - Library publication happens when every current finalist has a current human decision.');
@@ -235,6 +236,7 @@ async function main(): Promise<void> {
   ];
   await runCliFile('Representative queries', 'representatives.ts', representativeArgs);
   await runCliFile('Entrant cohort', 'entrantCohort.ts', common);
+  await runCliFile('Sampled historical presence', 'cohortHistoricalPresence.ts', common);
 
   const historyArgs = [
     ...common,

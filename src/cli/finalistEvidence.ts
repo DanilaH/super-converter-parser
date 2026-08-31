@@ -9,6 +9,7 @@ import {
   type FinalistDecisionRecord,
 } from '../db/finalistDecisions.js';
 import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadCohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import { loadEntrantCohortState } from '../db/entrantCohorts.js';
 import { loadRepresentativeQueryState } from '../db/representativeSets.js';
 import {
@@ -17,11 +18,7 @@ import {
 } from '../db/trafficEvidence.js';
 import { RunStore } from '../db/store.js';
 import { parseFinalistDecisionsJson } from '../enrichment/finalistDecisionConfig.js';
-import {
-  FINALIST_EVIDENCE_MATRIX_VERSION,
-  buildFinalistEvidenceMatrix,
-  type FinalistEvidenceMatrix,
-} from '../enrichment/finalistEvidence.js';
+import { buildFinalistEvidenceMatrix } from '../enrichment/finalistEvidence.js';
 import {
   writeFinalistEvidenceCsv,
   writeFinalistEvidenceJson,
@@ -34,6 +31,10 @@ import {
 } from '../enrichment/finalistEvidencePublication.js';
 import type { SiteStructureRecord } from '../enrichment/site_structure/types.js';
 import { projectCurrentTrafficEvidence } from '../enrichment/trafficEvidenceCurrent.js';
+import {
+  attachSampledHistoricalPresenceToFinalistMatrix,
+  type FinalistEvidenceMatrixWithSampledHistory,
+} from '../historicalPresence/evidenceProjection.js';
 import { buildRunQuality } from '../runs/runQuality.js';
 import {
   archiveResearchDirectory,
@@ -48,6 +49,7 @@ loadDotEnv();
 const EXIT_OK = 0;
 const EXIT_INTERNAL = 1;
 const EXIT_INVALID_INPUT = 2;
+const FINALIST_EVIDENCE_WITH_SAMPLED_HISTORY_VERSION = '1.1.0';
 
 type ParsedArgs = {
   help: boolean;
@@ -108,6 +110,8 @@ function printUsage(): void {
   console.log('                       Use [] to clear recorded current decisions.');
   console.log('  --output-root <path> Durable research output root.');
   console.log('  --help               Show this help.');
+  console.log('');
+  console.log('Common Crawl sampled historical presence is attached as a separate factual block; it is never treated as exact first-seen evidence or an automatic build decision.');
 }
 
 async function main(): Promise<void> {
@@ -191,6 +195,7 @@ async function main(): Promise<void> {
       .filter((cluster) => finalistIds.has(cluster.clusterId));
     const historyState = loadCohortHistoryState(enrichmentStore, args.enrichmentId);
     const history = historyState?.projections ?? null;
+    const sampledHistoricalPresence = loadCohortHistoricalPresenceState(enrichmentStore, args.enrichmentId);
 
     const trafficImports = loadTrafficImportRecords(enrichmentStore, args.enrichmentId);
     const trafficPolicy = loadTrafficEvidencePolicy(enrichmentStore, args.enrichmentId);
@@ -239,7 +244,12 @@ async function main(): Promise<void> {
         entrantFingerprint,
       );
       try {
-        buildFinalistEvidenceMatrix({ ...commonInput, decisions: staged });
+        const stagedMatrix = buildFinalistEvidenceMatrix({ ...commonInput, decisions: staged });
+        attachSampledHistoricalPresenceToFinalistMatrix({
+          matrix: stagedMatrix,
+          cohorts: entrant.cohorts,
+          state: sampledHistoricalPresence,
+        });
         await assertFinalistEvidencePublicationParent({
           enrichmentDirectory: enrichmentLocation.enrichmentDirectory,
           enrichmentId: args.enrichmentId,
@@ -259,9 +269,13 @@ async function main(): Promise<void> {
       decisions = replaceFinalistDecisions(enrichmentStore, args.enrichmentId, parsedDecisions);
     }
 
-    let matrix: FinalistEvidenceMatrix;
+    let matrix: FinalistEvidenceMatrixWithSampledHistory;
     try {
-      matrix = buildFinalistEvidenceMatrix({ ...commonInput, decisions });
+      matrix = attachSampledHistoricalPresenceToFinalistMatrix({
+        matrix: buildFinalistEvidenceMatrix({ ...commonInput, decisions }),
+        cohorts: entrant.cohorts,
+        state: sampledHistoricalPresence,
+      });
       await assertFinalistEvidencePublicationParent({
         enrichmentDirectory: enrichmentLocation.enrichmentDirectory,
         enrichmentId: args.enrichmentId,
@@ -274,7 +288,7 @@ async function main(): Promise<void> {
     }
 
     const artifact: FinalistEvidenceArtifact = {
-      version: FINALIST_EVIDENCE_MATRIX_VERSION,
+      version: FINALIST_EVIDENCE_WITH_SAMPLED_HISTORY_VERSION,
       enrichmentId: args.enrichmentId,
       sourceRunId: enrichment.sourceRunId,
       representativeRevision: representatives.revision,
@@ -295,6 +309,9 @@ async function main(): Promise<void> {
     const cohortHistoryAvailableCount = matrix.finalists.filter(
       (finalist) => finalist.evidence.entrantRepeatability.history !== null,
     ).length;
+    const sampledHistoryCollectedCount = matrix.finalists.filter(
+      (finalist) => finalist.evidence.sampledHistoricalPresence.collected,
+    ).length;
     const auditFlagCount = matrix.finalists.reduce(
       (sum, finalist) => sum + finalist.auditFlags.length,
       0,
@@ -305,7 +322,7 @@ async function main(): Promise<void> {
       enrichmentId: args.enrichmentId,
       sourceRunId: enrichment.sourceRunId,
       summary: {
-        version: FINALIST_EVIDENCE_MATRIX_VERSION,
+        version: FINALIST_EVIDENCE_WITH_SAMPLED_HISTORY_VERSION,
         representativeRevision: representatives.revision,
         entrantFingerprint,
         finalistCount: matrix.finalistCount,
@@ -325,6 +342,7 @@ async function main(): Promise<void> {
     console.log(
       `Finalist evidence: ${matrix.finalistCount} finalist(s); `
       + `${cohortHistoryAvailableCount} with cohort-history projection; `
+      + `${sampledHistoryCollectedCount} with sampled historical-presence projection; `
       + `${trafficImports.length} imported traffic snapshot(s).`,
     );
     console.log(

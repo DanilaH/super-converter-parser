@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
 import type { CohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
+import { invalidateFinalistEvidencePublication } from '../enrichment/finalistEvidencePublication.js';
 import { writeTextAtomic } from '../runs/run.js';
 
 export const COHORT_HISTORICAL_PRESENCE_ARTIFACTS = [
@@ -10,32 +11,28 @@ export const COHORT_HISTORICAL_PRESENCE_ARTIFACTS = [
   'cohort-historical-presence.json',
 ] as const;
 
+type PublicationContext = {
+  manifestPath: string;
+  statusPath: string;
+  originalManifest: string;
+  originalStatus: string;
+  manifest: Record<string, unknown>;
+  status: Record<string, unknown>;
+};
+
 export async function publishCohortHistoricalPresenceMetadata(input: {
   enrichmentDirectory: string;
   snapshot: CohortHistoricalPresenceSnapshot;
   changed: boolean;
 }): Promise<void> {
-  const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
-  const statusPath = join(input.enrichmentDirectory, 'status.json');
-  const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
-  const originalManifest = await readFile(manifestPath, 'utf8');
-  const originalStatus = await readFile(statusPath, 'utf8');
-  const manifest = parseObject(originalManifest, 'manifest.json');
-  const status = parseObject(originalStatus, 'status.json');
-  const entrant = parseObject(await readFile(entrantPath, 'utf8'), 'entrant-cohort.json');
-
-  assertIdentity(manifest, input.snapshot, 'manifest.json');
-  assertIdentity(status, input.snapshot, 'status.json');
-  assertIdentity(entrant, input.snapshot, 'entrant-cohort.json');
-  if (manifest.state !== 'completed' || status.status !== 'completed') {
-    throw new Error('Sampled historical-presence publication requires a completed enrichment publication.');
-  }
-
-  const publishedFingerprint = fingerprintPublishedEntrant(entrant);
-  if (publishedFingerprint !== input.snapshot.entrantFingerprint) {
-    throw new Error(
-      `entrant-cohort.json fingerprint ${publishedFingerprint} does not match sampled historical-presence parent ${input.snapshot.entrantFingerprint}`,
-    );
+  let context = await loadPublicationContext(input.enrichmentDirectory, input.snapshot);
+  if (input.changed) {
+    await invalidateFinalistEvidencePublication({
+      enrichmentDirectory: input.enrichmentDirectory,
+      enrichmentId: input.snapshot.enrichmentId,
+      sourceRunId: input.snapshot.sourceRunId,
+    });
+    context = await loadPublicationContext(input.enrichmentDirectory, input.snapshot);
   }
 
   const metadata = {
@@ -54,37 +51,74 @@ export async function publishCohortHistoricalPresenceMetadata(input: {
   };
 
   const nextManifest = {
-    ...manifest,
+    ...context.manifest,
     artifacts: uniqueStrings([
-      ...readStringArray(manifest.artifacts, 'manifest.json artifacts'),
+      ...readStringArray(context.manifest.artifacts, 'manifest.json artifacts'),
       ...COHORT_HISTORICAL_PRESENCE_ARTIFACTS,
     ]),
     historicalPresence: metadata,
   };
   const nextStatus = {
-    ...status,
+    ...context.status,
     artifacts: uniqueStrings([
-      ...readStringArray(status.artifacts, 'status.json artifacts'),
+      ...readStringArray(context.status.artifacts, 'status.json artifacts'),
       ...COHORT_HISTORICAL_PRESENCE_ARTIFACTS,
     ]),
     historicalPresence: metadata,
   };
 
   await writeTextAtomic(
-    statusPath,
+    context.statusPath,
     `${JSON.stringify(nextStatus, null, 2)}\n`,
     'enrichment status with sampled historical presence',
   );
   try {
     await writeTextAtomic(
-      manifestPath,
+      context.manifestPath,
       `${JSON.stringify(nextManifest, null, 2)}\n`,
       'enrichment manifest with sampled historical presence',
     );
   } catch (error) {
-    await writeTextAtomic(statusPath, originalStatus, 'restore enrichment status').catch(() => undefined);
+    await writeTextAtomic(context.statusPath, context.originalStatus, 'restore enrichment status').catch(() => undefined);
     throw error;
   }
+}
+
+async function loadPublicationContext(
+  enrichmentDirectory: string,
+  snapshot: CohortHistoricalPresenceSnapshot,
+): Promise<PublicationContext> {
+  const manifestPath = join(enrichmentDirectory, 'manifest.json');
+  const statusPath = join(enrichmentDirectory, 'status.json');
+  const entrantPath = join(enrichmentDirectory, 'entrant-cohort.json');
+  const originalManifest = await readFile(manifestPath, 'utf8');
+  const originalStatus = await readFile(statusPath, 'utf8');
+  const manifest = parseObject(originalManifest, 'manifest.json');
+  const status = parseObject(originalStatus, 'status.json');
+  const entrant = parseObject(await readFile(entrantPath, 'utf8'), 'entrant-cohort.json');
+
+  assertIdentity(manifest, snapshot, 'manifest.json');
+  assertIdentity(status, snapshot, 'status.json');
+  assertIdentity(entrant, snapshot, 'entrant-cohort.json');
+  if (manifest.state !== 'completed' || status.status !== 'completed') {
+    throw new Error('Sampled historical-presence publication requires a completed enrichment publication.');
+  }
+
+  const publishedFingerprint = fingerprintPublishedEntrant(entrant);
+  if (publishedFingerprint !== snapshot.entrantFingerprint) {
+    throw new Error(
+      `entrant-cohort.json fingerprint ${publishedFingerprint} does not match sampled historical-presence parent ${snapshot.entrantFingerprint}`,
+    );
+  }
+
+  return {
+    manifestPath,
+    statusPath,
+    originalManifest,
+    originalStatus,
+    manifest,
+    status,
+  };
 }
 
 function fingerprintPublishedEntrant(value: Record<string, unknown>): string {
