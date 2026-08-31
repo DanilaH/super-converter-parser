@@ -1,7 +1,10 @@
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
-import { buildResearchStatus, type ResearchStatus } from '../research/status.js';
+import {
+  buildResearchStatusWithHistoricalPresence,
+  type ResearchStatusWithHistoricalPresence,
+} from '../research/statusWithHistoricalPresence.js';
 import { ResearchError } from '../shared/errors.js';
 
 loadDotEnv();
@@ -58,12 +61,12 @@ function printUsage(): void {
   console.log('This command is read-only: it never resumes, repairs, finalizes, publishes, or rewrites research state.');
 }
 
-function countLine(status: ResearchStatus): string {
+function countLine(status: ResearchStatusWithHistoricalPresence): string {
   const c = status.discovery.keywordCounts;
   return `keywords=${c.total} completed=${c.completed} partial=${c.partial} failed=${c.failed} pending=${c.pending} running=${c.running} repairable=${c.repairable}`;
 }
 
-function moduleLine(status: ResearchStatus['enrichments'][number]): string {
+function moduleLine(status: ResearchStatusWithHistoricalPresence['enrichments'][number]): string {
   const parts = Object.entries(status.itemCounts)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([module, counts]) => {
@@ -77,7 +80,7 @@ function coverageLine(value: { numerator: number; denominator: number } | null):
   return value === null ? 'n/a' : `${value.numerator}/${value.denominator}`;
 }
 
-export function renderResearchStatus(status: ResearchStatus): string {
+export function renderResearchStatus(status: ResearchStatusWithHistoricalPresence): string {
   const lines: string[] = [
     'Research status',
     `  Research: ${status.researchId} (${status.label})`,
@@ -151,6 +154,25 @@ export function renderResearchStatus(status: ResearchStatus): string {
     }
   }
 
+  lines.push('', 'Sampled historical presence');
+  if (status.sampledHistoricalPresence === null) {
+    lines.push('  unavailable');
+  } else {
+    const sampled = status.sampledHistoricalPresence;
+    lines.push(`  Semantics: ${sampled.semantics}`);
+    lines.push(`  Checked unique entrant domains: ${coverageLine(sampled.checkedCoverage)}`);
+    lines.push(`  Observed sampled presence: ${coverageLine(sampled.observedPresenceCoverage)}`);
+    lines.push(`  No capture observed in selected collections: ${sampled.notFoundDomainCount}`);
+    lines.push(`  Omitted/unavailable/error: ${sampled.omittedDomainCount}/${sampled.unavailableDomainCount}/${sampled.errorDomainCount}`);
+    lines.push(`  Incomplete earlier selected-collection checks: ${sampled.incompleteSelectedHistoryDomainCount}`);
+    if (sampled.warnings.length === 0) {
+      lines.push('  Sampled-history warnings: none');
+    } else {
+      lines.push(`  Sampled-history warnings: ${sampled.warnings.length}`);
+      for (const warning of sampled.warnings) lines.push(`    - ${warning.code}: ${warning.message}`);
+    }
+  }
+
   lines.push('', 'Research Library');
   if (status.library.published) {
     lines.push(`  Current publication: ${status.library.publicationId ?? 'unknown'}${status.library.publishedAt ? ` @ ${status.library.publishedAt}` : ''}`);
@@ -174,7 +196,7 @@ async function main(): Promise<void> {
       return;
     }
     const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
-    const status = await buildResearchStatus({ outputRoot, targetRunId: args.research });
+    const status = await buildResearchStatusWithHistoricalPresence({ outputRoot, targetRunId: args.research });
     process.stdout.write(args.json ? `${JSON.stringify(status, null, 2)}\n` : renderResearchStatus(status));
   } catch (error) {
     if (error instanceof ResearchError) {
