@@ -1,0 +1,34 @@
+name: V2.2 PR-01 contract fixup
+
+on:
+  push:
+    branches: [v2.2/pr-01-history-spike-impl]
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v2.2/pr-01-history-spike-impl
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node tools/v2-2-pr01-contract-fixup.mjs
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Commit verified fixup and remove temporary machinery
+        shell: bash
+        run: |
+          git rm tools/v2-2-pr01-contract-fixup.mjs .github/workflows/v2-2-pr01-contract-fixup.yml
+          git add src/spikes/historicalSources/spike.ts src/spikes/historicalSources/spike.test.ts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(v2.2): keep archive capture provenance complete"
+          git push origin HEAD:v2.2/pr-01-history-spike-impl
