@@ -1,5 +1,5 @@
 import type { CohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
-import { renderCsv } from '../csv/render.js';
+import { renderCsv } from '../exports/csv.js';
 import { writeJsonAtomic, writeTextAtomic } from '../runs/run.js';
 
 export async function writeCohortHistoricalPresenceJson(
@@ -44,9 +44,9 @@ export async function writeCohortHistoricalPresenceCsv(
       domain.registrableDomain,
       domain.coverageStatus,
       domain.omitReason ?? '',
-      domain.priority.bestRank,
-      domain.priority.occurrenceCount,
-      domain.priority.clusterCount,
+      String(domain.priority.bestRank),
+      String(domain.priority.occurrenceCount),
+      String(domain.priority.clusterCount),
       domain.cacheStatus,
       result?.status ?? '',
       result?.earliestSampledCaptureAt ?? '',
@@ -56,19 +56,19 @@ export async function writeCohortHistoricalPresenceCsv(
       result?.earliestMatchedCollectionFrom ?? '',
       result?.earliestMatchedCollectionTo ?? '',
       result ? String(result.historyCompleteForSelectedCollections) : '',
-      result?.selectedCollectionCount ?? '',
-      result?.checkedCollectionCount ?? '',
+      result ? String(result.selectedCollectionCount) : '',
+      result ? String(result.checkedCollectionCount) : '',
       result?.source ?? '',
       result?.sourceReason ?? '',
       result?.error ?? '',
       result?.fetchedAt ?? '',
-      result?.requestCount ?? '',
-      result?.httpStatus ?? '',
+      result ? String(result.requestCount) : '',
+      result?.httpStatus === null || result?.httpStatus === undefined ? '' : String(result.httpStatus),
     ];
   });
   await writeTextAtomic(
     path,
-    renderCsv(headers, rows),
+    renderCsv([headers, ...rows]),
     'cohort sampled historical-presence CSV',
   );
 }
