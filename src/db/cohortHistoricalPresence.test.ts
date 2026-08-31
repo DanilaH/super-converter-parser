@@ -24,7 +24,7 @@ function setupEntrant(store: RunStore): EntrantCohortSnapshot {
     sourceRunDirectory: '/tmp/source', enrichmentDirectory: '/tmp/enrichment', shortlistKeywords: [],
   });
   saveRepresentativeQuerySnapshot(store, 'enr-1', {
-    targetCount: 1, overrides: [], setVersion: '1.0.0', selectedClusterIds: ['cluster-1'],
+    targetCount: 3, overrides: [], setVersion: '1.0.0', selectedClusterIds: ['cluster-1'],
   }, [{
     clusterId: 'cluster-1', setVersion: '1.0.0', representativeKeywordIds: [17],
     representatives: [{
