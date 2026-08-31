@@ -139,6 +139,7 @@ export function projectSampledHistoricalPresenceCoverage(input: {
   const notAttemptedDomainCount = input.state.collection.domains.filter(
     (domain) => domain.coverageStatus === 'checked' && domain.result?.status === 'not_attempted',
   ).length;
+  const attemptedDomainCount = Math.max(0, summary.checkedDomainCount - notAttemptedDomainCount);
   const incompleteSelectedHistoryDomainCount = input.state.collection.domains.filter(
     (domain) => domain.coverageStatus === 'checked'
       && domain.result?.status === 'ok'
@@ -190,7 +191,7 @@ export function projectSampledHistoricalPresenceCoverage(input: {
     semantics: SAMPLED_HISTORICAL_PRESENCE_SEMANTICS,
     uniqueEntrantDomainCount: denominator,
     collected: true,
-    checkedCoverage: coverage(summary.checkedDomainCount, denominator),
+    checkedCoverage: coverage(attemptedDomainCount, denominator),
     observedPresenceCoverage: coverage(summary.knownPresenceDomainCount, denominator),
     omittedDomainCount: summary.omittedDomainCount,
     notFoundDomainCount: summary.notFoundDomainCount,
@@ -235,13 +236,14 @@ function projectFinalistBlock(
     })
     .sort((a, b) => a.registrableDomain.localeCompare(b.registrableDomain));
 
-  const checked = domains.filter((domain) => domain.coverageStatus === 'checked');
+  const selectedForCheck = domains.filter((domain) => domain.coverageStatus === 'checked');
   const omitted = domains.filter((domain) => domain.coverageStatus === 'omitted');
   const unobserved = domains.filter((domain) => domain.coverageStatus === 'unobserved');
+  const notAttempted = selectedForCheck.filter((domain) => domain.status === 'not_attempted');
+  const checked = selectedForCheck.filter((domain) => domain.status !== 'not_attempted');
   const observedPresence = checked.filter((domain) => domain.status === 'ok');
   const notFound = checked.filter((domain) => domain.status === 'not_found');
   const unavailable = checked.filter((domain) => domain.status === 'unavailable');
-  const notAttempted = checked.filter((domain) => domain.status === 'not_attempted');
   const errors = checked.filter((domain) => domain.status === 'error');
   const incomplete = observedPresence.filter((domain) => domain.historyCompleteForSelectedCollections === false);
   const warnings = [
