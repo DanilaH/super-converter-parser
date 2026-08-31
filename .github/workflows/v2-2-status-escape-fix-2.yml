@@ -1,0 +1,53 @@
+name: V2.2 status escape fix isolated
+
+on:
+  push:
+    branches:
+      - v2.2/pr-03-status-escape-fix-runner
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fixer
+        uses: actions/checkout@v7
+        with:
+          ref: v2.2/pr-03-status-escape-fix-runner
+          path: fixer
+      - name: Checkout clean PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: v2.2/pr-03-research-status-clean
+          path: target
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: target/.nvmrc
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+      - name: Apply fix
+        run: python ../fixer/scripts/v2_2_status_escape_fix.py
+        working-directory: target
+      - name: Install
+        run: npm ci
+        working-directory: target
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: target
+      - name: Focused tests
+        run: node --import tsx --test src/research/status.test.ts src/library/researchLibrary.test.ts
+        working-directory: target
+      - name: Diff check
+        run: git diff --check
+        working-directory: target
+      - name: Commit verified fix
+        working-directory: target
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/research/status.ts src/research/status.test.ts
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(v2.2): report deliberate incomplete Library publication"
+          git push origin HEAD:v2.2/pr-03-research-status-clean
