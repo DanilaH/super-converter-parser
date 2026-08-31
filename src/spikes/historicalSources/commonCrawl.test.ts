@@ -94,7 +94,7 @@ test('annual selection keeps one old anchor per year plus recent crawls', () => 
   ]);
 });
 
-test('query is domain-scoped, 200-only, and deliberately one-record existence evidence', () => {
+test('query is domain-scoped and deliberately one-record crawl-presence evidence', () => {
   const query = buildCommonCrawlQuery(
     'https://index.commoncrawl.org/CC-MAIN-2026-34-index',
     'example.com',
@@ -103,9 +103,9 @@ test('query is domain-scoped, 200-only, and deliberately one-record existence ev
   assert.equal(url.searchParams.get('url'), 'example.com');
   assert.equal(url.searchParams.get('output'), 'json');
   assert.equal(url.searchParams.get('matchType'), 'domain');
-  assert.equal(url.searchParams.get('filter'), 'status:200');
-  assert.equal(url.searchParams.get('fl'), 'timestamp,url,status,urlkey');
   assert.equal(url.searchParams.get('limit'), '1');
+  assert.equal(url.searchParams.has('filter'), false);
+  assert.equal(url.searchParams.has('fl'), false);
 });
 
 test('CDX parser preserves a real capture and rejects malformed evidence', () => {
@@ -129,7 +129,7 @@ test('domain lookup walks selected crawls oldest-first and stops on first sample
     seen.push(url);
     if (url.includes('2024-05')) return response('');
     if (url.includes('2025-05')) {
-      return response('{"timestamp":"20250113000000","url":"https://example.com/","status":"200","urlkey":"com,example)/"}\n');
+      return response('{"timestamp":"20250113000000","url":"https://example.com/","status":"301","urlkey":"com,example)/"}\n');
     }
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
