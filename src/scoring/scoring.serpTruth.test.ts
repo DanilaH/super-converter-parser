@@ -7,7 +7,7 @@ import type { KeywordRecord } from '../runs/run.js';
 const THRESHOLDS: DrThresholds = { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 };
 
 function google(
-  serpStatus: NonNullable<KeywordRecord['google']>['serpStatus'],
+  serpStatus: NonNullable<NonNullable<KeywordRecord['google']>['serpStatus']>,
   error: NonNullable<KeywordRecord['google']>['serpError'] = null,
 ): KeywordRecord['google'] {
   return {

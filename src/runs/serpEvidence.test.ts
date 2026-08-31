@@ -4,7 +4,7 @@ import { formatOrganicResultCount, resolveSerpEvidence } from './serpEvidence.js
 import type { KeywordRecord } from './run.js';
 
 function google(
-  serpStatus: NonNullable<KeywordRecord['google']>['serpStatus'],
+  serpStatus: NonNullable<NonNullable<KeywordRecord['google']>['serpStatus']>,
   serpError: NonNullable<KeywordRecord['google']>['serpError'] = null,
 ): KeywordRecord['google'] {
   return {

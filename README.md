@@ -101,6 +101,29 @@ Append stores the input batch under the same research, de-duplicates normalized 
 
 Use the **current run ID printed by the command** for downstream enrichment. See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
 
+### Inspect current research status
+
+```bash
+npm run research:status -- --research <research-id-or-any-run-id>
+```
+
+`research:status` is read-only. It resolves the logical research to `research.json.currentRunId` and reports the current discovery generation, keyword completion/repairability, existing quality warnings, immutable enrichment generations and module state, finalization/human-decision progress, and whether the **current exact public snapshot fingerprint** already exists in the Research Library. It also projects deep evidence coverage from current durable representative/cohort/history/traffic state, keeping omitted, unobserved, unavailable, mismatched, and missing evidence explicit instead of converting it to zero or negative evidence. It never resumes, repairs, finalizes, publishes, or rewrites state.
+
+Use `--json` for the machine-readable projection. Deep coverage warning codes are deterministic uncertainty/navigation facts; the finalist evidence matrix remains the detailed generated artifact with its existing coverage blocks and audit flags. The displayed next action is workflow navigation only; it is not a business or opportunity recommendation.
+
+### Compare immutable generations
+
+```bash
+npm run research:diff -- --research <research-id-or-run-id> --from discovery:1 --to discovery:2
+npm run research:diff -- --research <research-id-or-run-id> --from enrichment:1 --to enrichment:2
+```
+
+`research:diff` is read-only and compares two explicit immutable generations inside one logical research. Generation refs are intentionally typed: discovery can only be compared with discovery, and enrichment with enrichment. Bare numbers are rejected rather than guessed.
+
+Discovery diff reports factual keyword additions/removals, persisted status changes, and Google SERP evidence coverage. Enrichment diff reports module changes, persisted cluster/member changes, representative-query changes, entrant-domain changes, cohort-history coverage/omissions, and traffic snapshot currentness where those evidence layers exist.
+
+Cluster membership changes are matched by the persisted `clusterId` only. The command does not infer semantic cluster continuity, split/merge meaning, opportunity quality, or whether a newer generation is “better”. Use `--json` for deterministic machine-readable output.
+
 ### Full enrichment
 
 ```bash
