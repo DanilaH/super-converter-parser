@@ -11,6 +11,7 @@ import { readResearchContainer } from './batches.js';
 import { buildRunQuality, type RunQualityWarning } from '../runs/runQuality.js';
 import { isPrimaryRepairEligible } from '../runs/retryFailed.js';
 import { ResearchError } from '../shared/errors.js';
+import { buildResearchLibrarySnapshot } from '../library/researchLibrary.js';
 
 export type KeywordStatusCounts = {
   total: number;
@@ -284,28 +285,6 @@ async function readManifestArtifacts(enrichmentDirectory: string): Promise<Manif
   }
 }
 
-export function buildLibraryPublicationSummary(manifest: Record<string, unknown>): unknown {
-  return {
-    modules: Array.isArray(manifest.modules) ? manifest.modules : [],
-    summary: manifest.summary ?? null,
-    representativeQueries: manifest.representativeQueries ?? null,
-    entrantCohort: manifest.entrantCohort ?? null,
-    cohortHistory: manifest.cohortHistory ?? null,
-    trafficEvidence: manifest.trafficEvidence ?? null,
-    finalistEvidence: manifest.finalistEvidence ?? null,
-  };
-}
-
-export function storedPublicationSummaryMatches(storedSummaryJson: string, currentSummary: unknown): boolean {
-  let stored: unknown;
-  try {
-    stored = JSON.parse(storedSummaryJson) as unknown;
-  } catch {
-    return false;
-  }
-  return JSON.stringify(stored) === JSON.stringify(currentSummary);
-}
-
 async function inspectFinalization(
   researchDirectory: string,
   enrichment: ResearchEnrichmentStatus | null,
@@ -370,6 +349,7 @@ async function inspectFinalization(
 async function inspectLibraryPublication(
   outputRoot: string,
   researchDirectory: string,
+  discoveryDirectory: string,
   enrichment: ResearchEnrichmentStatus | null,
   finalization: FinalizationStatus,
 ): Promise<LibraryPublicationStatus> {
@@ -379,6 +359,16 @@ async function inspectLibraryPublication(
       publicationId: null,
       publishedAt: null,
       reason: 'no_current_enrichment',
+      lookupError: null,
+    };
+  }
+
+  if (finalization.state !== 'ready_to_publish') {
+    return {
+      published: false,
+      publicationId: null,
+      publishedAt: null,
+      reason: publicationReason(enrichment, finalization),
       lookupError: null,
     };
   }
@@ -406,7 +396,7 @@ async function inspectLibraryPublication(
   }
 
   const currentManifest = await readManifestArtifacts(join(researchDirectory, enrichment.directoryName));
-  if (currentManifest.manifest === null) {
+  if (currentManifest.manifest === null || currentManifest.warning !== null) {
     return {
       published: false,
       publicationId: null,
@@ -415,20 +405,38 @@ async function inspectLibraryPublication(
       lookupError: currentManifest.warning,
     };
   }
-  const currentSummary = buildLibraryPublicationSummary(currentManifest.manifest);
+
+  let currentSnapshotFingerprint: string;
+  try {
+    const snapshot = await buildResearchLibrarySnapshot({
+      researchDirectory,
+      discoveryDirectory,
+      enrichmentDirectory: join(researchDirectory, enrichment.directoryName),
+      enrichmentManifest: currentManifest.manifest,
+    });
+    currentSnapshotFingerprint = snapshot.snapshotFingerprint;
+  } catch (error) {
+    return {
+      published: false,
+      publicationId: null,
+      publishedAt: null,
+      reason: 'current_snapshot_unavailable',
+      lookupError: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   let db: Database.Database | null = null;
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
     const rows = db.prepare(
-      `SELECT publication_id, published_at, summary_json
+      `SELECT publication_id, published_at, snapshot_fingerprint
        FROM publications
        WHERE enrichment_id = ?
        ORDER BY published_at DESC, rowid DESC`,
     ).all(enrichment.enrichmentId) as Array<{
       publication_id: string;
       published_at: string;
-      summary_json: string;
+      snapshot_fingerprint: string;
     }>;
     if (rows.length === 0) {
       return {
@@ -440,18 +448,7 @@ async function inspectLibraryPublication(
       };
     }
     for (const row of rows) {
-      try {
-        JSON.parse(row.summary_json);
-      } catch (error) {
-        return {
-          published: false,
-          publicationId: null,
-          publishedAt: null,
-          reason: 'library_lookup_failed',
-          lookupError: `Publication ${row.publication_id} has invalid summary_json: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      if (storedPublicationSummaryMatches(row.summary_json, currentSummary)) {
+      if (row.snapshot_fingerprint === currentSnapshotFingerprint) {
         return {
           published: true,
           publicationId: row.publication_id,
@@ -615,7 +612,13 @@ export async function buildResearchStatus(input: {
         reason: 'legacy_layout',
         lookupError: null,
       }
-    : await inspectLibraryPublication(input.outputRoot, target.researchDirectory, currentEnrichment, finalization);
+    : await inspectLibraryPublication(
+        input.outputRoot,
+        target.researchDirectory,
+        currentLocation.discoveryDirectory,
+        currentEnrichment,
+        finalization,
+      );
 
   if (library.published) finalization.state = 'published';
 

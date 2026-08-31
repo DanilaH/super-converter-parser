@@ -15,10 +15,8 @@ import {
 } from '../outputs/researchLayout.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import {
-  buildLibraryPublicationSummary,
   buildResearchStatus,
   generationFromDirectoryName,
-  storedPublicationSummaryMatches,
 } from './status.js';
 
 const CONFIG = loadConfig({});
@@ -238,26 +236,6 @@ test('status selects the highest persisted enrichment generation for the current
   assert.equal(status.enrichments[1]?.itemCounts.query_suggestions?.pending, 1);
   assert.equal(status.nextAction.code, 'resume_enrichment');
   assert.match(status.nextAction.command ?? '', /enrichment_status_2/);
-});
-
-test('Library publication matching rejects stale same-enrichment metadata', () => {
-  const oldManifest = {
-    modules: ['clusters'],
-    summary: { clusterCount: 2 },
-    representativeQueries: { revision: 1 },
-    entrantCohort: { representativeRevision: 1 },
-    cohortHistory: null,
-    trafficEvidence: null,
-    finalistEvidence: { currentHumanDecisionCount: 1 },
-  };
-  const currentManifest = {
-    ...oldManifest,
-    finalistEvidence: { currentHumanDecisionCount: 2 },
-  };
-  const stored = JSON.stringify(buildLibraryPublicationSummary(oldManifest));
-  assert.equal(storedPublicationSummaryMatches(stored, buildLibraryPublicationSummary(oldManifest)), true);
-  assert.equal(storedPublicationSummaryMatches(stored, buildLibraryPublicationSummary(currentManifest)), false);
-  assert.equal(storedPublicationSummaryMatches('{broken', buildLibraryPublicationSummary(oldManifest)), false);
 });
 
 test('status fails closed when one immutable enrichment directory contains multiple run identities', async () => {
