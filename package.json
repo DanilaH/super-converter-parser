@@ -22,7 +22,7 @@
     "chrome:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/research-chrome.ps1 -Mode setup",
     "chrome:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/research-chrome.ps1 -Mode start",
     "test": "node scripts/run-tests.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.spike.json"
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
