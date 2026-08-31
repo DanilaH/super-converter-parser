@@ -1,7 +1,7 @@
 export const COMMON_CRAWL_SOURCE = 'common_crawl';
 export const COMMON_CRAWL_COLLECTIONS_URL = 'https://index.commoncrawl.org/collinfo.json';
 
-export type HistoricalSourceStatus = 'ok' | 'not_found' | 'unavailable' | 'error';
+export type HistoricalSourceStatus = 'ok' | 'not_found' | 'unavailable' | 'not_attempted' | 'error';
 export type CommonCrawlCollectionMode = 'latest' | 'annual' | 'all';
 
 export type CommonCrawlCollection = {
@@ -141,9 +141,8 @@ function monthCutoff(nowMs: number, months: number): number {
 
 /**
  * Common Crawl publishes one CDXJ index per crawl, not one cumulative index.
- * The annual mode intentionally samples the oldest crawl of every year plus all
- * recent crawls. It is a bounded historical probe, not an exact first-ever
- * capture search. `all` is explicit because it can multiply request volume.
+ * Annual mode samples the oldest crawl of every year plus all recent crawls.
+ * It is deliberately bounded historical evidence, not exact first-ever capture.
  */
 export function selectCommonCrawlCollections(
   collections: CommonCrawlCollection[],
@@ -189,13 +188,13 @@ export function selectCommonCrawlCollections(
 
   const maxCollections = options.maxCollections;
   if (maxCollections !== null && maxCollections !== undefined && result.length > maxCollections) {
-    const mandatoryAnnualIds = new Set(annual.values());
-    const mandatory = result.filter((item) => mandatoryAnnualIds.has(item));
+    const mandatoryAnnual = new Set(annual.values());
+    const mandatory = result.filter((item) => mandatoryAnnual.has(item));
     if (mandatory.length >= maxCollections) {
       result = mandatory.slice(0, maxCollections);
     } else {
       const extras = result
-        .filter((item) => !mandatoryAnnualIds.has(item))
+        .filter((item) => !mandatoryAnnual.has(item))
         .slice(-(maxCollections - mandatory.length));
       result = [...mandatory, ...extras].sort((a, b) => {
         const aTime = a.from ? Date.parse(a.from) : Number.POSITIVE_INFINITY;
@@ -215,10 +214,9 @@ export function buildCommonCrawlQuery(cdxApi: string, domain: string): string {
   url.searchParams.set('url', domain);
   url.searchParams.set('output', 'json');
   url.searchParams.set('matchType', 'domain');
-  url.searchParams.set('filter', 'status:200');
-  url.searchParams.set('fl', 'timestamp,url,status,urlkey');
-  // One record is enough to prove presence in a crawl. CDXJ is URL-key sorted,
-  // so this timestamp is NOT claimed to be the first capture inside that crawl.
+  // Any indexed capture is enough for the spike's web-presence question. Do
+  // not server-filter a large domain down to status=200: pywb filters may scan
+  // many captures and put unnecessary load on the public index service.
   url.searchParams.set('limit', '1');
   return url.toString();
 }
@@ -512,7 +510,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
           source: COMMON_CRAWL_SOURCE,
           sourceReason: priorGap
             ? 'A sampled capture was observed, but at least one earlier selected collection failed or was unavailable; earliest sampled presence is not fully established.'
-            : 'Earliest sampled matching crawl found. Common Crawl has no cumulative CDXJ index, and limit=1 proves crawl presence rather than the first capture within that crawl.',
+            : 'Earliest sampled matching crawl found. Common Crawl has no cumulative CDXJ index, and limit=1 proves crawl/index presence rather than the first capture inside that crawl.',
         };
       }
     }
@@ -521,6 +519,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
     const hasUnavailable = attempts.some((item) => item.status === 'unavailable');
     const hasError = attempts.some((item) => item.status === 'error');
     const status: HistoricalSourceStatus = hasUnavailable ? 'unavailable' : hasError ? 'error' : 'not_found';
+    const failingAttempt = attempts.find((item) => item.status === status);
     return {
       domain,
       status,
@@ -537,8 +536,8 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
       attempts,
       source: COMMON_CRAWL_SOURCE,
       sourceReason: status === 'not_found'
-        ? 'No successful domain capture was observed in the selected Common Crawl collections. This is not proof that the domain never existed on the web.'
-        : attempts.find((item) => item.status === status)?.sourceReason ?? null,
+        ? 'No capture was observed in the selected Common Crawl collections. This is not proof that the domain never existed on the web.'
+        : failingAttempt?.sourceReason ?? failingAttempt?.error ?? null,
     };
   }
 
