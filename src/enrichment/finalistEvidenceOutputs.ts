@@ -1,5 +1,6 @@
 import { renderCsv } from '../exports/csv.js';
 import { writeTextAtomic } from '../runs/run.js';
+import type { FinalistSampledHistoricalPresenceEvidence } from '../historicalPresence/evidenceProjection.js';
 import type {
   EvidenceCoverage,
   EvidenceDistribution,
@@ -74,6 +75,16 @@ export function writeFinalistEvidenceCsv(
     'history_conflict_numerator',
     'history_conflict_denominator',
     'history_conflict_ratio',
+    'sampled_history_collected',
+    'sampled_history_cohort_domain_count',
+    'sampled_history_checked_domain_count',
+    'sampled_history_observed_presence_count',
+    'sampled_history_not_found_count',
+    'sampled_history_omitted_domain_count',
+    'sampled_history_unavailable_count',
+    'sampled_history_error_count',
+    'sampled_history_incomplete_selected_history_count',
+    'sampled_history_warnings',
     'survivorship_warnings',
     'site_structure_numerator',
     'site_structure_denominator',
@@ -107,6 +118,7 @@ export function writeFinalistEvidenceCsv(
     const serp = finalist.evidence.serpAccessibility;
     const traffic = finalist.evidence.organicTrafficProof;
     const repeatability = finalist.evidence.entrantRepeatability;
+    const sampled = readSampledHistoricalPresence(finalist.evidence);
     const moat = finalist.evidence.moat;
     const monetization = finalist.evidence.monetizationGeography;
     const productFeasibility = finalist.evidence.productFeasibility;
@@ -136,6 +148,16 @@ export function writeFinalistEvidenceCsv(
       ...optionalCoverageCells(history?.youngDomainCoverage ?? null),
       ...optionalCoverageCells(history?.recentWebPresenceCoverage ?? null),
       ...optionalCoverageCells(history?.possibleHistoryConflictCoverage ?? null),
+      sampled === null ? '' : String(sampled.collected),
+      sampled === null ? '' : String(sampled.cohortDomainCount),
+      sampled === null ? '' : String(sampled.checkedDomainCount),
+      sampled === null ? '' : String(sampled.observedPresenceCount),
+      sampled === null ? '' : String(sampled.notFoundCount),
+      sampled === null ? '' : String(sampled.omittedDomainCount),
+      sampled === null ? '' : String(sampled.unavailableCount),
+      sampled === null ? '' : String(sampled.errorCount),
+      sampled === null ? '' : String(sampled.incompleteSelectedHistoryCount),
+      sampled === null ? '' : warningCell(sampled.warnings),
       warningCell(repeatability.survivorshipWarnings),
       ...coverageCells(moat.observedDomainCoverage),
       warningCell(moat.warnings),
@@ -156,6 +178,13 @@ export function writeFinalistEvidenceCsv(
   }
 
   return writeTextAtomic(outputPath, renderCsv(rows), 'finalist evidence matrix CSV');
+}
+
+function readSampledHistoricalPresence(
+  evidence: FinalistEvidenceMatrix['finalists'][number]['evidence'],
+): FinalistSampledHistoricalPresenceEvidence | null {
+  const value = (evidence as unknown as { sampledHistoricalPresence?: unknown }).sampledHistoricalPresence;
+  return value === undefined ? null : value as FinalistSampledHistoricalPresenceEvidence;
 }
 
 function coverageCells(value: EvidenceCoverage): [string, string, string] {
