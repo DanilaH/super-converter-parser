@@ -27,7 +27,7 @@ function assertRetryParserCompatibility(run: StoredRun): void {
   }
 }
 
-function isPrimaryRepairEligible(keyword: StoredKeyword): boolean {
+export function isPrimaryRepairEligible(keyword: StoredKeyword): boolean {
   if (keyword.status === 'failed') return true;
   if (keyword.status !== 'partial' || keyword.error === null) return false;
 

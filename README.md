@@ -101,6 +101,16 @@ Append stores the input batch under the same research, de-duplicates normalized 
 
 Use the **current run ID printed by the command** for downstream enrichment. See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
 
+### Inspect current research status
+
+```bash
+npm run research:status -- --research <research-id-or-any-run-id>
+```
+
+`research:status` is read-only. It resolves the logical research to `research.json.currentRunId` and reports the current discovery generation, keyword completion/repairability, existing quality warnings, immutable enrichment generations and module state, finalization/human-decision progress, and whether the **current exact public snapshot fingerprint** already exists in the Research Library. It never resumes, repairs, finalizes, publishes, or rewrites state.
+
+Use `--json` for the machine-readable projection. The displayed next action is workflow navigation only; it is not a business or opportunity recommendation.
+
 ### Full enrichment
 
 ```bash
