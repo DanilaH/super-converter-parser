@@ -1,4 +1,5 @@
 import type { CohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
+import { renderCsv } from '../csv/render.js';
 import { writeJsonAtomic, writeTextAtomic } from '../runs/run.js';
 
 export async function writeCohortHistoricalPresenceJson(
@@ -67,12 +68,7 @@ export async function writeCohortHistoricalPresenceCsv(
   });
   await writeTextAtomic(
     path,
-    `${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')}\n`,
+    renderCsv(headers, rows),
     'cohort sampled historical-presence CSV',
   );
-}
-
-function csvCell(value: string | number): string {
-  const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
