@@ -1,0 +1,30 @@
+name: V2.2 historical source live smoke
+
+on:
+  push:
+    branches: [v2.2/pr-01-history-spike-live]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Run bounded live smoke
+        run: npm run spike:history -- --output data/spikes/live-smoke --collection-mode latest --max-domains 8 --request-budget 20
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-2-history-live-smoke
+          path: data/spikes/live-smoke
+          if-no-files-found: warn
+          retention-days: 7
