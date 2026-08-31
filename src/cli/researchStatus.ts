@@ -73,6 +73,10 @@ function moduleLine(status: ResearchStatus['enrichments'][number]): string {
   return parts.length > 0 ? parts.join(' | ') : 'no persisted module items';
 }
 
+function coverageLine(value: { numerator: number; denominator: number } | null): string {
+  return value === null ? 'n/a' : `${value.numerator}/${value.denominator}`;
+}
+
 export function renderResearchStatus(status: ResearchStatus): string {
   const lines: string[] = [
     'Research status',
@@ -118,6 +122,34 @@ export function renderResearchStatus(status: ResearchStatus): string {
   }
   lines.push(`  Finalist matrix published: ${status.finalization.finalistMatrixPublished ? 'yes' : 'no'}`);
   if (status.finalization.artifactWarning) lines.push(`  Artifact warning: ${status.finalization.artifactWarning}`);
+
+  lines.push('', 'Deep evidence coverage');
+  if (status.evidenceCoverage === null) {
+    lines.push('  unavailable');
+  } else {
+    const coverage = status.evidenceCoverage;
+    lines.push(`  Representative URL identity: ${coverageLine(coverage.representativeUrlCoverage)}`);
+    lines.push(`  Entrant DR known: ${coverageLine(coverage.drKnownCoverage)}`);
+    lines.push(`  Page identity: ${coverageLine(coverage.pageIdentityCoverage)}`);
+    if (coverage.history !== null) {
+      lines.push(`  History checked: ${coverageLine(coverage.history.checkedCoverage)}`);
+      lines.push(`  RDAP registration known: ${coverageLine(coverage.history.registrationKnownCoverage)}`);
+      lines.push(`  Web first-seen known: ${coverageLine(coverage.history.firstSeenKnownCoverage)}`);
+      lines.push(`  History omitted/unobserved: ${coverage.history.omittedDomainCount}/${coverage.history.unobservedDomainCount}`);
+    }
+    if (coverage.traffic !== null) {
+      lines.push(`  Traffic snapshots imported: ${coverage.traffic.importedSnapshotCount}`);
+      lines.push(`  Matched domain-scope traffic: ${coverageLine(coverage.traffic.matchedDomainCoverage)}`);
+    }
+    if (coverage.warnings.length === 0) {
+      lines.push('  Coverage warnings: none');
+    } else {
+      lines.push(`  Coverage warnings: ${coverage.warnings.length}`);
+      for (const warning of coverage.warnings) {
+        lines.push(`    - ${warning.code}: ${warning.message}`);
+      }
+    }
+  }
 
   lines.push('', 'Research Library');
   if (status.library.published) {
