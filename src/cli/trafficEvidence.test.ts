@@ -150,7 +150,7 @@ async function prepareFixture(root: string) {
   saveEntrantCohortSnapshot(store, entrant);
   store.close();
 
-  await writeEnrichmentIndex(root, {
+  await writeEnrichmentIndex(root, { version: 1,
     enrichmentId,
     runId: sourceRunId,
     researchDirectory,

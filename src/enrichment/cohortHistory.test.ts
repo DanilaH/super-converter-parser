@@ -67,7 +67,6 @@ function cohort(domains: string[]): EntrantCohort {
 
 function history(input: Partial<DomainAgeRecord> & { domain: string }): DomainAgeRecord {
   return {
-    domain: input.domain,
     registrationDate: null,
     registrationStatus: 'not_attempted',
     registrationRule: '',

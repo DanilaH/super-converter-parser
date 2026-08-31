@@ -175,12 +175,12 @@ async function prepareFixture(root: string): Promise<{
   enrichmentStore.setEnrichmentState(enrichmentId, 'completed');
   enrichmentStore.close();
 
-  await writeRunIndex(root, {
+  await writeRunIndex(root, { version: 1,
     runId: sourceRunId,
     researchDirectory,
     discoveryDirectory,
   });
-  await writeEnrichmentIndex(root, {
+  await writeEnrichmentIndex(root, { version: 1,
     enrichmentId,
     runId: sourceRunId,
     researchDirectory,
