@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "probe": "tsx src/spike.ts",
+    "spike:history": "tsx src/cli/historicalSourceSpike.ts",
     "research": "tsx src/cli/research.ts",
     "discovery:full": "tsx src/cli/research.ts --expand",
     "research:append": "tsx src/cli/appendResearch.ts",
