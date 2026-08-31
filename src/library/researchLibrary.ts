@@ -45,7 +45,7 @@ export type PublishResearchToLibraryResult = {
   publicationCount: number;
 };
 
-type ArtifactDigest = {
+export type ArtifactDigest = {
   path: string;
   sha256: string;
   sizeBytes: number;
@@ -226,13 +226,12 @@ export async function publishResearchToLibrary(
   const sourceArchive = await readFile(sourceArchivePath);
   const sourceArchiveSha256 = sha256(sourceArchive);
 
-  const artifactDigests = await collectSnapshotArtifactDigests({
+  const { artifactDigests, snapshotFingerprint } = await buildResearchLibrarySnapshot({
     researchDirectory: enrichmentLocation.researchDirectory,
     discoveryDirectory: sourceLocation.discoveryDirectory,
     enrichmentDirectory: enrichmentLocation.enrichmentDirectory,
-    enrichmentArtifacts,
+    enrichmentManifest,
   });
-  const snapshotFingerprint = fingerprintArtifacts(artifactDigests);
   const publicationId = `pub_${snapshotFingerprint}`;
 
   const keywordsJson = await readJson(
@@ -771,6 +770,21 @@ function buildHistoryMap(value: unknown | null): Map<string, Record<string, unkn
     }
   }
   return output;
+}
+
+export async function buildResearchLibrarySnapshot(input: {
+  researchDirectory: string;
+  discoveryDirectory: string;
+  enrichmentDirectory: string;
+  enrichmentManifest: Record<string, unknown>;
+}): Promise<{ artifactDigests: ArtifactDigest[]; snapshotFingerprint: string }> {
+  const artifactDigests = await collectSnapshotArtifactDigests({
+    researchDirectory: input.researchDirectory,
+    discoveryDirectory: input.discoveryDirectory,
+    enrichmentDirectory: input.enrichmentDirectory,
+    enrichmentArtifacts: artifactNames(input.enrichmentManifest),
+  });
+  return { artifactDigests, snapshotFingerprint: fingerprintArtifacts(artifactDigests) };
 }
 
 async function collectSnapshotArtifactDigests(input: {
