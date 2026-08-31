@@ -1,5 +1,6 @@
 export const COMMON_CRAWL_SOURCE = 'common_crawl';
 export const COMMON_CRAWL_COLLECTIONS_URL = 'https://index.commoncrawl.org/collinfo.json';
+export const COMMON_CRAWL_USER_AGENT = 'super-converter-parser/0.0.1 (+https://github.com/DanilaH/super-converter-parser)';
 
 export type HistoricalSourceStatus = 'ok' | 'not_found' | 'unavailable' | 'not_attempted' | 'error';
 export type CommonCrawlCollectionMode = 'latest' | 'annual' | 'all';
@@ -26,6 +27,8 @@ export type CommonCrawlAttempt = {
   status: HistoricalSourceStatus;
   captureAt: string | null;
   captureUrl: string | null;
+  captureHttpStatus: string | null;
+  // HTTP status of the index API response, not the archived page response.
   httpStatus: number | null;
   requestCount: number;
   requestLatenciesMs: number[];
@@ -38,9 +41,16 @@ export type CommonCrawlDomainResult = {
   status: HistoricalSourceStatus;
   earliestSampledCaptureAt: string | null;
   earliestSampledCaptureUrl: string | null;
+  earliestSampledCaptureHttpStatus: string | null;
   earliestMatchedCollectionId: string | null;
   earliestMatchedCollectionFrom: string | null;
   earliestMatchedCollectionTo: string | null;
+  /**
+   * True means the earliest sampled match was established without a failed or
+   * unavailable *earlier* selected crawl, or every selected crawl was checked
+   * with no match. It does not imply that later selected crawls were queried
+   * after a match was found.
+   */
   historyCompleteForSelectedCollections: boolean;
   selectedCollectionCount: number;
   checkedCollectionCount: number;
@@ -58,13 +68,14 @@ export type CommonCrawlClientConfig = {
   maxAttempts: number;
   baseDelayMs: number;
   maxDelayMs: number;
+  userAgent?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
   random?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
 
-const RETRY_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRY_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504, 509]);
 const CIRCUIT_OPEN_HTTP_STATUSES = new Set([403, 451]);
 const COMMON_CRAWL_ORIGIN = 'https://index.commoncrawl.org';
 
@@ -74,9 +85,18 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function validIso(value: unknown): string | null {
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  return Number.isNaN(Date.parse(value)) ? null : value;
+function normalizedCollectionIso(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  // collinfo historically contains timezone-less ISO timestamps. Treat those
+  // as UTC explicitly so selection is deterministic on Windows/Linux and in
+  // non-UTC operator time zones.
+  const explicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const candidate = explicitZone ? raw : `${raw}Z`;
+  const timestamp = Date.parse(candidate);
+  if (Number.isNaN(timestamp)) return null;
+  return new Date(timestamp).toISOString().replace('.000Z', 'Z');
 }
 
 function assertCommonCrawlEndpoint(raw: string): string {
@@ -109,8 +129,8 @@ export function parseCommonCrawlCollections(value: unknown): CommonCrawlCollecti
       id,
       name: name || id,
       cdxApi: assertCommonCrawlEndpoint(cdxApiRaw),
-      from: validIso(record.from),
-      to: validIso(record.to),
+      from: normalizedCollectionIso(record.from),
+      to: normalizedCollectionIso(record.to),
     });
   }
 
@@ -291,6 +311,10 @@ function retryAfterMs(header: string | null, maxDelayMs: number, nowMs: number):
   return Math.min(maxDelayMs, Math.max(0, parsed - nowMs));
 }
 
+function isNoCapturesResponse(httpStatus: number, body: string): boolean {
+  return (httpStatus === 400 || httpStatus === 404) && /no\s+captures\s+found/i.test(body);
+}
+
 export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig): {
   loadCollections: () => Promise<CommonCrawlCollection[]>;
   lookupDomain: (domain: string, collections: CommonCrawlCollection[]) => Promise<CommonCrawlDomainResult>;
@@ -300,6 +324,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
   const random = config.random ?? Math.random;
   const sleep = config.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const collectionsUrl = config.collectionsUrl ?? COMMON_CRAWL_COLLECTIONS_URL;
+  const userAgent = config.userAgent?.trim() || COMMON_CRAWL_USER_AGENT;
   let nextAvailableAt = 0;
   let consecutiveNetworkFailures = 0;
   let circuitOpenReason: string | null = null;
@@ -311,7 +336,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
   }
 
   async function requestText(url: string): Promise<{
-    status: 'ok' | 'unavailable' | 'error';
+    status: 'ok' | 'not_found' | 'unavailable' | 'error';
     text: string | null;
     httpStatus: number | null;
     requestCount: number;
@@ -341,7 +366,10 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
         const response = await fetchImpl(url, {
           signal: controller.signal,
           redirect: 'error',
-          headers: { Accept: 'application/json, application/x-ndjson, text/plain' },
+          headers: {
+            Accept: 'application/json, application/x-ndjson, text/plain',
+            'User-Agent': userAgent,
+          },
         });
         const text = await response.text();
         clearTimeout(timer);
@@ -357,6 +385,18 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
             requestLatenciesMs: latencies,
             error: null,
             sourceReason: null,
+          };
+        }
+
+        if (isNoCapturesResponse(response.status, text)) {
+          return {
+            status: 'not_found',
+            text: null,
+            httpStatus: response.status,
+            requestCount: attempt,
+            requestLatenciesMs: latencies,
+            error: null,
+            sourceReason: `Common Crawl reported no captures (HTTP ${response.status}).`,
           };
         }
 
@@ -481,6 +521,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
         status,
         captureAt: capture?.timestamp ?? null,
         captureUrl: capture?.url ?? null,
+        captureHttpStatus: capture?.status ?? null,
         httpStatus: fetched.httpStatus,
         requestCount: fetched.requestCount,
         requestLatenciesMs: fetched.requestLatenciesMs,
@@ -498,6 +539,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
           status: 'ok',
           earliestSampledCaptureAt: capture.timestamp,
           earliestSampledCaptureUrl: capture.url,
+          earliestSampledCaptureHttpStatus: capture.status,
           earliestMatchedCollectionId: collection.id,
           earliestMatchedCollectionFrom: collection.from,
           earliestMatchedCollectionTo: collection.to,
@@ -510,7 +552,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
           source: COMMON_CRAWL_SOURCE,
           sourceReason: priorGap
             ? 'A sampled capture was observed, but at least one earlier selected collection failed or was unavailable; earliest sampled presence is not fully established.'
-            : 'Earliest sampled matching crawl found. Common Crawl has no cumulative CDXJ index, and limit=1 proves crawl/index presence rather than the first capture inside that crawl.',
+            : 'Earliest sampled matching crawl found with no earlier selected-crawl gap. Later selected crawls were not queried after the match. Common Crawl has no cumulative CDXJ index, and limit=1 proves crawl/index presence rather than the first capture inside that crawl.',
         };
       }
     }
@@ -525,6 +567,7 @@ export function createCommonCrawlHistoryClient(config: CommonCrawlClientConfig):
       status,
       earliestSampledCaptureAt: null,
       earliestSampledCaptureUrl: null,
+      earliestSampledCaptureHttpStatus: null,
       earliestMatchedCollectionId: null,
       earliestMatchedCollectionFrom: null,
       earliestMatchedCollectionTo: null,
