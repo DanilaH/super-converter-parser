@@ -287,6 +287,7 @@ function unavailableCommonCrawl(domain: string, reason: string): CommonCrawlDoma
     status: 'unavailable',
     earliestSampledCaptureAt: null,
     earliestSampledCaptureUrl: null,
+    earliestSampledCaptureHttpStatus: null,
     earliestMatchedCollectionId: null,
     earliestMatchedCollectionFrom: null,
     earliestMatchedCollectionTo: null,

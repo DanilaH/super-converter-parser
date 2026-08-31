@@ -32,6 +32,7 @@ function ccResult(domain: string, date: string | null, status: CommonCrawlDomain
     status,
     earliestSampledCaptureAt: date,
     earliestSampledCaptureUrl: date ? `https://${domain}/` : null,
+    earliestSampledCaptureHttpStatus: date ? '200' : null,
     earliestMatchedCollectionId: date ? 'CC-MAIN-2026-34' : null,
     earliestMatchedCollectionFrom: date ? '2026-08-01T00:00:00Z' : null,
     earliestMatchedCollectionTo: date ? '2026-08-15T00:00:00Z' : null,
