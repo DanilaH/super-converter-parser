@@ -4,7 +4,8 @@ import { basename, join } from 'node:path';
 import { RunStore, type StoredKeyword } from '../db/store.js';
 import { loadRepresentativeQueryState } from '../db/representativeSets.js';
 import { loadEntrantCohortState } from '../db/entrantCohorts.js';
-import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadTrafficEvidencePolicy, loadTrafficImportRecords } from '../db/trafficEvidence.js';
 import { loadFinalistDecisions } from '../db/finalistDecisions.js';
 import { resolveRunLocation } from '../outputs/researchLayout.js';
 import { readResearchContainer } from './batches.js';
@@ -12,6 +13,8 @@ import { buildRunQuality, type RunQualityWarning } from '../runs/runQuality.js';
 import { isPrimaryRepairEligible } from '../runs/retryFailed.js';
 import { ResearchError } from '../shared/errors.js';
 import { buildResearchLibrarySnapshot } from '../library/researchLibrary.js';
+import { projectCurrentTrafficEvidence } from '../enrichment/trafficEvidenceCurrent.js';
+import { projectDeepEvidenceCoverage, type DeepEvidenceCoverage } from './evidenceCoverage.js';
 
 export type KeywordStatusCounts = {
   total: number;
@@ -79,7 +82,7 @@ export type ResearchNextAction = {
 };
 
 export type ResearchStatus = {
-  version: '1.0.0';
+  version: '1.1.0';
   researchId: string;
   label: string;
   researchDirectory: string;
@@ -98,6 +101,7 @@ export type ResearchStatus = {
   currentEnrichmentId: string | null;
   finalization: FinalizationStatus;
   library: LibraryPublicationStatus;
+  evidenceCoverage: DeepEvidenceCoverage | null;
   nextAction: ResearchNextAction;
 };
 
@@ -341,6 +345,43 @@ async function inspectFinalization(
       finalistMatrixPublished: matrixPublished,
       artifactWarning: manifest.warning,
     };
+  } finally {
+    store.close();
+  }
+}
+
+async function inspectEvidenceCoverage(
+  researchDirectory: string,
+  enrichment: ResearchEnrichmentStatus | null,
+  finalization: FinalizationStatus,
+): Promise<DeepEvidenceCoverage | null> {
+  if (!enrichment) return null;
+  const store = RunStore.openReadOnly(join(researchDirectory, enrichment.directoryName, 'enrichment.sqlite'));
+  try {
+    const representatives = loadRepresentativeQueryState(store, enrichment.enrichmentId);
+    const entrant = loadEntrantCohortState(store, enrichment.enrichmentId);
+    const history = loadCohortHistoryState(store, enrichment.enrichmentId);
+    const trafficPolicy = loadTrafficEvidencePolicy(store, enrichment.enrichmentId);
+    const trafficRecords = loadTrafficImportRecords(store, enrichment.enrichmentId);
+    const currentTraffic = entrant !== null && trafficPolicy !== null
+      ? projectCurrentTrafficEvidence({
+          importedSnapshots: trafficRecords.map((record) => record.snapshot),
+          cohorts: entrant.cohorts,
+          policy: trafficPolicy,
+        })
+      : null;
+
+    return projectDeepEvidenceCoverage({
+      representatives: representatives?.sets ?? null,
+      cohorts: entrant?.cohorts ?? null,
+      history: history?.projections ?? null,
+      traffic: {
+        importedSnapshotCount: trafficRecords.length,
+        policyAvailable: trafficPolicy !== null,
+        current: currentTraffic,
+      },
+      finalistMatrixPublished: finalization.finalistMatrixPublished,
+    });
   } finally {
     store.close();
   }
@@ -601,6 +642,9 @@ export async function buildResearchStatus(input: {
         artifactWarning: null,
       }
     : await inspectFinalization(target.researchDirectory, currentEnrichment);
+  const evidenceCoverage = target.legacy
+    ? null
+    : await inspectEvidenceCoverage(target.researchDirectory, currentEnrichment, finalization);
   const library = target.legacy
     ? {
         published: false,
@@ -621,7 +665,7 @@ export async function buildResearchStatus(input: {
 
   const discoveryGeneration = generationFromDirectoryName(basename(currentLocation.discoveryDirectory), 'discovery') ?? 1;
   const status: ResearchStatus = {
-    version: '1.0.0',
+    version: '1.1.0',
     researchId: container?.researchId ?? currentRunId,
     label: container?.label ?? basename(target.researchDirectory),
     researchDirectory: target.researchDirectory,
@@ -640,6 +684,7 @@ export async function buildResearchStatus(input: {
     currentEnrichmentId: currentEnrichment?.enrichmentId ?? null,
     finalization,
     library,
+    evidenceCoverage,
     nextAction: nextActionFor({
       discoveryRunId: currentRunId,
       discoveryState: run.state,
