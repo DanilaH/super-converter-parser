@@ -16,6 +16,7 @@
     "finalize:full": "tsx src/cli/fullFinalize.ts",
     "representatives": "tsx src/cli/representatives.ts",
     "entrant-cohort": "tsx src/cli/entrantCohort.ts",
+    "cohort-historical-presence": "tsx src/cli/cohortHistoricalPresence.ts",
     "cohort-history": "tsx src/cli/cohortHistory.ts",
     "traffic-evidence": "tsx src/cli/trafficEvidence.ts",
     "finalist-evidence": "tsx src/cli/finalistEvidence.ts",
