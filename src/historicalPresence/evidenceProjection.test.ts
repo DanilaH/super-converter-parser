@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { CohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import type { EntrantCohort } from '../enrichment/entrantCohort.js';
 import type { FinalistEvidenceMatrix } from '../enrichment/finalistEvidence.js';
+import { DEFAULT_HISTORICAL_PRESENCE_CONFIG } from './types.js';
 import {
   SAMPLED_HISTORICAL_PRESENCE_SEMANTICS,
   attachSampledHistoricalPresenceToFinalistMatrix,
@@ -27,11 +28,7 @@ function state(): CohortHistoricalPresenceState {
     entrantFingerprint: 'a'.repeat(64),
     collectionVersion: '1.0.0',
     config: {
-      provider: 'common_crawl',
-      queryVersion: 1,
-      collectionMode: 'annual',
-      recentMonths: 18,
-      maxCollections: 24,
+      ...DEFAULT_HISTORICAL_PRESENCE_CONFIG,
       domainCap: 3,
     },
     collection: {
