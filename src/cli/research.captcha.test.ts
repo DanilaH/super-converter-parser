@@ -22,6 +22,14 @@ const emptyRelated = async (): Promise<RelatedCollectionResult> => ({
   debugArtifactPath: null,
 });
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function fakePage(captcha: boolean): Page {
   const isCaptcha = (sel: string) => sel.toLowerCase().includes('captcha');
   const isSurfer = (sel: string) => sel.toLowerCase().includes('surfer');
@@ -86,6 +94,7 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
   rmSync(join(directory, 'runs'), { recursive: true, force: true });
 
   delete process.env.CAPTCHA_DONE_MARKER;
+  const collectionStarted = deferredSignal();
 
   const depsCaptcha = {
     connect: async () => fakeBrowser(fakePage(true)),
@@ -96,7 +105,13 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
       record: KeywordRecord,
       debugRoot: string,
       signal: CancellationSignal,
-    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+    ): Promise<CollectionResult> => {
+      // executeRun persists `running` before entering the collector. Synchronize
+      // the test to that actual lifecycle boundary instead of guessing with a
+      // wall-clock timeout that can fire during slower Windows preflight/setup.
+      collectionStarted.resolve();
+      return collectKeyword(ctx, cfg, record, debugRoot, signal);
+    },
     collectRelated: emptyRelated,
   };
   const depsClean = {
@@ -119,16 +134,15 @@ test('Ctrl+C during CAPTCHA wait pauses without committing the keyword; resume c
   const originalMarker = process.env.CAPTCHA_DONE_MARKER;
   process.env.CAPTCHA_DONE_MARKER = marker;
   try {
-    // Phase 1: interrupt while the active keyword is stuck on the CAPTCHA wait.
+    // Phase 1: interrupt only after the active keyword has entered collection.
+    // This is the durable lifecycle point the test intends to exercise.
     const run1 = runCli(['--seeds', 'input/seeds.csv'], depsCaptcha, {
       AHREFS_API_KEY: undefined,
       EXPANSION_ENABLED: 'false',
     } as unknown as NodeJS.ProcessEnv);
-    const timer = setTimeout(() => {
-      process.emit('SIGINT');
-    }, 400);
+    await collectionStarted.promise;
+    process.emit('SIGINT');
     const code1 = await run1;
-    clearTimeout(timer);
 
     assert.equal(code1, EXIT_PAUSED, 'run must exit paused (130) after Ctrl+C during CAPTCHA wait');
 
@@ -177,6 +191,7 @@ test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { time
   await writeFile(join(directory, 'input', 'seeds.csv'), 'keyword\nk1\n', 'utf8');
   rmSync(join(directory, 'runs'), { recursive: true, force: true });
 
+  const collectionStarted = deferredSignal();
   const depsCaptcha = {
     connect: async () => fakeBrowser(fakePage(true)),
     preflight: async () => undefined,
@@ -186,7 +201,10 @@ test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { time
       record: KeywordRecord,
       debugRoot: string,
       signal: CancellationSignal,
-    ): Promise<CollectionResult> => collectKeyword(ctx, cfg, record, debugRoot, signal),
+    ): Promise<CollectionResult> => {
+      collectionStarted.resolve();
+      return collectKeyword(ctx, cfg, record, debugRoot, signal);
+    },
     collectRelated: emptyRelated,
   };
 
@@ -215,14 +233,12 @@ test('second Ctrl+C force-quits (single SIGINT handler owns pause/quit)', { time
       AHREFS_API_KEY: undefined,
       EXPANSION_ENABLED: 'false',
     } as unknown as NodeJS.ProcessEnv);
-    const signalTimer = setTimeout(() => {
-      // Deliver both signals in one callback so the assertion does not depend
-      // on how quickly the first graceful pause unwinds the async collector.
-      process.emit('SIGINT');
-      process.emit('SIGINT');
-    }, 400);
+    await collectionStarted.promise;
+    // Deliver both signals at the intended in-flight lifecycle boundary. This
+    // keeps the force-quit assertion independent of OS/preflight timing.
+    process.emit('SIGINT');
+    process.emit('SIGINT');
     const code = await run;
-    clearTimeout(signalTimer);
 
     // First Ctrl+C paused the run; the second Ctrl+C must reach the force-quit
     // path (the CLI re-delivers a real SIGINT after dropping its own handler).
