@@ -73,6 +73,7 @@ function saveCurrentSingletonCluster(store: RunStore, enrichmentId: string): voi
     representativeDomains: ['a.com', 'b.com', 'c.com'],
     medianVolume: 100,
     averageVolume: 100,
+    cohesion: { pairCount: 0, urlJaccard: null, domainJaccard: null },
     algorithmVersion: CLUSTERING_ALGORITHM_VERSION,
     config: CLUSTER_CONFIG,
   }]);
