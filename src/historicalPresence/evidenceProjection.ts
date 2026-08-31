@@ -5,12 +5,14 @@ import type {
   FinalistEvidenceRow,
 } from '../enrichment/finalistEvidence.js';
 import type { CohortHistoricalPresenceDomain } from './cohortCollector.js';
+import type { HistoricalPresenceStatus } from './types.js';
 
 export const SAMPLED_HISTORICAL_PRESENCE_SEMANTICS =
   'bounded_sampled_web_presence_not_exact_first_seen' as const;
 
 export type SampledHistoricalPresenceWarningCode =
   | 'SAMPLED_HISTORICAL_PRESENCE_NOT_COLLECTED'
+  | 'SAMPLED_HISTORICAL_PRESENCE_NOT_ATTEMPTED'
   | 'SAMPLED_HISTORICAL_PRESENCE_OMITTED'
   | 'SAMPLED_HISTORICAL_PRESENCE_PROVIDER_UNAVAILABLE'
   | 'SAMPLED_HISTORICAL_PRESENCE_PROVIDER_ERRORS'
@@ -41,7 +43,7 @@ export type FinalistSampledHistoricalPresenceDomain = {
   registrableDomain: string;
   coverageStatus: 'checked' | 'omitted' | 'unobserved';
   omitReason: 'domain_cap' | null;
-  status: 'ok' | 'not_found' | 'unavailable' | 'error' | null;
+  status: HistoricalPresenceStatus | null;
   earliestSampledCaptureAt: string | null;
   earliestMatchedCollectionId: string | null;
   historyCompleteForSelectedCollections: boolean | null;
@@ -134,12 +136,23 @@ export function projectSampledHistoricalPresenceCoverage(input: {
   if (summary.uniqueDomainCount !== denominator) {
     throw new Error(`Sampled historical-presence denominator ${summary.uniqueDomainCount} does not match current unique entrant domains ${denominator}.`);
   }
+  const notAttemptedDomainCount = input.state.collection.domains.filter(
+    (domain) => domain.coverageStatus === 'checked' && domain.result?.status === 'not_attempted',
+  ).length;
   const incompleteSelectedHistoryDomainCount = input.state.collection.domains.filter(
     (domain) => domain.coverageStatus === 'checked'
       && domain.result?.status === 'ok'
       && !domain.result.historyCompleteForSelectedCollections,
   ).length;
   const warnings: SampledHistoricalPresenceWarning[] = [];
+  if (notAttemptedDomainCount > 0) {
+    warnings.push({
+      code: 'SAMPLED_HISTORICAL_PRESENCE_NOT_ATTEMPTED',
+      affectedCount: notAttemptedDomainCount,
+      denominator,
+      message: `${notAttemptedDomainCount}/${denominator} unique finalist entrant domain(s) have sampled-history status not_attempted and remain unobserved.`,
+    });
+  }
   if (summary.omittedDomainCount > 0) {
     warnings.push({
       code: 'SAMPLED_HISTORICAL_PRESENCE_OMITTED',
@@ -228,12 +241,14 @@ function projectFinalistBlock(
   const observedPresence = checked.filter((domain) => domain.status === 'ok');
   const notFound = checked.filter((domain) => domain.status === 'not_found');
   const unavailable = checked.filter((domain) => domain.status === 'unavailable');
+  const notAttempted = checked.filter((domain) => domain.status === 'not_attempted');
   const errors = checked.filter((domain) => domain.status === 'error');
   const incomplete = observedPresence.filter((domain) => domain.historyCompleteForSelectedCollections === false);
   const warnings = [
     'Common Crawl evidence is bounded sampled web presence, not an exact first-seen date.',
   ];
   if (unobserved.length > 0) warnings.push(`${unobserved.length}/${domains.length} cohort domain(s) have no sampled historical-presence snapshot.`);
+  if (notAttempted.length > 0) warnings.push(`${notAttempted.length}/${domains.length} cohort domain(s) have sampled-history status not_attempted and remain unobserved.`);
   if (omitted.length > 0) warnings.push(`${omitted.length}/${domains.length} cohort domain(s) were omitted by the explicit sampled-history domain cap.`);
   if (notFound.length > 0) warnings.push(`${notFound.length}/${domains.length} cohort domain(s) had no capture observed in the selected Common Crawl collections; this is not proof of absence.`);
   if (unavailable.length > 0) warnings.push(`${unavailable.length}/${domains.length} cohort domain(s) have sampled-history provider status unavailable.`);
@@ -246,7 +261,7 @@ function projectFinalistBlock(
     cohortDomainCount: domains.length,
     checkedDomainCount: checked.length,
     omittedDomainCount: omitted.length,
-    unobservedDomainCount: unobserved.length,
+    unobservedDomainCount: unobserved.length + notAttempted.length,
     observedPresenceCount: observedPresence.length,
     notFoundCount: notFound.length,
     unavailableCount: unavailable.length,
