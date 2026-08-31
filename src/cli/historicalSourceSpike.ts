@@ -152,10 +152,12 @@ async function main(): Promise<void> {
 
     const commonCrawl = createCommonCrawlHistoryClient({
       timeoutMs: 15_000,
-      minDelayMs: 250,
+      // Common Crawl explicitly asks API users to slow down between calls. The
+      // spike is sequential and evidence-oriented; throughput is not a goal.
+      minDelayMs: 1_000,
       maxAttempts: 2,
-      baseDelayMs: 500,
-      maxDelayMs: 5_000,
+      baseDelayMs: 1_000,
+      maxDelayMs: 10_000,
     });
     const wayback = createWaybackClient({
       provider: 'wayback',
@@ -185,7 +187,13 @@ async function main(): Promise<void> {
         requestBudget: args.requestBudget,
         allowLargeScan: args.allowLargeScan,
       },
-      { commonCrawl, wayback },
+      {
+        commonCrawl,
+        wayback,
+        onProgress: ({ completed, total, domain, commonCrawlStatus, waybackStatus }) => {
+          console.log(`[${completed}/${total}] ${domain} common_crawl=${commonCrawlStatus} wayback=${waybackStatus}`);
+        },
+      },
     );
 
     await writeJsonAtomic(
