@@ -63,7 +63,11 @@ export async function runResearchPlanCli(argv: string[], deps: ResearchPlanDeps 
     const parsed = parseResearchPlanArgs(argv);
     if (parsed.help) return { exitCode: EXIT_OK, stdout: usage(), stderr: '' };
     const plan = await buildPlanFromArgs(parsed, deps, env);
-    return { exitCode: EXIT_OK, stdout: parsed.json ? `${JSON.stringify(plan, null, 2)}\n` : renderResearchPlan(plan), stderr: '' };
+    return {
+      exitCode: EXIT_OK,
+      stdout: parsed.json ? `${JSON.stringify(plan, null, 2)}\n` : renderPlanWithPresetProvenance(plan),
+      stderr: '',
+    };
   } catch (error) {
     if (error instanceof ResearchError) {
       const invalid = error.code === 'INPUT_SCHEMA_ERROR' || error.code === 'RESUME_NOT_FOUND';
@@ -71,6 +75,39 @@ export async function runResearchPlanCli(argv: string[], deps: ResearchPlanDeps 
     }
     return { exitCode: EXIT_INTERNAL, stdout: '', stderr: `${error instanceof Error ? error.stack ?? error.message : String(error)}\n` };
   }
+}
+
+function renderPlanWithPresetProvenance(plan: ResearchExecutionPlan): string {
+  const identity = 'durableState' in plan
+    ? plan.semantics?.preset ?? null
+    : plan.preset;
+  if (identity === null) return renderResearchPlan(plan);
+
+  const provenance = plan.semantics?.provenance ?? {};
+  const presetPaths = semanticPathsForOrigin(provenance, 'preset');
+  const filePaths = semanticPathsForOrigin(provenance, 'file');
+  const defaultPaths = semanticPathsForOrigin(provenance, 'default');
+  const base = renderResearchPlan(plan).trimEnd();
+  return [
+    base,
+    '',
+    'Preset provenance',
+    `  Preset: ${identity.id}@${identity.revision}`,
+    `  preset: ${presetPaths.length === 0 ? 'none' : presetPaths.join(', ')}`,
+    `  file: ${filePaths.length === 0 ? 'none' : filePaths.join(', ')}`,
+    `  default: ${defaultPaths.length === 0 ? 'none' : defaultPaths.join(', ')}`,
+    '',
+  ].join('\n');
+}
+
+function semanticPathsForOrigin(
+  provenance: Record<string, 'default' | 'preset' | 'file'>,
+  origin: 'default' | 'preset' | 'file',
+): string[] {
+  return Object.entries(provenance)
+    .filter(([, value]) => value === origin)
+    .map(([path]) => path)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function usage(): string {
