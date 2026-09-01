@@ -24,7 +24,7 @@ function rootKeyword(): KeywordRecord {
     id: 'root-1',
     keyword: 'favicon generator',
     normalizedKeyword: 'favicon generator',
-    sources: [{ type: 'seed' }],
+    sources: [{ type: 'seed', rowNumbers: [2] }],
     surfer: null,
     google: null,
     status: 'pending',
