@@ -1,14 +1,6 @@
 import process from 'node:process';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { resolveEnrichmentLocation, resolveOutputRoot } from '../outputs/researchLayout.js';
-import {
-  publishResearchToLibrary,
-  RESEARCH_LIBRARY_DIRECTORY,
-} from '../library/researchLibrary.js';
-import { acquirePublishLock } from '../library/publishLock.js';
-import { relinkResearchPublicationHistory } from '../library/researchLineage.js';
-import { acquireResearchBatchLock, readResearchContainer } from '../research/batches.js';
+import { runLibraryPublication } from '../finalization/libraryPublicationRun.js';
+import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
 const EXIT_OK = 0;
@@ -19,11 +11,6 @@ type ParsedArgs = {
   help: boolean;
   enrichmentId: string;
   outputRoot: string | null;
-};
-
-type PublicationTarget = {
-  sourceRunId: string;
-  legacy: boolean;
 };
 
 function nextValue(args: string[], option: string): string {
@@ -73,55 +60,8 @@ function printUsage(): void {
   console.log('  --help, -h          Show this help.');
 }
 
-async function inspectPublicationTarget(
-  outputRoot: string,
-  enrichmentId: string,
-): Promise<PublicationTarget> {
-  const location = await resolveEnrichmentLocation(outputRoot, enrichmentId);
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(
-      await readFile(join(location.enrichmentDirectory, 'manifest.json'), 'utf8'),
-    ) as unknown;
-  } catch (error) {
-    throw new ResearchError(
-      'OUTPUT_WRITE_ERROR',
-      `Cannot read enrichment manifest for ${enrichmentId}.`,
-      { cause: error },
-    );
-  }
-  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Invalid enrichment manifest for ${enrichmentId}.`);
-  }
-  const sourceRunId = (manifest as Record<string, unknown>).sourceRunId;
-  if (typeof sourceRunId !== 'string' || sourceRunId === '') {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Enrichment ${enrichmentId} has no sourceRunId.`);
-  }
-  return { sourceRunId, legacy: location.legacy };
-}
-
-async function assertCurrentResearchEnrichment(
-  outputRoot: string,
-  enrichmentId: string,
-): Promise<void> {
-  const location = await resolveEnrichmentLocation(outputRoot, enrichmentId);
-  if (location.legacy) return;
-  const container = await readResearchContainer(location.researchDirectory);
-  if (!container) return;
-
-  const target = await inspectPublicationTarget(outputRoot, enrichmentId);
-  if (target.sourceRunId !== container.currentRunId) {
-    throw new ResearchError(
-      'INPUT_SCHEMA_ERROR',
-      `Enrichment ${enrichmentId} belongs to historical run ${target.sourceRunId}; research ${container.researchId} currently points to ${container.currentRunId}. Run enrichment for the current discovery snapshot before publishing to the library.`,
-    );
-  }
-}
-
 async function main(): Promise<void> {
   let exitCode = EXIT_OK;
-  let releaseResearchLock: (() => Promise<void>) | undefined;
-  let releaseLibraryLock: (() => Promise<void>) | undefined;
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
@@ -129,55 +69,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
-    const target = await inspectPublicationTarget(outputRoot, args.enrichmentId);
-
-    // Append and library publication both read/archive the same top-level
-    // research directory. Serialize them on the research lock first, then take
-    // the library-wide lock. Append never takes the library lock, so this order
-    // cannot deadlock with the batch workflow.
-    if (!target.legacy) {
-      const researchLock = await acquireResearchBatchLock(outputRoot, target.sourceRunId);
-      releaseResearchLock = researchLock.release;
-    }
-
-    // Re-check after acquiring the research lock. An append may have completed
-    // between the initial manifest read and lock acquisition, making this
-    // enrichment historical while we were waiting.
-    await assertCurrentResearchEnrichment(outputRoot, args.enrichmentId);
-    releaseLibraryLock = await acquirePublishLock(join(outputRoot, RESEARCH_LIBRARY_DIRECTORY));
-
-    const first = await publishResearchToLibrary({
-      outputRoot,
+    await runLibraryPublication({
+      outputRoot: resolveOutputRoot(args.outputRoot, process.env),
       enrichmentId: args.enrichmentId,
     });
-    const lineagePrevious = relinkResearchPublicationHistory(
-      first.libraryDbPath,
-      first.publicationId,
-    );
-    // relinkResearchPublicationHistory mutates only the durable SQLite truth.
-    // An idempotent second publish regenerates library.json/library.zip from that
-    // corrected lineage without creating another publication.
-    const refreshed = await publishResearchToLibrary({
-      outputRoot,
-      enrichmentId: args.enrichmentId,
-    });
-    const result = {
-      ...refreshed,
-      changed: first.changed,
-      supersedesPublicationId: lineagePrevious,
-    };
-
-    console.log(result.changed
-      ? `Published ${result.publicationId}`
-      : `Already published ${result.publicationId}`);
-    if (result.supersedesPublicationId) {
-      console.log(`Supersedes: ${result.supersedesPublicationId}`);
-    }
-    console.log(`Library publications: ${result.publicationCount}`);
-    console.log(`SQLite: ${result.libraryDbPath}`);
-    console.log(`Index: ${result.libraryJsonPath}`);
-    console.log(`Archive: ${result.libraryArchivePath}`);
   } catch (error) {
     if (error instanceof ResearchError) {
       console.error(`${error.code}: ${error.message}`);
@@ -189,22 +84,6 @@ async function main(): Promise<void> {
       exitCode = EXIT_INTERNAL;
     }
   } finally {
-    if (releaseLibraryLock) {
-      try {
-        await releaseLibraryLock();
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        exitCode = EXIT_INTERNAL;
-      }
-    }
-    if (releaseResearchLock) {
-      try {
-        await releaseResearchLock();
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        exitCode = EXIT_INTERNAL;
-      }
-    }
     process.exitCode = exitCode;
   }
 }
