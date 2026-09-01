@@ -3,19 +3,6 @@ import { ResearchError } from '../shared/errors.js';
 export const DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS = 2_000;
 const CANCELLATION_POLL_MS = 100;
 
-export function resolveGoogleMinNavigationIntervalMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.GOOGLE_MIN_NAVIGATION_INTERVAL_MS;
-  if (raw === undefined) return DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new ResearchError(
-      'INPUT_SCHEMA_ERROR',
-      `Invalid GOOGLE_MIN_NAVIGATION_INTERVAL_MS: expected a non-negative number, got "${raw}".`,
-    );
-  }
-  return parsed;
-}
-
 /**
  * Operational burst floor between browser collection starts. It deliberately
  * lives outside research semantics/fingerprints: its purpose is to keep local
@@ -25,7 +12,7 @@ export function resolveGoogleMinNavigationIntervalMs(env: NodeJS.ProcessEnv): nu
 export class GoogleNavigationGate {
   private lastStartedAtMs: number | null = null;
 
-  constructor(private readonly minIntervalMs: number) {
+  constructor(private readonly minIntervalMs: number = DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS) {
     if (!Number.isFinite(minIntervalMs) || minIntervalMs < 0) {
       throw new Error(`minIntervalMs must be a non-negative number, got ${minIntervalMs}`);
     }
