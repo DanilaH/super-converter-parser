@@ -38,11 +38,21 @@ test('same effective config gets stable fingerprints even when defaults are expl
   assert.deepEqual(a.stageFingerprints, b.stageFingerprints);
 });
 
-test('new plan exposes expected external work without invoking providers', () => {
-  const plan = buildNewResearchPlan(finalizationConfig(), resolve('/tmp/project/research.config.json'));
+test('new plan exposes required and conditional external work without invoking providers', () => {
+  const configPath = resolve('/tmp/project/research.config.json');
+  const plan = buildNewResearchPlan(finalizationConfig(), configPath);
   assert.deepEqual(plan.externalWork.map((item) => item.stage), ['discovery', 'enrichment', 'finalization']);
-  assert.ok(plan.externalWork.find((item) => item.stage === 'discovery')?.providers.includes('google'));
+  const discovery = plan.externalWork.find((item) => item.stage === 'discovery')?.providers ?? [];
+  const enrichment = plan.externalWork.find((item) => item.stage === 'enrichment')?.providers ?? [];
+  assert.ok(discovery.includes('google'));
+  assert.ok(discovery.includes('ahrefs_if_configured'));
+  assert.ok(enrichment.includes('first_seen_provider_if_configured'));
   assert.ok(plan.externalWork.find((item) => item.stage === 'finalization')?.providers.includes('common_crawl'));
+
+  const requiredAhrefs = buildNewResearchPlan(finalizationConfig({ discovery: { expand: true, requireAhrefs: true } }), configPath);
+  const requiredDiscovery = requiredAhrefs.externalWork.find((item) => item.stage === 'discovery')?.providers ?? [];
+  assert.ok(requiredDiscovery.includes('ahrefs'));
+  assert.ok(!requiredDiscovery.includes('ahrefs_if_configured'));
 });
 
 test('query suggestion defaults are stable and query suggestion changes stay enrichment-local', () => {
