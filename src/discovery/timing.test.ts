@@ -27,7 +27,7 @@ const rootSample = {
   totalMs: 700,
 };
 
-test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timings deterministically', () => {
+test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot timings deterministically', () => {
   const recorder = new DiscoveryTimingRecorder(1_000);
   recorder.recordBrowser(rootSample);
   recorder.recordBrowser({
@@ -43,6 +43,9 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
   recorder.recordAhrefs('example.com', 250, 'ok');
   recorder.recordSleep(1_000);
   recorder.recordSleep(500);
+  recorder.recordSnapshot('running', 'first', true, 400);
+  recorder.recordSnapshot('running', 'skip', false, 0);
+  recorder.recordSnapshot('completed', 'terminal', true, 600);
 
   const summary = recorder.snapshot({ runId: 'run-1', mode: 'fresh', state: 'completed', finishedAtMs: 3_000 });
   assert.equal(summary.wallMs, 2_000);
@@ -55,10 +58,14 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
   assert.equal(summary.counts.relatedError, 0);
   assert.equal(summary.counts.ahrefsClientCalls, 1);
   assert.equal(summary.counts.engineSleepCalls, 2);
+  assert.equal(summary.counts.snapshotCallbacks, 3);
+  assert.equal(summary.counts.snapshotPublishes, 2);
+  assert.equal(summary.counts.snapshotSkips, 1);
   assert.equal(summary.totals.browserCollectionMs, 1_200);
   assert.equal(summary.totals.relatedSurferMs, 300);
   assert.equal(summary.totals.ahrefsClientMs, 250);
   assert.equal(summary.totals.engineSleepRequestedMs, 1_500);
+  assert.equal(summary.totals.snapshotPublishMs, 1_000);
   assert.deepEqual(summary.distributions.primaryBrowserCollectionMs, {
     count: 2,
     minMs: 500,
@@ -67,7 +74,16 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
     maxMs: 700,
     averageMs: 600,
   });
+  assert.deepEqual(summary.distributions.snapshotPublishMs, {
+    count: 2,
+    minMs: 400,
+    p50Ms: 400,
+    p95Ms: 600,
+    maxMs: 600,
+    averageMs: 500,
+  });
   assert.match(renderDiscoveryTimingSummary(summary), /wall 2\.0s/);
+  assert.match(renderDiscoveryTimingSummary(summary), /snapshots 1\.0s \(2 write \/ 1 skip\)/);
   assert.match(renderDiscoveryTimingSummary(summary), /CAPTCHA 1/);
 });
 
