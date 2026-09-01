@@ -10,7 +10,7 @@ import type { BrowserCollectionTiming } from './collect.js';
 export class GoogleLegacyCadencePacer {
   private pendingDelayMs = 0;
 
-  observe(sample: BrowserCollectionTiming): number {
+  observe(sample: BrowserCollectionTiming, _observedAtMs?: number): number {
     const holdMs = conservativeLegacyHoldMs(sample);
     if (holdMs <= 0) return 0;
     this.pendingDelayMs = Math.max(this.pendingDelayMs, holdMs);
@@ -18,6 +18,7 @@ export class GoogleLegacyCadencePacer {
   }
 
   async wait(params: {
+    now?: () => number;
     sleep: (ms: number) => Promise<void>;
   }): Promise<number> {
     const delayMs = this.pendingDelayMs;
