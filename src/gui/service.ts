@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RunStore } from '../db/store.js';
 import {
   operatorContinuationJsonSchema,
   operatorResearchConfigJsonSchema,
@@ -25,6 +26,7 @@ import {
 } from '../cli/researchRun.js';
 
 export type GuiDraftFiles = Record<string, string>;
+export type GuiClusterList = ReturnType<RunStore['loadKeywordClusters']>;
 
 export type GuiBootstrap = {
   schemas: {
@@ -87,6 +89,8 @@ export class OperatorGuiService {
   readonly env: NodeJS.ProcessEnv;
   private readonly deps: GuiServiceDeps;
   private readonly drafts = new Map<string, StoredDraft>();
+  private readonly inFlightDrafts = new Set<string>();
+  private readonly inFlightResearches = new Set<string>();
 
   constructor(input: {
     outputRoot: string;
@@ -122,6 +126,8 @@ export class OperatorGuiService {
 
   async close(): Promise<void> {
     this.drafts.clear();
+    this.inFlightDrafts.clear();
+    this.inFlightResearches.clear();
     await rm(this.draftRoot, { recursive: true, force: true });
   }
 
@@ -156,12 +162,57 @@ export class OperatorGuiService {
   }
 
   async runNew(draftId: string): Promise<ResearchRunExecution> {
-    const draft = this.requireDraft(draftId, 'new');
-    return this.deps.runNew(draft.path, this.outputRoot, this.env);
+    const draft = this.beginDraft(draftId, 'new');
+    try {
+      const result = await this.deps.runNew(draft.path, this.outputRoot, this.env);
+      if (result.result.researchId !== null) await this.consumeDraft(draftId, draft);
+      else this.inFlightDrafts.delete(draftId);
+      return result;
+    } catch (error) {
+      this.inFlightDrafts.delete(draftId);
+      throw error;
+    }
   }
 
   async status(researchId: string): Promise<ResearchStatusWithHistoricalPresence> {
     return this.deps.buildStatus({ outputRoot: this.outputRoot, targetRunId: researchId });
+  }
+
+  async clusters(researchId: string): Promise<GuiClusterList> {
+    const status = await this.status(researchId);
+    const current = currentEnrichment(status);
+    if (current === null) return [];
+    const store = RunStore.openReadOnly(join(status.researchDirectory, current.directoryName, 'enrichment.sqlite'));
+    try {
+      return store.loadKeywordClusters(current.enrichmentId)
+        .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
+    } finally {
+      store.close();
+    }
+  }
+
+  async finalistEvidence(researchId: string): Promise<Record<string, unknown> | null> {
+    const status = await this.status(researchId);
+    const current = currentEnrichment(status);
+    if (current === null) return null;
+    const path = join(status.researchDirectory, current.directoryName, 'finalist-evidence-matrix.json');
+    let text: string;
+    try {
+      text = await readFile(path, 'utf8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to read current finalist evidence ${path}.`, { cause: error });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch (error) {
+      throw new ResearchError('OUTPUT_WRITE_ERROR', `Current finalist evidence is invalid JSON: ${path}.`, { cause: error });
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.matrix) || !Array.isArray(parsed.matrix.finalists)) {
+      throw new ResearchError('OUTPUT_WRITE_ERROR', `Current finalist evidence has an invalid artifact shape: ${path}.`);
+    }
+    return parsed;
   }
 
   async planExisting(
@@ -191,17 +242,29 @@ export class OperatorGuiService {
   }
 
   async runExisting(researchId: string, draftId: string | null): Promise<ResearchRunExecution> {
-    if (draftId === null) {
-      return this.deps.runExisting(researchId, null, this.outputRoot, this.env);
+    if (this.inFlightResearches.has(researchId)) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Research ${researchId} is already executing through this GUI.`);
     }
-    const draft = this.requireDraft(draftId, 'continuation');
-    if (draft.researchId !== researchId) {
+    const draft = draftId === null ? null : this.beginDraft(draftId, 'continuation');
+    if (draft !== null && draft.researchId !== researchId) {
+      this.inFlightDrafts.delete(draftId as string);
       throw new ResearchError(
         'INPUT_SCHEMA_ERROR',
         `GUI continuation draft targets research ${draft.researchId}, not ${researchId}.`,
       );
     }
-    return this.deps.runExisting(researchId, draft.path, this.outputRoot, this.env);
+
+    this.inFlightResearches.add(researchId);
+    try {
+      const result = await this.deps.runExisting(researchId, draft?.path ?? null, this.outputRoot, this.env);
+      if (draft !== null && draftId !== null) await this.consumeDraft(draftId, draft);
+      return result;
+    } catch (error) {
+      if (draftId !== null) this.inFlightDrafts.delete(draftId);
+      throw error;
+    } finally {
+      this.inFlightResearches.delete(researchId);
+    }
   }
 
   async listResearches(): Promise<GuiResearchList> {
@@ -225,6 +288,18 @@ export class OperatorGuiService {
     return { researches, errors };
   }
 
+  private beginDraft<T extends StoredDraft['kind']>(
+    draftId: string,
+    kind: T,
+  ): Extract<StoredDraft, { kind: T }> {
+    if (this.inFlightDrafts.has(draftId)) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `GUI draft ${draftId} is already executing.`);
+    }
+    const draft = this.requireDraft(draftId, kind);
+    this.inFlightDrafts.add(draftId);
+    return draft;
+  }
+
   private requireDraft<T extends StoredDraft['kind']>(
     draftId: string,
     kind: T,
@@ -234,6 +309,12 @@ export class OperatorGuiService {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown or incompatible GUI draft: ${draftId}.`);
     }
     return draft as Extract<StoredDraft, { kind: T }>;
+  }
+
+  private async consumeDraft(draftId: string, draft: StoredDraft): Promise<void> {
+    this.inFlightDrafts.delete(draftId);
+    this.drafts.delete(draftId);
+    await rm(dirname(draft.path), { recursive: true, force: true }).catch(() => undefined);
   }
 
   private async materialize(
@@ -276,6 +357,22 @@ export async function listIndexedRunIds(outputRoot: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function currentEnrichment(
+  status: ResearchStatusWithHistoricalPresence,
+): ResearchStatusWithHistoricalPresence['enrichments'][number] | null {
+  if (status.currentEnrichmentId === null) return null;
+  const current = status.enrichments.find(
+    (item) => item.enrichmentId === status.currentEnrichmentId && item.isLatestForCurrentDiscovery,
+  );
+  if (current === undefined) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Current enrichment ${status.currentEnrichmentId} is missing from research ${status.researchId}.`,
+    );
+  }
+  return current;
+}
+
 function resolveGuiDraftPath(root: string, logicalPath: string): string {
   const portable = logicalPath.replaceAll('\\', '/');
   const segments = portable.split('/');
@@ -296,4 +393,8 @@ function resolveGuiDraftPath(root: string, logicalPath: string): string {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `GUI uploaded file escapes its draft root: ${logicalPath}.`);
   }
   return target;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
