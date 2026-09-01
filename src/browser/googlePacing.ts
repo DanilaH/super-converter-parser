@@ -1,28 +1,30 @@
 import type { BrowserCollectionTiming } from './collect.js';
 
 /**
- * Keeps the next Google navigation from becoming more aggressive merely because
- * Related lazy-mount work was moved earlier. The hold is context-local and can
- * naturally expire while post-collection work (for example Ahrefs) is running.
+ * Carries a conservative delay budget from an accelerated root collection to
+ * the next Google browser call. The budget does NOT expire while Ahrefs/cache/
+ * snapshot work runs: the legacy pipeline performed that same work after the
+ * slower collector, so allowing it to consume this budget would still make the
+ * next Google navigation earlier than before.
  */
 export class GoogleLegacyCadencePacer {
-  private notBeforeMs = 0;
+  private pendingDelayMs = 0;
 
-  observe(sample: BrowserCollectionTiming, observedAtMs: number): number {
+  observe(sample: BrowserCollectionTiming): number {
     const holdMs = conservativeLegacyHoldMs(sample);
     if (holdMs <= 0) return 0;
-    this.notBeforeMs = Math.max(this.notBeforeMs, observedAtMs + holdMs);
+    this.pendingDelayMs = Math.max(this.pendingDelayMs, holdMs);
     return holdMs;
   }
 
   async wait(params: {
-    now: () => number;
     sleep: (ms: number) => Promise<void>;
   }): Promise<number> {
-    const remainingMs = Math.max(0, this.notBeforeMs - params.now());
-    if (remainingMs <= 0) return 0;
-    await params.sleep(remainingMs);
-    return remainingMs;
+    const delayMs = this.pendingDelayMs;
+    if (delayMs <= 0) return 0;
+    await params.sleep(delayMs);
+    this.pendingDelayMs = 0;
+    return delayMs;
   }
 }
 
@@ -30,11 +32,10 @@ export class GoogleLegacyCadencePacer {
  * PERF-B only moves the root Related lazy-mount trigger (scroll) ahead of main
  * Surfer completion. The terminal Related reader still starts after main Surfer
  * plus the historical 1000 ms warm-up, so missing/error deadlines do not move
- * earlier. Moving the mount trigger earlier can at most recover roughly the
- * amount of time main Surfer itself was pending. Holding that full main-Surfer
- * duration after collection is intentionally conservative: it prevents this
- * optimization from increasing Google navigation cadence by default. Ahrefs or
- * other work between browser calls can consume the hold without extra sleeping.
+ * earlier. Moving the mount trigger earlier can save at most roughly the amount
+ * of time main Surfer itself was pending. Paying that full duration before the
+ * next Google browser call is intentionally conservative and prevents this
+ * optimization itself from increasing Google request cadence.
  *
  * Expanded children do not read Related, and related-only cache repair keeps its
  * old scroll + 1000 ms + reader sequence, so neither needs compensation.
