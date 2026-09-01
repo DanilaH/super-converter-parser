@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ResearchStatusWithHistoricalPresence } from '../research/statusWithHistoricalPresence.js';
-import type { ResolvedOperatorContinuation } from './resolve.js';
-import { buildExistingResearchPlan, renderResearchPlan } from './planner.js';
 import { ResearchError } from '../shared/errors.js';
+import { buildPersistedOperatorConfig } from './provenance.js';
+import { buildNewResearchPlan, type LoadedOperatorResearchConfig, type ResolvedOperatorContinuation } from './resolve.js';
+import { buildExistingResearchPlan, renderResearchPlan } from './planner.js';
 
 function status(overrides: Partial<ResearchStatusWithHistoricalPresence> = {}): ResearchStatusWithHistoricalPresence {
   return {
@@ -38,6 +39,20 @@ function entrantCoverage(present: boolean): NonNullable<ResearchStatusWithHistor
   };
 }
 
+function configured(target: 'discovery' | 'enrichment' | 'finalization', modules: Array<'clusters' | 'query_suggestions'> = ['clusters']) {
+  const config = {
+    version: 1 as const,
+    research: { label: 'configured', input: { type: 'seeds' as const, path: 'seeds.csv' } },
+    workflow: { target },
+    ...(target === 'discovery' ? {} : { enrichment: { modules } }),
+    ...(target === 'finalization'
+      ? { finalization: { historyPolicy: { youngDomainMaxAgeDays: 730, recentWebPresenceMaxAgeDays: 1095, repurposeGapMinDays: 365 } } }
+      : {}),
+  };
+  const loaded = { config, plan: buildNewResearchPlan(config, '/tmp/research.config.json') } as LoadedOperatorResearchConfig;
+  return buildPersistedOperatorConfig(loaded);
+}
+
 test('existing research planner refuses mismatched continuation research id', () => {
   assert.throws(() => buildExistingResearchPlan(status(), continuation({ type: 'shortlist', path: 'shortlist.csv' }, 'other')), (error: unknown) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR');
 });
@@ -50,13 +65,54 @@ test('legacy existing research does not invent missing operator config or premat
   assert.match(renderResearchPlan(plan), /will not infer downstream research intent/i);
 });
 
-test('completed enrichment exposes the finalist gate without inventing finalization policy', () => {
+test('persisted discovery-only config marks the workflow complete after discovery', () => {
+  const plan = buildExistingResearchPlan(status(), null, configured('discovery'));
+  assert.equal(plan.configAvailability, 'operator_config');
+  assert.deepEqual(plan.stages.map((item) => [item.id, item.state]), [['discovery', 'already_satisfied'], ['enrichment', 'not_requested'], ['finalization', 'not_requested']]);
+  assert.deepEqual(plan.unresolvedHumanRequirements, []);
+  assert.equal(plan.expectedStopPoint, 'complete');
+  assert.match(renderResearchPlan(plan), /persisted immutable provenance/i);
+});
+
+test('persisted enrichment config becomes ready without reconstructing flags', () => {
+  const plan = buildExistingResearchPlan(status(), null, configured('enrichment'));
+  assert.equal(plan.stages[1]?.state, 'ready');
+  assert.equal(plan.stages[2]?.state, 'not_requested');
+  assert.equal(plan.expectedStopPoint, 'enrichment');
+  assert.deepEqual(plan.unresolvedHumanRequirements, []);
+});
+
+test('configured enrichment that needs non-cluster evidence remains blocked on explicit shortlist', () => {
+  const persisted = configured('enrichment', ['clusters', 'query_suggestions']);
+  const blocked = buildExistingResearchPlan(status(), null, persisted);
+  assert.equal(blocked.stages[1]?.state, 'blocked');
+  assert.deepEqual(blocked.unresolvedHumanRequirements, ['shortlist']);
+
+  const supplied = buildExistingResearchPlan(status(), continuation({ type: 'shortlist', path: 'shortlist.csv' }), persisted);
+  assert.equal(supplied.stages[1]?.state, 'ready');
+  assert.deepEqual(supplied.unresolvedHumanRequirements, []);
+});
+
+test('completed enrichment exposes the finalist gate without inventing finalization policy for legacy research', () => {
   const current = status({
     enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
     finalization: { state: 'not_started', enrichmentId: 'enrich-1', finalistCount: 0, currentDecisionCount: 0, allFinalistsHaveCurrentDecisions: false, finalistMatrixPublished: false, artifactWarning: null },
   });
   const plan = buildExistingResearchPlan(current, null);
   assert.deepEqual(plan.unresolvedHumanRequirements, ['operator_config', 'finalist_scope']);
+});
+
+test('configured finalization exposes finalist scope after completed enrichment without an operator-config blocker', () => {
+  const current = status({
+    enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
+    finalization: { state: 'not_started', enrichmentId: 'enrich-1', finalistCount: 0, currentDecisionCount: 0, allFinalistsHaveCurrentDecisions: false, finalistMatrixPublished: false, artifactWarning: null },
+  });
+  const plan = buildExistingResearchPlan(current, null, configured('finalization'));
+  assert.deepEqual(plan.unresolvedHumanRequirements, ['finalist_scope']);
+  assert.equal(plan.stages[2]?.state, 'blocked');
+  const supplied = buildExistingResearchPlan(current, continuation({ type: 'finalists_all' }), configured('finalization'));
+  assert.equal(supplied.stages[2]?.state, 'ready');
+  assert.deepEqual(supplied.unresolvedHumanRequirements, []);
 });
 
 test('explicit finalist scope can advance one legacy finalization step without pretending config is recovered', () => {
