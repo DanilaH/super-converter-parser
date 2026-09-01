@@ -134,9 +134,9 @@ async function main(): Promise<void> {
   await runRepresentativeQueries({
     outputRoot: resolveOutputRoot(args.outputRoot),
     enrichmentId: args.enrichmentId,
-    targetCount: args.targetCount,
-    overridesPath: args.overridesPath,
-    selectedClusterIds: args.selectedClusterIds,
+    ...(args.targetCount === undefined ? {} : { targetCount: args.targetCount }),
+    ...(args.overridesPath === undefined ? {} : { overridesPath: args.overridesPath }),
+    ...(args.selectedClusterIds === undefined ? {} : { selectedClusterIds: args.selectedClusterIds }),
     allClusters: args.allClusters,
   });
 }
