@@ -222,14 +222,7 @@ export function buildExistingResearchPlan(
 
 export function renderResearchPlan(plan: ResearchExecutionPlan): string {
   const lines = ['Research plan'];
-  if (plan.stateContext.kind === 'new') {
-    const semantics = plan.semantics;
-    lines.push(`  Target: new research (${semantics.research.label})`);
-    lines.push(`  Config: ${plan.configPath}`);
-    lines.push(`  Workflow target: ${semantics.workflow.target}`);
-    lines.push(`  Market: ${semantics.research.market} | Google hl/gl: ${semantics.research.googleHl}/${semantics.research.googleGl}`);
-    lines.push(`  Input: ${semantics.research.input.type} ${semantics.research.input.logicalPath}`);
-  } else {
+  if (isExistingPlan(plan)) {
     lines.push(`  Target: existing research ${plan.stateContext.researchId}`);
     lines.push(`  Discovery: ${plan.stateContext.currentDiscoveryRunId}`);
     lines.push(`  Enrichment: ${plan.stateContext.currentEnrichmentId ?? 'none'}`);
@@ -240,6 +233,13 @@ export function renderResearchPlan(plan: ResearchExecutionPlan): string {
     } else {
       lines.push('  Operator config: unavailable for this legacy research');
     }
+  } else {
+    const semantics = plan.semantics;
+    lines.push(`  Target: new research (${semantics.research.label})`);
+    lines.push(`  Config: ${plan.configPath}`);
+    lines.push(`  Workflow target: ${semantics.workflow.target}`);
+    lines.push(`  Market: ${semantics.research.market} | Google hl/gl: ${semantics.research.googleHl}/${semantics.research.googleGl}`);
+    lines.push(`  Input: ${semantics.research.input.type} ${semantics.research.input.logicalPath}`);
   }
 
   lines.push('', 'Stages');
@@ -263,12 +263,16 @@ export function renderResearchPlan(plan: ResearchExecutionPlan): string {
   else for (const requirement of plan.unresolvedHumanRequirements) lines.push(`  - ${requirement}`);
 
   lines.push('', `Expected stop point: ${plan.expectedStopPoint}`);
-  if (plan.stateContext.kind === 'existing') {
+  if (isExistingPlan(plan)) {
     lines.push(`Durable next action: ${plan.durableState.nextAction.code} — ${plan.durableState.nextAction.message}`);
     if (plan.continuation) lines.push(`Continuation: ${plan.continuation.actionType} (${plan.continuation.sourcePath})`);
     for (const warning of plan.warnings) lines.push(`Warning: ${warning}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+function isExistingPlan(plan: ResearchExecutionPlan): plan is ExistingResearchExecutionPlan {
+  return 'durableState' in plan;
 }
 
 function validateContinuationAgainstDurableState(
