@@ -83,7 +83,7 @@ test('preset-backed source config may inherit stage-required fields before effec
   assert.equal(source.finalization?.historyPolicy?.youngDomainMaxAgeDays, 365);
   expectSchemaError(
     () => validateOperatorResearchConfig(source),
-    '$.enrichment is required',
+    '$.preset',
   );
 });
 
