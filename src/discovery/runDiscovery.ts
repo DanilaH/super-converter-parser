@@ -30,6 +30,7 @@ import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../run
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { ResearchError } from '../shared/errors.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import { RunningSnapshotCadence } from './snapshotCadence.js';
 import {
   DiscoveryTimingRecorder,
   renderDiscoveryTimingSummary,
@@ -140,6 +141,7 @@ export async function runDiscovery(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DiscoveryRunResult> {
   const timingRecorder = new DiscoveryTimingRecorder();
+  const snapshotCadence = new RunningSnapshotCadence();
   const requestInput = request.input;
   const retryFailed = request.retryFailed ?? false;
   const forceRefresh = request.forceRefresh ?? false;
@@ -426,9 +428,6 @@ export async function runDiscovery(
         try {
           await request.onFreshResearchInitialized({ runId, researchDirectory, discoveryDirectory: runDirectory });
         } catch (error) {
-          // This callback is part of fresh durable initialization (Config v1 uses
-          // it for immutable operator provenance). It must fail before browser
-          // work and must not leave an indexed research whose intent was lost.
           store.close();
           store = null;
           await rollbackFreshInitialization(outputRoot, runId, researchDirectory);
@@ -511,8 +510,33 @@ export async function runDiscovery(
         snapshotAhrefs,
         snapshotScoring,
       ) => {
+        // Retry reconciliation is durable state maintenance and remains per
+        // engine checkpoint even when the expensive derived exports are skipped.
         reconcileCompletedKeywordRetries(snapshotStore, snapshotRunId);
-        await writeSnapshots(snapshotStore, snapshotRunId, snapshotDirectory, snapshotState, snapshotAhrefs, snapshotScoring);
+
+        const decision = snapshotCadence.decide(snapshotState, Date.now());
+        if (!decision.publish) {
+          timingRecorder.recordSnapshot(snapshotState, decision.reason, false, 0);
+          return;
+        }
+
+        const snapshotStartedAt = Date.now();
+        await writeSnapshots(
+          snapshotStore,
+          snapshotRunId,
+          snapshotDirectory,
+          snapshotState,
+          snapshotAhrefs,
+          snapshotScoring,
+        );
+        const snapshotFinishedAt = Date.now();
+        snapshotCadence.markPublished(snapshotFinishedAt);
+        timingRecorder.recordSnapshot(
+          snapshotState,
+          decision.reason,
+          true,
+          snapshotFinishedAt - snapshotStartedAt,
+        );
       },
       cache: {
         store: cacheStore,
@@ -571,7 +595,9 @@ export async function runDiscovery(
       if (store && runId) {
         try {
           store.setRunState(runId, 'paused');
+          const snapshotStartedAt = Date.now();
           await writeSnapshots(store, runId, runDirectory, 'paused');
+          timingRecorder.recordSnapshot('paused', 'terminal', true, Date.now() - snapshotStartedAt);
         } catch {
           // Best effort: the run may not exist yet if cancelled before initialization.
         }
