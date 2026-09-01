@@ -276,6 +276,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     options.ahrefs?.client && options.cache?.store instanceof CacheStore,
   );
   let prefetched: PrefetchedCollection | null = null;
+  // Access through a function prevents TypeScript from treating the captured
+  // mutable slot as permanently null; startBrowserLookahead mutates it.
+  const readPrefetched = (): PrefetchedCollection | null => prefetched;
 
   const resolvePrimaryAccess = (keyword: StoredKeyword): CacheResolution =>
     options.cache?.resolutions?.get(keyword.normalizedKeyword) ??
@@ -313,18 +316,22 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     // is consumed later. If the process pauses afterwards, accounting still
     // reflects the real browser attempt that already happened.
     store.incrementLookups(runId);
-    const settled = collect(storedKeywordToRecord(next), debugRoot, signal).then<SettledPrefetch>(
-      (result) => ({ kind: 'result', result }),
-      (error: unknown) => ({ kind: 'error', error }),
+    const settled: Promise<SettledPrefetch> = collect(
+      storedKeywordToRecord(next),
+      debugRoot,
+      signal,
+    ).then(
+      (result): SettledPrefetch => ({ kind: 'result', result }),
+      (error: unknown): SettledPrefetch => ({ kind: 'error', error }),
     );
     prefetched = { keywordIdx: next.idx, resolution: nextResolution, settled };
   };
 
   const discardPrefetchedOnPause = async (): Promise<void> => {
-    if (prefetched === null) return;
-    const discarded = prefetched;
+    const activePrefetch = readPrefetched();
+    if (activePrefetch === null) return;
     prefetched = null;
-    const settled = await discarded.settled;
+    const settled = await activePrefetch.settled;
     if (
       settled.kind === 'error' &&
       !(settled.error instanceof ResearchError && settled.error.code === 'RUN_PAUSED')
@@ -364,13 +371,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     // expansion rows appended to the projection during this pass.
     if (!stored) break;
 
-    if (prefetched !== null && prefetched.keywordIdx !== stored.idx) {
+    const queuedPrefetch = readPrefetched();
+    if (queuedPrefetch !== null && queuedPrefetch.keywordIdx !== stored.idx) {
       throw new ResearchError(
         'DB_ERROR',
-        `Browser lookahead expected keyword idx ${prefetched.keywordIdx} next, but queue selected ${stored.idx}.`,
+        `Browser lookahead expected keyword idx ${queuedPrefetch.keywordIdx} next, but queue selected ${stored.idx}.`,
       );
     }
-    const currentPrefetch = prefetched;
+    const currentPrefetch = queuedPrefetch;
 
     const idx = stored.idx;
     stored.status = 'running';
@@ -499,15 +507,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
       try {
         for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
+          let attemptResult: CollectionResult;
           if (attempt === 1 && currentPrefetch !== null) {
             const settled = await currentPrefetch.settled;
             if (settled.kind === 'error') throw settled.error;
-            result = settled.result;
+            attemptResult = settled.result;
           } else {
             store.incrementLookups(runId);
-            result = await collect(storedKeywordToRecord(stored), debugRoot, signal);
+            attemptResult = await collect(storedKeywordToRecord(stored), debugRoot, signal);
           }
-          const record = result.record;
+          result = attemptResult;
+          const record = attemptResult.record;
           if (!isTerminalKeywordStatus(record.status)) {
             throw new ResearchError(
               'DB_ERROR',
@@ -546,8 +556,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       }
 
       if (outcome !== null) break;
+      if (result === null) {
+        throw new ResearchError('DB_ERROR', `No collection result for "${stored.normalizedKeyword}".`);
+      }
 
-      const record = result?.record as KeywordRecord;
+      const record = result.record;
       // A clean terminal result cannot newly trip the breaker, so starting the
       // next known-fresh browser request here is safe. Ahrefs below remains
       // serial and unchanged, but its network + rate-limit waits overlap it.
@@ -574,7 +587,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             ? 'expired'
             : 'miss'
         : null;
-      const serpRows = result?.serpRows ?? [];
+      const serpRows = result.serpRows;
       const missSourceByDomain = await applyDomainRatings({
         serpRows,
         ahrefs: options.ahrefs?.client ?? null,
@@ -594,7 +607,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       if (record.surfer) {
         const volume = formatVolume(record.surfer.volume);
         const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
-        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${formatOrganicResultCount(record, result?.serpRows.length ?? 0)}`);
+        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${formatOrganicResultCount(record, result.serpRows.length)}`);
       } else {
         logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
       }
@@ -603,7 +616,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         logger(`  ⚠ SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
       }
 
-      if (result?.debugArtifactPath) {
+      if (result.debugArtifactPath) {
         logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
       }
 
@@ -617,7 +630,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             normalizedKeyword: record.normalizedKeyword,
             identity,
             record,
-            serpRows: result?.serpRows ?? [],
+            serpRows: result.serpRows,
             collectedAt,
             storedAt: collectedAt,
             expiresAt: new Date(
@@ -642,11 +655,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           cache: options.cache,
           identity,
           keyword: record,
-          related: result?.related ?? { status: 'not_attempted', error: null, rows: [] },
+          related: result.related,
           config,
           collectedAt,
         });
-        if (result) reportRelatedOutcome(result, record.normalizedKeyword, logger);
+        reportRelatedOutcome(result, record.normalizedKeyword, logger);
 
         // Expansion queues depth-one related candidates for Google collection.
         // It triggers only when expansion is enabled and the related outcome is
@@ -655,7 +668,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         if (
           config.expansion.enabled &&
           config.expansion.depth >= 1 &&
-          result &&
           result.related.status === 'ok'
         ) {
           added = applySurferExpansion({
@@ -672,7 +684,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
           }
         }
-        store.recordRelatedKeywords(runId, idx, record.keyword, result?.related ?? { status: 'not_attempted', error: null, rows: [] }, new Set(added));
+        store.recordRelatedKeywords(runId, idx, record.keyword, result.related, new Set(added));
       }
     }
 
