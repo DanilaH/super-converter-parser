@@ -26,6 +26,7 @@ import {
   saveParserFailureArtifacts,
 } from '../diagnostics/artifacts.js';
 import { keywordSlug } from '../runs/run.js';
+import { GoogleLegacyCadencePacer } from './googlePacing.js';
 
 export type SurferRelatedOutcome = {
   status: 'not_attempted' | 'ok' | 'empty' | 'error';
@@ -71,6 +72,7 @@ export type BrowserCollectionTiming = {
   outcome: 'completed' | 'partial' | 'failed' | 'paused';
   captchaEncountered: boolean;
   relatedOutcome: SurferRelatedOutcome['status'] | null;
+  googlePacingMs: number;
   pageCreateMs: number;
   navigationMs: number | null;
   captchaMs: number | null;
@@ -83,6 +85,8 @@ export type BrowserCollectionTiming = {
 
 export type BrowserCollectionTimingSink = (timing: BrowserCollectionTiming) => void;
 
+const GOOGLE_CADENCE_PACERS = new WeakMap<BrowserContext, GoogleLegacyCadencePacer>();
+
 export async function collectKeyword(
   context: BrowserContext,
   config: ResearchConfig,
@@ -91,6 +95,8 @@ export async function collectKeyword(
   signal: CancellationSignal = NEVER_CANCELLED,
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<CollectionResult> {
+  const pacer = getGoogleCadencePacer(context);
+  const googlePacingMs = await pacer.wait({ now: Date.now, sleep });
   const totalStartedAt = Date.now();
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
@@ -145,8 +151,8 @@ export async function collectKeyword(
 
     // Main Surfer and Surfer Related are independent observations from the same
     // already-loaded Google page. Start them together so a slow related widget
-    // does not add its entire wait after the main widget wait. Google navigation
-    // count/cadence and downstream SERP observation order remain unchanged.
+    // does not add its entire wait after the main widget wait. The context-level
+    // pacer above preserves a conservative pre-PERF-B Google navigation cadence.
     const mainSurferTask = collectMainSurferComponent(page, config);
     const relatedSurferTask = isRoot
       ? collectRelatedSurferComponent(page, config)
@@ -292,7 +298,7 @@ export async function collectKeyword(
       debugArtifactPath: null,
     };
   } finally {
-    emitTiming(timingSink, {
+    const timing: BrowserCollectionTiming = {
       kind: 'primary',
       keyword: keyword.keyword,
       normalizedKeyword: keyword.normalizedKeyword,
@@ -300,6 +306,7 @@ export async function collectKeyword(
       outcome,
       captchaEncountered,
       relatedOutcome: relatedOutcomeForTiming,
+      googlePacingMs,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -308,7 +315,9 @@ export async function collectKeyword(
       serpParseMs,
       locationParseMs,
       totalMs: Date.now() - totalStartedAt,
-    });
+    };
+    pacer.observe(timing, Date.now());
+    emitTiming(timingSink, timing);
     await page.close().catch(() => undefined);
   }
 }
@@ -321,6 +330,8 @@ export async function collectRelatedKeyword(
   signal: CancellationSignal = NEVER_CANCELLED,
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<RelatedCollectionResult> {
+  const pacer = getGoogleCadencePacer(context);
+  const googlePacingMs = await pacer.wait({ now: Date.now, sleep });
   const totalStartedAt = Date.now();
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
@@ -398,7 +409,7 @@ export async function collectRelatedKeyword(
     outcome = 'failed';
     return { related: { status: 'not_attempted', error: null, rows: [] }, debugArtifactPath: null };
   } finally {
-    emitTiming(timingSink, {
+    const timing: BrowserCollectionTiming = {
       kind: 'related_only',
       keyword: keyword.keyword,
       normalizedKeyword: keyword.normalizedKeyword,
@@ -406,6 +417,7 @@ export async function collectRelatedKeyword(
       outcome,
       captchaEncountered,
       relatedOutcome: relatedOutcomeForTiming,
+      googlePacingMs,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -414,7 +426,9 @@ export async function collectRelatedKeyword(
       serpParseMs: null,
       locationParseMs: null,
       totalMs: Date.now() - totalStartedAt,
-    });
+    };
+    pacer.observe(timing, Date.now());
+    emitTiming(timingSink, timing);
     await page.close().catch(() => undefined);
   }
 }
@@ -486,6 +500,14 @@ async function readDetectedLocation(page: Page): Promise<string | null> {
   }
 }
 
+function getGoogleCadencePacer(context: BrowserContext): GoogleLegacyCadencePacer {
+  const existing = GOOGLE_CADENCE_PACERS.get(context);
+  if (existing) return existing;
+  const created = new GoogleLegacyCadencePacer();
+  GOOGLE_CADENCE_PACERS.set(context, created);
+  return created;
+}
+
 function emitTiming(sink: BrowserCollectionTimingSink | undefined, timing: BrowserCollectionTiming): void {
   try {
     sink?.(timing);
@@ -498,4 +520,8 @@ function toComponentError(error: unknown, fallbackCode: ResearchErrorCode): Comp
   if (error instanceof ResearchError) return { code: error.code, message: error.message };
   const message = error instanceof Error ? error.message : String(error);
   return { code: fallbackCode, message };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
