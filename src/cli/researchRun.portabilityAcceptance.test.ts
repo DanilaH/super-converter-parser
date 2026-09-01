@@ -65,23 +65,27 @@ test('config-first semantic fingerprints are machine-independent and immutable p
   assert.deepEqual(planA.stageFingerprints, planB.stageFingerprints);
   assert.notEqual(planA.semantics.research.input.resolvedPath, planB.semantics.research.input.resolvedPath);
 
+  const observedRuntimeConfigs: ResearchConfig[] = [];
   const cliDeps: CliDeps = {
     connect: async () => ({ contexts: () => [{}], close: async () => undefined }) as unknown as Browser,
     preflight: async () => undefined,
-    collect: async (_context, config, record) => completed(record, config),
+    collect: async (_context, config, record) => {
+      observedRuntimeConfigs.push(config);
+      return completed(record, config);
+    },
   };
   const deps = { ...DEFAULT_RESEARCH_RUN_DEPS, cliDeps };
 
   const envA = {
     CACHE_DB_PATH: join(machineA, 'runtime', 'cache.sqlite'),
-    RESEARCH_CDP_URL: 'http://127.0.0.1:19999',
+    CDP_URL: 'http://127.0.0.1:19999',
     SURFER_WAIT_MS: '12345',
     AHREFS_API_KEY: SECRET_SENTINEL,
     AHREFS_ENDPOINT: 'http://127.0.0.1:9',
   } as NodeJS.ProcessEnv;
   const envB = {
     CACHE_DB_PATH: join(machineB, 'different-runtime', 'cache.sqlite'),
-    RESEARCH_CDP_URL: 'http://127.0.0.1:29999',
+    CDP_URL: 'http://127.0.0.1:29999',
     SURFER_WAIT_MS: '54321',
   } as NodeJS.ProcessEnv;
 
@@ -91,6 +95,11 @@ test('config-first semantic fingerprints are machine-independent and immutable p
   assert.equal(second.exitCode, 0);
   assert.equal(first.result.effectiveConfigFingerprint, second.result.effectiveConfigFingerprint);
   assert.deepEqual(first.result.stageFingerprints, second.result.stageFingerprints);
+  assert.equal(observedRuntimeConfigs.length, 2);
+  assert.equal(observedRuntimeConfigs[0]?.browser.cdpUrl, envA.CDP_URL);
+  assert.equal(observedRuntimeConfigs[0]?.browser.surferWaitTimeoutMs, 12345);
+  assert.equal(observedRuntimeConfigs[1]?.browser.cdpUrl, envB.CDP_URL);
+  assert.equal(observedRuntimeConfigs[1]?.browser.surferWaitTimeoutMs, 54321);
 
   const operatorConfigPath = first.result.operatorConfigPath;
   assert.ok(operatorConfigPath);
@@ -98,7 +107,7 @@ test('config-first semantic fingerprints are machine-independent and immutable p
   assert.equal(persisted.includes(SECRET_SENTINEL), false);
   assert.equal(persisted.includes(machineA), false);
   assert.equal(persisted.includes(envA.CACHE_DB_PATH as string), false);
-  assert.equal(persisted.includes(envA.RESEARCH_CDP_URL as string), false);
+  assert.equal(persisted.includes(envA.CDP_URL as string), false);
   assert.equal(persisted.includes('12345'), false);
 
   const persistedDirectory = dirname(operatorConfigPath);
