@@ -331,6 +331,12 @@ function validateContinuationAgainstDurableState(
     if (!hasCurrentEntrantCohort(status)) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', 'A decisions continuation requires a current entrant cohort.');
     }
+    if (!status.finalization.finalistMatrixPublished) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'A decisions continuation requires a current finalist evidence matrix; finish upstream finalization evidence first.',
+      );
+    }
   }
   if (action === 'publication_override' && !status.finalization.finalistMatrixPublished) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'A publication override requires a current finalist evidence matrix.');
