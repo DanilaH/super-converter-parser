@@ -18,6 +18,10 @@ import {
   type ConfiguredEnrichmentResult,
 } from '../enrichment/configuredRun.js';
 import type { CancellationSignal } from '../enrichment/types.js';
+import {
+  runConfiguredFinalization,
+  type ConfiguredFinalizationResult,
+} from '../finalization/configuredRun.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { acquireResearchExecutionLock } from '../operatorConfig/executionLock.js';
 import { buildExistingResearchPlan, type ExistingResearchExecutionPlan } from '../operatorConfig/planner.js';
@@ -53,6 +57,8 @@ export type ResearchRunWorkflowState =
   | 'enrichment_paused'
   | 'enrichment_failed'
   | 'awaiting_finalization'
+  | 'awaiting_finalist_scope'
+  | 'awaiting_decisions'
   | 'blocked';
 
 export type ResearchRunMachineResultV1 = {
@@ -63,6 +69,8 @@ export type ResearchRunMachineResultV1 = {
   discoveryState: string | null;
   enrichmentId: string | null;
   enrichmentState: string | null;
+  finalizationState: string | null;
+  publicationId: string | null;
   workflowTarget: 'discovery' | 'enrichment' | 'finalization';
   workflowState: ResearchRunWorkflowState;
   stopPoint: 'discovery' | 'enrichment' | 'finalization' | 'complete';
@@ -86,6 +94,7 @@ export type ResearchRunDeps = {
   acquireExecutionLock: typeof acquireResearchExecutionLock;
   runDiscovery: typeof runDiscovery;
   runConfiguredEnrichment: typeof runConfiguredEnrichment;
+  runConfiguredFinalization: typeof runConfiguredFinalization;
   cliDeps: CliDeps;
   writeProvenance: typeof writeOperatorConfigProvenance;
 };
@@ -99,6 +108,7 @@ export const DEFAULT_RESEARCH_RUN_DEPS: ResearchRunDeps = {
   acquireExecutionLock: acquireResearchExecutionLock,
   runDiscovery,
   runConfiguredEnrichment,
+  runConfiguredFinalization,
   cliDeps: DEFAULT_CLI_DEPS,
   writeProvenance: writeOperatorConfigProvenance,
 };
@@ -174,14 +184,14 @@ export async function runResearchFromConfig(
     return { exitCode: EXIT_OK, result: discoveryOnlyMachineResult(loaded, discovery) };
   }
 
-  return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
+  return continueConfiguredWorkflow({
     researchId,
     outputRoot,
     continuation: null,
     deps,
     env,
     signal,
-  }));
+  });
 }
 
 export async function runResearchFromExisting(
@@ -195,7 +205,7 @@ export async function runResearchFromExisting(
   const outputRoot = resolveOutputRoot(outputRootValue, env);
   const status = await deps.buildStatus({ outputRoot, targetRunId: researchId });
   const continuation = continuationPath === null ? null : await deps.loadContinuation(continuationPath);
-  return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
+  return continueConfiguredWorkflow({
     researchId,
     outputRoot,
     continuation,
@@ -203,7 +213,7 @@ export async function runResearchFromExisting(
     env,
     signal,
     prefetchedStatus: status,
-  }));
+  });
 }
 
 export async function runResearchRunCli(
@@ -249,9 +259,6 @@ async function continueConfiguredWorkflow(args: ContinueWorkflowArgs): Promise<R
   const initialStatus = args.prefetchedStatus ?? await args.deps.buildStatus({ outputRoot, targetRunId: args.researchId });
   const releaseLock = await args.deps.acquireExecutionLock(outputRoot, initialStatus.researchId);
   try {
-    // The pre-lock status exists only to validate/locate the stable research. A
-    // competing process may have changed current generation state while we were
-    // acquiring the advisory lock, so all executable planning uses a fresh read.
     const status = await args.deps.buildStatus({ outputRoot, targetRunId: args.researchId });
     return continueConfiguredWorkflowUnderLock(args, outputRoot, status);
   } finally {
@@ -281,11 +288,7 @@ async function continueConfiguredWorkflowUnderLock(
   }
   if (enrichmentStage.state === 'already_satisfied') {
     if (provenance.semantics.workflow.target === 'finalization') {
-      const finalizationStage = plan.stages.find((stage) => stage.id === 'finalization');
-      if (finalizationStage?.state === 'already_satisfied' && plan.expectedStopPoint === 'complete') {
-        return { exitCode: EXIT_OK, result: { ...base, workflowState: 'completed', stopPoint: 'complete' } };
-      }
-      return { exitCode: EXIT_OK, result: { ...base, workflowState: 'awaiting_finalization', stopPoint: 'finalization' } };
+      return advanceConfiguredFinalization(args, outputRoot, status, provenance, plan, base);
     }
     return { exitCode: EXIT_OK, result: { ...base, workflowState: 'completed', stopPoint: 'complete' } };
   }
@@ -308,7 +311,15 @@ async function continueConfiguredWorkflowUnderLock(
   }
 
   if (enrichmentStage.state === 'blocked' && !resumableCurrent) {
-    return { exitCode: EXIT_INVALID_INPUT, result: { ...base, exitCode: EXIT_INVALID_INPUT, workflowState: 'blocked', stopPoint: plan.expectedStopPoint === 'discovery' ? 'discovery' : 'enrichment' } };
+    return {
+      exitCode: EXIT_INVALID_INPUT,
+      result: {
+        ...base,
+        exitCode: EXIT_INVALID_INPUT,
+        workflowState: 'blocked',
+        stopPoint: plan.expectedStopPoint === 'discovery' ? 'discovery' : 'enrichment',
+      },
+    };
   }
 
   const shortlistPath = args.continuation?.continuation.action.type === 'shortlist'
@@ -317,7 +328,7 @@ async function continueConfiguredWorkflowUnderLock(
 
   console.log('  Executing stage: enrichment');
   if (resumableCurrent) console.log(`  Resuming enrichment: ${currentEnrichment.enrichmentId}`);
-  const configured = await args.deps.runConfiguredEnrichment({
+  const configured = await withEnrichmentCancellation(args.signal, () => args.deps.runConfiguredEnrichment({
     outputRoot,
     researchId: status.researchId,
     researchDirectory: status.researchDirectory,
@@ -327,8 +338,174 @@ async function continueConfiguredWorkflowUnderLock(
     shortlistPath,
     env: args.env,
     signal: args.signal,
+  }));
+
+  if (configured.outcome.kind !== 'completed') {
+    return machineResultAfterEnrichment(base, provenance, configured);
+  }
+  if (provenance.semantics.workflow.target !== 'finalization') {
+    return machineResultAfterEnrichment(base, provenance, configured);
+  }
+
+  // A completed enrichment changes the durable parent for finalization. Re-read
+  // state and re-plan while still holding the same per-research execution lock.
+  // The shortlist continuation was consumed by enrichment and must not be
+  // reinterpreted as a finalization action.
+  const refreshedStatus = await args.deps.buildStatus({ outputRoot, targetRunId: status.researchId });
+  const finalizationContinuation = args.continuation?.continuation.action.type === 'shortlist'
+    ? null
+    : args.continuation;
+  const refreshedPlan = args.deps.buildExistingPlan(refreshedStatus, finalizationContinuation, provenance);
+  const refreshedBase = existingMachineResult(refreshedStatus, provenance, refreshedPlan);
+  return advanceConfiguredFinalization(
+    { ...args, continuation: finalizationContinuation },
+    outputRoot,
+    refreshedStatus,
+    provenance,
+    refreshedPlan,
+    refreshedBase,
+  );
+}
+
+async function advanceConfiguredFinalization(
+  args: ContinueWorkflowArgs,
+  outputRoot: string,
+  status: ResearchStatusWithHistoricalPresence,
+  provenance: PersistedOperatorConfigV1,
+  plan: ExistingResearchExecutionPlan,
+  base: ResearchRunMachineResultV1,
+): Promise<ResearchRunExecution> {
+  const finalizationStage = plan.stages.find((stage) => stage.id === 'finalization');
+  if (!finalizationStage) throw new ResearchError('OUTPUT_WRITE_ERROR', 'Existing research plan omitted the finalization stage.');
+
+  if (finalizationStage.state === 'not_requested') {
+    return { exitCode: EXIT_OK, result: { ...base, workflowState: 'completed', stopPoint: 'complete' } };
+  }
+  if (finalizationStage.state === 'already_satisfied') {
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'completed',
+        stopPoint: 'complete',
+        finalizationState: 'published',
+        unresolvedHumanRequirements: [],
+      },
+    };
+  }
+  if (plan.unresolvedHumanRequirements.includes('finalist_scope')) {
+    console.log('  Stop point: configured finalization requires an explicit finalist scope.');
+    console.log(`  Continue with: npm run research:run -- --research ${status.researchId} --continue <finalists-continuation.json>`);
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_finalist_scope',
+        stopPoint: 'finalization',
+        unresolvedHumanRequirements: ['finalist_scope'],
+      },
+    };
+  }
+  if (plan.unresolvedHumanRequirements.includes('human_decisions')) {
+    console.log('  Stop point: finalist evidence is current and requires explicit human decisions.');
+    console.log(`  Continue with: npm run research:run -- --research ${status.researchId} --continue <decisions-continuation.json>`);
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_decisions',
+        stopPoint: 'finalization',
+        finalizationState: 'awaiting_decisions',
+        unresolvedHumanRequirements: ['human_decisions'],
+      },
+    };
+  }
+  if (finalizationStage.state !== 'ready') {
+    return {
+      exitCode: EXIT_INVALID_INPUT,
+      result: {
+        ...base,
+        exitCode: EXIT_INVALID_INPUT,
+        workflowState: 'blocked',
+        stopPoint: 'finalization',
+      },
+    };
+  }
+  if (status.currentEnrichmentId === null) {
+    throw new ResearchError('OUTPUT_WRITE_ERROR', 'Ready finalization plan has no current enrichment id.');
+  }
+
+  console.log('  Executing stage: finalization');
+  const configured = await args.deps.runConfiguredFinalization({
+    outputRoot,
+    researchId: status.researchId,
+    researchDirectory: status.researchDirectory,
+    enrichmentId: status.currentEnrichmentId,
+    operatorConfig: provenance,
+    continuation: args.continuation,
+    status,
+    env: args.env,
   });
-  return machineResultAfterEnrichment(base, provenance, configured);
+  return machineResultAfterFinalization(base, configured);
+}
+
+function machineResultAfterFinalization(
+  base: ResearchRunMachineResultV1,
+  configured: ConfiguredFinalizationResult,
+): ResearchRunExecution {
+  if (configured.outcome.kind === 'awaiting_finalist_scope') {
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_finalist_scope',
+        stopPoint: 'finalization',
+        finalizationState: 'not_started',
+        publicationId: null,
+        unresolvedHumanRequirements: ['finalist_scope'],
+      },
+    };
+  }
+  if (configured.outcome.kind === 'awaiting_decisions') {
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_decisions',
+        stopPoint: 'finalization',
+        finalizationState: 'awaiting_decisions',
+        publicationId: null,
+        unresolvedHumanRequirements: ['human_decisions'],
+      },
+    };
+  }
+  if (
+    base.finalizationState === 'awaiting_decisions'
+    && configured.finalistEvidence === null
+  ) {
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_decisions',
+        stopPoint: 'finalization',
+        finalizationState: 'awaiting_decisions',
+        publicationId: configured.outcome.publicationId,
+        unresolvedHumanRequirements: ['human_decisions'],
+      },
+    };
+  }
+  return {
+    exitCode: EXIT_OK,
+    result: {
+      ...base,
+      workflowState: 'completed',
+      stopPoint: 'complete',
+      finalizationState: 'published',
+      publicationId: configured.outcome.publicationId,
+      unresolvedHumanRequirements: [],
+    },
+  };
 }
 
 function machineResultAfterEnrichment(
@@ -411,6 +588,8 @@ function discoveryOnlyMachineResult(
     discoveryState: discovery.state,
     enrichmentId: null,
     enrichmentState: null,
+    finalizationState: null,
+    publicationId: null,
     workflowTarget: target,
     workflowState: discovery.exitCode === EXIT_OK && target === 'discovery' ? 'completed' : 'blocked',
     stopPoint: discovery.exitCode === EXIT_OK && target === 'discovery' ? 'complete' : 'discovery',
@@ -439,6 +618,8 @@ function existingMachineResult(
     discoveryState: status.discovery.state,
     enrichmentId: currentEnrichment?.enrichmentId ?? null,
     enrichmentState: currentEnrichment?.state ?? null,
+    finalizationState: status.finalization.state,
+    publicationId: status.library.publicationId,
     workflowTarget: provenance.semantics.workflow.target,
     workflowState: 'blocked',
     stopPoint: plan.expectedStopPoint === 'complete' ? 'complete' : plan.expectedStopPoint,
@@ -496,10 +677,10 @@ function usage(): string {
     '  npm run research:run -- --research <research-id> [--continue continuation.json]',
     '  npm run research:run -- --research <research-id> --output-root <absolute-path> --json',
     '',
-    'New research executes discovery and continues into configured enrichment when no human input is missing.',
-    'Existing research is always selected by explicit stable research id; discovery run ids are resolved from durable state.',
-    'Shortlist-dependent enrichment stops with workflowState=awaiting_shortlist until a typed shortlist continuation is supplied.',
-    'Finalization execution remains gated for a later PR.',
+    'New research executes discovery and continues through configured stages until a human gate is reached.',
+    'Existing research is always selected by explicit stable research id; generated discovery/enrichment ids are resolved from durable state.',
+    'Shortlist, finalist scope, human decisions, traffic imports, representative overrides, and publication overrides use typed continuation files.',
+    'No shortlist, finalist scope, or human decision is invented automatically.',
     '',
   ].join('\n');
 }
