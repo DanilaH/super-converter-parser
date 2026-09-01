@@ -1,8 +1,16 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ResearchError } from '../shared/errors.js';
-import { validateOperatorResearchConfig, type OperatorResearchConfigV1 } from './contracts.js';
 import {
+  validateOperatorResearchConfig,
+  validateOperatorResearchConfigFile,
+  validateOperatorResearchPreset,
+  type OperatorResearchConfigFileV1,
+  type OperatorResearchConfigV1,
+  type OperatorResearchPresetV1,
+} from './contracts.js';
+import {
+  buildLoadedOperatorResearchConfig,
   buildNewResearchPlan,
   canonicalJson,
   type LoadedOperatorResearchConfig,
@@ -24,16 +32,20 @@ export type PortableResolvedResearchSemantics = Omit<ResolvedResearchSemantics, 
 
 export type PersistedOperatorConfigV1 = {
   version: 1;
-  authoredConfig: OperatorResearchConfigV1;
+  authoredConfig: OperatorResearchConfigV1 | OperatorResearchConfigFileV1;
+  preset?: OperatorResearchPresetV1;
   effectiveConfigFingerprint: string;
   stageFingerprints: StageSemanticFingerprints;
   semantics: PortableResolvedResearchSemantics;
 };
 
 export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfig): PersistedOperatorConfigV1 {
+  const authoredConfig = loaded.authoredConfig ?? loaded.config;
+  const preset = loaded.preset ?? null;
   return {
     version: OPERATOR_CONFIG_PROVENANCE_VERSION,
-    authoredConfig: loaded.config,
+    authoredConfig,
+    ...(preset === null ? {} : { preset }),
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     stageFingerprints: loaded.plan.stageFingerprints,
     semantics: toPortableSemantics(loaded.plan.semantics),
@@ -87,26 +99,56 @@ export function validatePersistedOperatorConfig(value: unknown, source: string):
   if (!isRecord(value) || value.version !== OPERATOR_CONFIG_PROVENANCE_VERSION) {
     throw corrupt(source);
   }
-  let authoredConfig: OperatorResearchConfigV1;
-  try {
-    authoredConfig = validateOperatorResearchConfig(value.authoredConfig);
-  } catch (error) {
-    throw new ResearchError(
-      'OUTPUT_WRITE_ERROR',
-      `Invalid authored operator config inside provenance: ${source}.`,
-      { cause: error },
+
+  let expected: PersistedOperatorConfigV1;
+  if (value.preset === undefined) {
+    let authoredConfig: OperatorResearchConfigV1;
+    try {
+      authoredConfig = validateOperatorResearchConfig(value.authoredConfig);
+    } catch (error) {
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Invalid authored operator config inside provenance: ${source}.`,
+        { cause: error },
+      );
+    }
+
+    // Legacy/no-preset v1 provenance is rebuilt exactly as before. The
+    // declaring path is synthetic because absolute machine paths are runtime
+    // data and are removed from the persisted projection.
+    const rebuilt = buildNewResearchPlan(authoredConfig, '/operator-config-provenance/research.config.json');
+    expected = buildPersistedOperatorConfig({ config: authoredConfig, plan: rebuilt });
+  } else {
+    let authoredConfig: OperatorResearchConfigFileV1;
+    let preset: OperatorResearchPresetV1;
+    try {
+      authoredConfig = validateOperatorResearchConfigFile(value.authoredConfig);
+      preset = validateOperatorResearchPreset(value.preset);
+    } catch (error) {
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Invalid preset operator provenance inside ${source}.`,
+        { cause: error },
+      );
+    }
+    if (authoredConfig.preset !== preset.id) {
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `${source} authored config references preset "${authoredConfig.preset ?? 'none'}" but persisted preset snapshot is "${preset.id}".`,
+      );
+    }
+    const rebuilt = buildLoadedOperatorResearchConfig(
+      authoredConfig,
+      preset,
+      '/operator-config-provenance/research.config.json',
     );
+    expected = buildPersistedOperatorConfig(rebuilt);
   }
 
-  // Rebuild the complete portable projection from the authored config. The
-  // declaring path is synthetic on purpose: resolved absolute input paths are
-  // runtime-only and are removed from persisted semantics/fingerprints.
-  const rebuilt = buildNewResearchPlan(authoredConfig, '/operator-config-provenance/research.config.json');
-  const expected = buildPersistedOperatorConfig({ config: authoredConfig, plan: rebuilt });
   if (canonicalJson(value) !== canonicalJson(expected)) {
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `${source} does not match the effective semantics/fingerprints derived from its authored config.`,
+      `${source} does not match the effective semantics/fingerprints derived from its immutable authored config and preset snapshot.`,
     );
   }
   return expected;
