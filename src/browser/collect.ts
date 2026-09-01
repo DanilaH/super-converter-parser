@@ -50,6 +50,19 @@ type ComponentError = {
   message: string;
 };
 
+type MainSurferComponent = {
+  volume: number | null;
+  cpc: number | null;
+  error: ComponentError | null;
+  durationMs: number;
+};
+
+type RelatedSurferComponent = {
+  related: SurferRelatedOutcome;
+  parserError: ComponentError | null;
+  durationMs: number;
+};
+
 export type BrowserCollectionTiming = {
   kind: 'primary' | 'related_only';
   keyword: string;
@@ -130,62 +143,38 @@ export async function collectKeyword(
       captchaMs = Date.now() - captchaStartedAt;
     }
 
+    // Main Surfer and Surfer Related are independent observations from the same
+    // already-loaded Google page. Start them together so a slow related widget
+    // does not add its entire wait after the main widget wait. Google navigation
+    // count/cadence and downstream SERP observation order remain unchanged.
+    const mainSurferTask = collectMainSurferComponent(page, config);
+    const relatedSurferTask = isRoot
+      ? collectRelatedSurferComponent(page, config)
+      : Promise.resolve<RelatedSurferComponent | null>(null);
+    const [mainSurfer, relatedComponent] = await Promise.all([mainSurferTask, relatedSurferTask]);
+
+    mainSurferMs = mainSurfer.durationMs;
+    relatedSurferMs = relatedComponent?.durationMs ?? null;
+    const volume = mainSurfer.volume;
+    const cpc = mainSurfer.cpc;
+    const related: SurferRelatedOutcome = relatedComponent?.related ?? {
+      status: 'not_attempted',
+      error: null,
+      rows: [],
+    };
+    relatedOutcomeForTiming = isRoot ? related.status : null;
+    const relatedParserError = relatedComponent?.parserError ?? null;
+
     const errors: ComponentError[] = [];
-    let volume: number | null = null;
-    let cpc: number | null = null;
+    if (mainSurfer.error) errors.push(mainSurfer.error);
+
     let serpRows: SerpResult[] = [];
     let serpStatus: SerpObservationStatus = 'not_fetched';
     let serpError: ComponentError | null = null;
 
-    const mainSurferStartedAt = Date.now();
-    try {
-      try {
-        const surfer = await readSurferResult(
-          page,
-          config.browser.surferWidgetSelector,
-          config.browser.surferWaitTimeoutMs,
-        );
-        volume = surfer.volume;
-        cpc = surfer.cpc;
-      } catch (error) {
-        const { code, message } = toComponentError(error, 'SURFER_PARSE_ERROR');
-        errors.push({ code, message });
-      }
-    } finally {
-      mainSurferMs = Date.now() - mainSurferStartedAt;
-    }
-
-    let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
-    let relatedParserError: ComponentError | null = null;
-    if (isRoot) {
-      const relatedStartedAt = Date.now();
-      try {
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
-        await page.waitForTimeout(1000);
-        try {
-          const parsed = await readSurferRelated(
-            page,
-            config.browser.surferRelatedWidgetSelector,
-            config.browser.surferWaitTimeoutMs,
-            config.browser.surferRelatedMissingWidgetTimeoutMs,
-          );
-          related =
-            parsed === null
-              ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
-              : parsed.length > 0
-                ? { status: 'ok', error: null, rows: parsed }
-                : { status: 'empty', error: null, rows: [] };
-        } catch (error) {
-          const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
-          related = { status: 'error', error: code, rows: [] };
-          relatedParserError = { code, message };
-        }
-      } finally {
-        relatedSurferMs = Date.now() - relatedStartedAt;
-      }
-      relatedOutcomeForTiming = related.status;
-    }
-
+    // Keep SERP parsing after the Surfer observations exactly as before. PERF-B
+    // overlaps only Surfer waits; it does not move the Google evidence capture
+    // point earlier in the page lifecycle.
     const serpStartedAt = Date.now();
     try {
       try {
@@ -379,47 +368,28 @@ export async function collectRelatedKeyword(
       captchaMs = Date.now() - captchaStartedAt;
     }
 
-    const relatedStartedAt = Date.now();
-    try {
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
-      await page.waitForTimeout(1000);
-      try {
-        const rows = await readSurferRelated(
-          page,
-          config.browser.surferRelatedWidgetSelector,
-          config.browser.surferWaitTimeoutMs,
-          config.browser.surferRelatedMissingWidgetTimeoutMs,
-        );
-        const related: SurferRelatedOutcome = rows === null
-          ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
-          : rows.length > 0
-            ? { status: 'ok', error: null, rows }
-            : { status: 'empty', error: null, rows: [] };
-        relatedOutcomeForTiming = related.status;
-        outcome = related.status === 'ok' || related.status === 'empty' ? 'completed' : 'partial';
-        return { related, debugArtifactPath: null };
-      } catch (error) {
-        if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
-          outcome = 'paused';
-          throw error;
-        }
-        const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
-        const debugArtifactPath = isParserErrorCode(code)
-          ? await saveParserFailureArtifacts(
-              page,
-              config,
-              debugRoot,
-              `${keywordSlug(keyword.normalizedKeyword)}-related`,
-              buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, code, message),
-            )
-          : null;
-        relatedOutcomeForTiming = 'error';
-        outcome = 'partial';
-        return { related: { status: 'error', error: code, rows: [] }, debugArtifactPath };
-      }
-    } finally {
-      relatedSurferMs = Date.now() - relatedStartedAt;
+    const relatedComponent = await collectRelatedSurferComponent(page, config);
+    relatedSurferMs = relatedComponent.durationMs;
+    const related = relatedComponent.related;
+    relatedOutcomeForTiming = related.status;
+
+    if (relatedComponent.parserError) {
+      const { code, message } = relatedComponent.parserError;
+      const debugArtifactPath = isParserErrorCode(code)
+        ? await saveParserFailureArtifacts(
+            page,
+            config,
+            debugRoot,
+            `${keywordSlug(keyword.normalizedKeyword)}-related`,
+            buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, code, message),
+          )
+        : null;
+      outcome = 'partial';
+      return { related, debugArtifactPath };
     }
+
+    outcome = related.status === 'ok' || related.status === 'empty' ? 'completed' : 'partial';
+    return { related, debugArtifactPath: null };
   } catch (error) {
     if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
       outcome = 'paused';
@@ -446,6 +416,62 @@ export async function collectRelatedKeyword(
       totalMs: Date.now() - totalStartedAt,
     });
     await page.close().catch(() => undefined);
+  }
+}
+
+async function collectMainSurferComponent(page: Page, config: ResearchConfig): Promise<MainSurferComponent> {
+  const startedAt = Date.now();
+  try {
+    const surfer = await readSurferResult(
+      page,
+      config.browser.surferWidgetSelector,
+      config.browser.surferWaitTimeoutMs,
+    );
+    return {
+      volume: surfer.volume,
+      cpc: surfer.cpc,
+      error: null,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      volume: null,
+      cpc: null,
+      error: toComponentError(error, 'SURFER_PARSE_ERROR'),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+}
+
+async function collectRelatedSurferComponent(page: Page, config: ResearchConfig): Promise<RelatedSurferComponent> {
+  const startedAt = Date.now();
+  try {
+    // Scrolling is the lazy-mount trigger. readSurferRelated already polls the
+    // widget every 500 ms, so the previous unconditional 1000 ms sleep only
+    // delayed the first useful observation and is intentionally removed.
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+    const parsed = await readSurferRelated(
+      page,
+      config.browser.surferRelatedWidgetSelector,
+      config.browser.surferWaitTimeoutMs,
+      config.browser.surferRelatedMissingWidgetTimeoutMs,
+    );
+    return {
+      related: parsed === null
+        ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
+        : parsed.length > 0
+          ? { status: 'ok', error: null, rows: parsed }
+          : { status: 'empty', error: null, rows: [] },
+      parserError: null,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const componentError = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
+    return {
+      related: { status: 'error', error: componentError.code, rows: [] },
+      parserError: componentError,
+      durationMs: Date.now() - startedAt,
+    };
   }
 }
 
