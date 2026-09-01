@@ -1,29 +1,24 @@
 import process from 'node:process';
-import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { loadConfig } from '../config/config.js';
 import { loadDotEnv } from '../config/env.js';
-import {
-  archiveResearchDirectory,
-  resolveOutputRoot,
-  resolveRunLocation,
-} from '../outputs/researchLayout.js';
-import {
-  loadOperatorResearchConfig,
-  type LoadedOperatorResearchConfig,
-  type ResolvedResearchSemantics,
-} from '../operatorConfig/resolve.js';
-import { writeOperatorConfigProvenance } from '../operatorConfig/provenance.js';
-import { ResearchError } from '../shared/errors.js';
 import {
   DEFAULT_CLI_DEPS,
   EXIT_INTERNAL,
   EXIT_INVALID_INPUT,
   EXIT_OK,
-  EXIT_PREFLIGHT,
-  runCli as runDiscoveryCli,
+  runDiscovery,
   type CliDeps,
-} from './research.js';
+  type DiscoveryRunResult,
+  type DiscoverySemanticConfig,
+} from '../discovery/runDiscovery.js';
+import { writeOperatorConfigProvenance } from '../operatorConfig/provenance.js';
+import {
+  loadOperatorResearchConfig,
+  type LoadedOperatorResearchConfig,
+} from '../operatorConfig/resolve.js';
+import { ResearchError } from '../shared/errors.js';
 
 loadDotEnv();
 
@@ -31,34 +26,49 @@ type ParsedArgs = {
   help: boolean;
   config: string | null;
   outputRoot: string | null;
+  json: boolean;
+};
+
+export type ResearchRunMachineResultV1 = {
+  version: 1;
+  exitCode: number;
+  researchId: string | null;
+  discoveryRunId: string | null;
+  discoveryState: string | null;
+  workflowTarget: 'discovery' | 'enrichment' | 'finalization';
+  effectiveConfigFingerprint: string;
+  stageFingerprints: LoadedOperatorResearchConfig['plan']['stageFingerprints'];
+  operatorConfigPath: string | null;
+};
+
+export type ResearchRunExecution = {
+  exitCode: number;
+  result: ResearchRunMachineResultV1;
 };
 
 export type ResearchRunDeps = {
   loadOperatorConfig: typeof loadOperatorResearchConfig;
-  runDiscovery: typeof runDiscoveryCli;
+  runDiscovery: typeof runDiscovery;
   cliDeps: CliDeps;
   writeProvenance: typeof writeOperatorConfigProvenance;
-  resolveRun: typeof resolveRunLocation;
-  archiveResearch: typeof archiveResearchDirectory;
 };
 
 export const DEFAULT_RESEARCH_RUN_DEPS: ResearchRunDeps = {
   loadOperatorConfig: loadOperatorResearchConfig,
-  runDiscovery: runDiscoveryCli,
+  runDiscovery,
   cliDeps: DEFAULT_CLI_DEPS,
   writeProvenance: writeOperatorConfigProvenance,
-  resolveRun: resolveRunLocation,
-  archiveResearch: archiveResearchDirectory,
 };
 
 export function parseResearchRunArgs(argv: string[]): ParsedArgs {
   const args = [...argv];
-  const parsed: ParsedArgs = { help: false, config: null, outputRoot: null };
+  const parsed: ParsedArgs = { help: false, config: null, outputRoot: null, json: false };
   while (args.length > 0) {
     const arg = args.shift();
     if (arg === '--help' || arg === '-h') parsed.help = true;
     else if (arg === '--config') parsed.config = nextValue(args, '--config');
     else if (arg === '--output-root') parsed.outputRoot = nextValue(args, '--output-root');
+    else if (arg === '--json') parsed.json = true;
     else if (arg?.startsWith('-')) throw new ResearchError('INPUT_SCHEMA_ERROR', `Unknown argument: ${arg}`);
     else if (arg) throw new ResearchError('INPUT_SCHEMA_ERROR', `Unexpected positional argument: ${arg}`);
   }
@@ -68,23 +78,50 @@ export function parseResearchRunArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
-export function buildDiscoveryExecutionEnv(
-  env: NodeJS.ProcessEnv,
-  semantics: ResolvedResearchSemantics,
-): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    RESEARCH_MARKET: semantics.research.market,
-    GOOGLE_HL: semantics.research.googleHl,
-    GOOGLE_GL: semantics.research.googleGl,
-    TOP_N: String(semantics.discovery.topN),
-    EXPANSION_ENABLED: String(semantics.discovery.expand),
-    EXPANSION_DEPTH: String(semantics.discovery.expansionPolicy.depth),
-    EXPANSION_MAX_CANDIDATES: String(semantics.discovery.expansionPolicy.maxCandidatesPerKeyword),
-    EXPANSION_MIN_OVERLAP: String(semantics.discovery.expansionPolicy.minOverlap),
-    EXPANSION_MIN_VOLUME: String(semantics.discovery.expansionPolicy.minVolume),
-    REQUIRE_AHREFS: String(semantics.discovery.requireAhrefs),
-  };
+export async function runResearchFromConfig(
+  configPath: string,
+  outputRoot: string | null,
+  deps: ResearchRunDeps = DEFAULT_RESEARCH_RUN_DEPS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResearchRunExecution> {
+  const loaded = await deps.loadOperatorConfig(configPath);
+  const semantics = loaded.plan.semantics;
+  const input = semantics.research.input;
+  const semanticConfig = discoverySemanticConfig(loaded);
+
+  console.log('Config-first research run');
+  console.log(`  Config fingerprint: ${loaded.plan.effectiveConfigFingerprint}`);
+  console.log(`  Workflow target: ${semantics.workflow.target}`);
+  console.log('  Executing stage: discovery');
+  console.log('');
+
+  const discovery = await deps.runDiscovery(
+    {
+      input: input.type === 'microsoft'
+        ? { kind: 'microsoft', path: input.resolvedPath }
+        : { kind: 'seeds', path: input.resolvedPath },
+      outputRoot,
+      name: semantics.research.label,
+      semanticConfig,
+      onFreshResearchInitialized: async ({ researchDirectory }) => {
+        await deps.writeProvenance(researchDirectory, loaded);
+      },
+    },
+    deps.cliDeps,
+    env,
+  );
+
+  const result = machineResult(loaded, discovery);
+  if (discovery.runId) {
+    console.log('');
+    console.log(`  Research ID: ${discovery.runId}`);
+    if (discovery.researchDirectory) console.log(`  Operator config: ${join(discovery.researchDirectory, 'operator-config.json')}`);
+    if (discovery.exitCode === EXIT_OK && semantics.workflow.target !== 'discovery') {
+      console.log(`  Stop point: discovery complete; ${semantics.workflow.target} execution remains gated for a later PR.`);
+      console.log(`  Inspect next state with: npm run research:plan -- --research ${discovery.runId}`);
+    }
+  }
+  return { exitCode: discovery.exitCode, result };
 }
 
 export async function runResearchRunCli(
@@ -98,91 +135,58 @@ export async function runResearchRunCli(
       process.stdout.write(usage());
       return EXIT_OK;
     }
-
-    const loaded = await deps.loadOperatorConfig(parsed.config as string);
-    const outputRoot = resolveOutputRoot(parsed.outputRoot, env);
-    const beforeRuns = await listIndexedRunIds(outputRoot);
-    const executionEnv = buildDiscoveryExecutionEnv(env, loaded.plan.semantics);
-    const input = loaded.plan.semantics.research.input;
-    const discoveryArgs = [
-      input.type === 'microsoft' ? '--microsoft' : '--seeds',
-      input.resolvedPath,
-      '--name',
-      loaded.plan.semantics.research.label,
-      '--output-root',
-      outputRoot,
-    ];
-
-    console.log('Config-first research run');
-    console.log(`  Config fingerprint: ${loaded.plan.effectiveConfigFingerprint}`);
-    console.log(`  Workflow target: ${loaded.plan.semantics.workflow.target}`);
-    console.log('  Executing stage: discovery');
-    console.log('');
-
-    const discoveryCode = await deps.runDiscovery(discoveryArgs, deps.cliDeps, executionEnv);
-    const afterRuns = await listIndexedRunIds(outputRoot);
-    const createdRunIds = [...afterRuns].filter((runId) => !beforeRuns.has(runId)).sort();
-
-    if (createdRunIds.length === 0) {
-      if (discoveryCode === EXIT_OK) {
-        throw new ResearchError(
-          'OUTPUT_WRITE_ERROR',
-          'Discovery reported success but no new indexed run was created; operator config provenance cannot be parented safely.',
-        );
-      }
-      return discoveryCode;
-    }
-    if (createdRunIds.length !== 1) {
-      throw new ResearchError(
-        'OUTPUT_WRITE_ERROR',
-        `Observed ${createdRunIds.length} new indexed runs while executing one config. Refusing to guess which run owns operator config provenance. Do not start concurrent fresh research in the same output root.`,
-      );
-    }
-
-    const runId = createdRunIds[0] as string;
-    const location = await deps.resolveRun(outputRoot, runId);
-    await deps.writeProvenance(location.researchDirectory, loaded);
-    console.log('');
-    console.log(`  Research ID: ${runId}`);
-    console.log(`  Operator config: ${join(location.researchDirectory, 'operator-config.json')}`);
-
-    if (discoveryCode === EXIT_OK) {
-      try {
-        await deps.archiveResearch(location.researchDirectory);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`  Archive warning after operator-config publication: ${message}`);
-      }
-      if (loaded.plan.semantics.workflow.target !== 'discovery') {
-        console.log(`  Stop point: discovery complete; ${loaded.plan.semantics.workflow.target} execution remains gated for a later stage.`);
-        console.log(`  Inspect next state with: npm run research:plan -- --research ${runId}`);
-      }
-    }
-    return discoveryCode;
+    const execution = await runResearchFromConfig(parsed.config as string, parsed.outputRoot, deps, env);
+    if (parsed.json) console.log(JSON.stringify(execution.result));
+    return execution.exitCode;
   } catch (error) {
     if (error instanceof ResearchError) {
       console.error(`${error.code}: ${error.message}`);
-      return error.code === 'INPUT_SCHEMA_ERROR'
-        ? EXIT_INVALID_INPUT
-        : error.code === 'OUTPUT_WRITE_ERROR'
-          ? EXIT_PREFLIGHT
-          : EXIT_INTERNAL;
+      return error.code === 'INPUT_SCHEMA_ERROR' ? EXIT_INVALID_INPUT : EXIT_INTERNAL;
     }
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
     return EXIT_INTERNAL;
   }
 }
 
-async function listIndexedRunIds(outputRoot: string): Promise<Set<string>> {
-  const directory = join(outputRoot, 'index', 'runs');
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return new Set();
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to inspect run index ${directory}.`, { cause: error });
-  }
-  return new Set(entries.filter((entry) => entry.endsWith('.json')).map((entry) => entry.slice(0, -'.json'.length)));
+function discoverySemanticConfig(loaded: LoadedOperatorResearchConfig): DiscoverySemanticConfig {
+  const semantics = loaded.plan.semantics;
+  const fixedScoringPolicy = loadConfig({} as NodeJS.ProcessEnv).scoring;
+  return {
+    research: {
+      market: semantics.research.market,
+      googleHl: semantics.research.googleHl,
+      googleGl: semantics.research.googleGl,
+      topN: semantics.discovery.topN,
+    },
+    expansion: {
+      enabled: semantics.discovery.expand,
+      depth: semantics.discovery.expansionPolicy.depth,
+      maxCandidatesPerKeyword: semantics.discovery.expansionPolicy.maxCandidatesPerKeyword,
+      minOverlap: semantics.discovery.expansionPolicy.minOverlap,
+      minVolume: semantics.discovery.expansionPolicy.minVolume,
+    },
+    requireAhrefs: semantics.discovery.requireAhrefs,
+    scoring: fixedScoringPolicy,
+  };
+}
+
+function machineResult(
+  loaded: LoadedOperatorResearchConfig,
+  discovery: DiscoveryRunResult,
+): ResearchRunMachineResultV1 {
+  return {
+    version: 1,
+    exitCode: discovery.exitCode,
+    researchId: discovery.researchId,
+    discoveryRunId: discovery.runId,
+    discoveryState: discovery.state,
+    workflowTarget: loaded.plan.semantics.workflow.target,
+    effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
+    stageFingerprints: loaded.plan.stageFingerprints,
+    operatorConfigPath: discovery.researchDirectory === null
+      ? null
+      : join(discovery.researchDirectory, 'operator-config.json'),
+  };
 }
 
 function nextValue(args: string[], option: string): string {
@@ -197,6 +201,7 @@ function usage(): string {
     '',
     'Usage:',
     '  npm run research:run -- --config <research.config.json>',
+    '  npm run research:run -- --config <research.config.json> --json',
     '  npm run research:run -- --config <research.config.json> --output-root <absolute-path>',
     '',
     'This PR executes discovery only. Enrichment/finalization intent is preserved in immutable operator-config provenance and remains gated after discovery.',
