@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { TRAFFIC_EVIDENCE_VERSION } from '../enrichment/trafficEvidence.js';
 import type { PersistedOperatorConfigV1 } from '../operatorConfig/provenance.js';
 import { buildPersistedOperatorConfig } from '../operatorConfig/provenance.js';
 import { buildNewResearchPlan, type ResolvedOperatorContinuation } from '../operatorConfig/resolve.js';
@@ -92,7 +93,9 @@ function status(
       finalistCount,
       currentDecisionCount,
       allFinalistsHaveCurrentDecisions: finalistCount > 0 && currentDecisionCount === finalistCount,
-      finalistMatrixPublished: options.matrix ?? finalizationState === 'awaiting_decisions' || finalizationState === 'ready_to_publish',
+      finalistMatrixPublished: options.matrix ?? (
+        finalizationState === 'awaiting_decisions' || finalizationState === 'ready_to_publish'
+      ),
       artifactWarning: null,
     },
     library: {
@@ -166,7 +169,7 @@ function traffic(): TrafficEvidenceRunResult {
     trafficValueCurrencyMismatchCount: 0,
     inserted: 1,
     duplicates: 0,
-    policy: { lowBaseOrganicTrafficThreshold: 100 },
+    policy: { version: TRAFFIC_EVIDENCE_VERSION, lowBaseOrganicTrafficThreshold: 100 },
     evidencePath: '/tmp/traffic.csv',
     velocityPath: '/tmp/velocity.csv',
     jsonPath: '/tmp/traffic.json',
