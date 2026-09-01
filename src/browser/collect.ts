@@ -27,10 +27,6 @@ import {
 } from '../diagnostics/artifacts.js';
 import { keywordSlug } from '../runs/run.js';
 
-// Structured related-keyword outcome. The status is independent of the main
-// Surfer/Google parse result: a broken related widget is reported as 'error'
-// even when the primary collection succeeded, and a successful primary
-// collection with a broken related widget still preserves the related 'error'.
 export type SurferRelatedOutcome = {
   status: 'not_attempted' | 'ok' | 'empty' | 'error';
   error: string | null;
@@ -60,6 +56,8 @@ export type BrowserCollectionTiming = {
   normalizedKeyword: string;
   isRoot: boolean;
   outcome: 'completed' | 'partial' | 'failed' | 'paused';
+  captchaEncountered: boolean;
+  relatedOutcome: SurferRelatedOutcome['status'] | null;
   pageCreateMs: number;
   navigationMs: number | null;
   captchaMs: number | null;
@@ -86,6 +84,8 @@ export async function collectKeyword(
   const pageCreateMs = Date.now() - pageCreateStartedAt;
   const isRoot = !keyword.sources.some((source) => source.type === 'surfer_related');
   let outcome: BrowserCollectionTiming['outcome'] = 'failed';
+  let captchaEncountered = false;
+  let relatedOutcomeForTiming: SurferRelatedOutcome['status'] | null = null;
   let navigationMs: number | null = null;
   let captchaMs: number | null = null;
   let mainSurferMs: number | null = null;
@@ -114,11 +114,9 @@ export async function collectKeyword(
         await waitForManualCaptcha(page);
       } catch (error) {
         if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
+          captchaEncountered = true;
           const solved = await pauseForManualCaptcha(page, signal);
           if (!solved) {
-            // The run was cancelled (Ctrl+C) while the CAPTCHA was pending. Do not
-            // pretend the CAPTCHA was solved: abort collection so the engine leaves
-            // the active keyword resumable instead of committing a false result.
             throw new ResearchError(
               'RUN_PAUSED',
               'Collection cancelled while a CAPTCHA was pending; active keyword left resumable.',
@@ -157,18 +155,11 @@ export async function collectKeyword(
       mainSurferMs = Date.now() - mainSurferStartedAt;
     }
 
-    // The related-keyword reader runs for every root/seed keyword regardless of
-    // expansion.enabled. --expand only controls whether observed rows are queued
-    // for depth-one Google lookups (handled by the engine). Expanded
-    // (surfer_related) keywords are collected but never expanded further, so
-    // re-reading their related list would be wasted browser work.
     let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
     let relatedParserError: ComponentError | null = null;
     if (isRoot) {
       const relatedStartedAt = Date.now();
       try {
-        // The related-keywords widget can mount lazily after the main Surfer
-        // widget; scroll the results so Surfer renders it before we read.
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
         await page.waitForTimeout(1000);
         try {
@@ -178,9 +169,6 @@ export async function collectKeyword(
             config.browser.surferWaitTimeoutMs,
             config.browser.surferRelatedMissingWidgetTimeoutMs,
           );
-          // null means the related widget was genuinely absent (fast-failed after
-          // the bounded missing-widget timeout) — classify as 'error', never as
-          // 'empty'. Only a present widget with zero rows is 'empty'.
           related =
             parsed === null
               ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
@@ -188,9 +176,6 @@ export async function collectKeyword(
                 ? { status: 'ok', error: null, rows: parsed }
                 : { status: 'empty', error: null, rows: [] };
         } catch (error) {
-          // Related-keyword observation is optional enrichment: a missing/broken
-          // widget must not downgrade an otherwise-successful keyword. The error
-          // is preserved in the structured related outcome for traceability.
           const { code, message } = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
           related = { status: 'error', error: code, rows: [] };
           relatedParserError = { code, message };
@@ -198,6 +183,7 @@ export async function collectKeyword(
       } finally {
         relatedSurferMs = Date.now() - relatedStartedAt;
       }
+      relatedOutcomeForTiming = related.status;
     }
 
     const serpStartedAt = Date.now();
@@ -232,8 +218,7 @@ export async function collectKeyword(
     const locationStartedAt = Date.now();
     const detectedLocation = await readDetectedLocation(page);
     locationParseMs = Date.now() - locationStartedAt;
-    const geoWarning =
-      detectedLocation !== null && !geoMatchesMarket(config.research.market, detectedLocation);
+    const geoWarning = detectedLocation !== null && !geoMatchesMarket(config.research.market, detectedLocation);
 
     const status = errors.length === 0 ? 'completed' : volume !== null || serpRows.length > 0 ? 'partial' : 'failed';
     outcome = status;
@@ -245,33 +230,17 @@ export async function collectKeyword(
         config,
         debugRoot,
         keywordSlug(keyword.normalizedKeyword),
-        buildParserFailureContext(
-          keyword.normalizedKeyword,
-          pageUrl,
-          config,
-          firstError.code,
-          firstError.message,
-        ),
+        buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, firstError.code, firstError.message),
       );
     }
 
-    // The aggregate keyword error preserves the first failing component for
-    // backward compatibility, but the Google SERP error is independently
-    // persisted below. When Surfer failed first, retain a Google-specific debug
-    // context as well instead of losing the second parser failure completely.
     if (serpError && serpError !== firstError && isParserErrorCode(serpError.code)) {
       debugArtifactPath = await saveParserFailureArtifacts(
         page,
         config,
         debugRoot,
         `${keywordSlug(keyword.normalizedKeyword)}-serp`,
-        buildParserFailureContext(
-          keyword.normalizedKeyword,
-          pageUrl,
-          config,
-          serpError.code,
-          serpError.message,
-        ),
+        buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, serpError.code, serpError.message),
       );
     }
 
@@ -281,13 +250,7 @@ export async function collectKeyword(
         config,
         debugRoot,
         `${keywordSlug(keyword.normalizedKeyword)}-related`,
-        buildParserFailureContext(
-          keyword.normalizedKeyword,
-          pageUrl,
-          config,
-          relatedParserError.code,
-          relatedParserError.message,
-        ),
+        buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, relatedParserError.code, relatedParserError.message),
       );
     }
 
@@ -295,15 +258,7 @@ export async function collectKeyword(
     const record: KeywordRecord = {
       ...keyword,
       status,
-      surfer:
-        volume !== null
-          ? {
-              volume,
-              cpc,
-              market: config.research.market,
-              fetchedAt,
-            }
-          : null,
+      surfer: volume !== null ? { volume, cpc, market: config.research.market, fetchedAt } : null,
       google: {
         hl: config.research.googleHl,
         gl: config.research.googleGl,
@@ -318,9 +273,6 @@ export async function collectKeyword(
 
     return { record, serpRows, related, debugArtifactPath };
   } catch (error) {
-    // A cancellation (Ctrl+C) must propagate to the engine so it can leave the
-    // active keyword resumable and record the run as paused. It must not be
-    // swallowed into a false 'failed' result.
     if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
       outcome = 'paused';
       throw error;
@@ -351,12 +303,14 @@ export async function collectKeyword(
       debugArtifactPath: null,
     };
   } finally {
-    timingSink?.({
+    emitTiming(timingSink, {
       kind: 'primary',
       keyword: keyword.keyword,
       normalizedKeyword: keyword.normalizedKeyword,
       isRoot,
       outcome,
+      captchaEncountered,
+      relatedOutcome: relatedOutcomeForTiming,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -370,9 +324,6 @@ export async function collectKeyword(
   }
 }
 
-// Refreshes only the optional related-keyword enrichment for a keyword whose
-// primary keyword/SERP result is already a cache hit. The cached primary result
-// remains authoritative and is never overwritten by this browser visit.
 export async function collectRelatedKeyword(
   context: BrowserContext,
   config: ResearchConfig,
@@ -387,10 +338,13 @@ export async function collectRelatedKeyword(
   const pageCreateMs = Date.now() - pageCreateStartedAt;
   const isRoot = !keyword.sources.some((source) => source.type === 'surfer_related');
   let outcome: BrowserCollectionTiming['outcome'] = 'failed';
+  let captchaEncountered = false;
+  let relatedOutcomeForTiming: SurferRelatedOutcome['status'] | null = null;
   let navigationMs: number | null = null;
   let captchaMs: number | null = null;
   let relatedSurferMs: number | null = null;
   let pageUrl = '';
+
   try {
     const navigationStartedAt = Date.now();
     try {
@@ -409,6 +363,7 @@ export async function collectRelatedKeyword(
         await waitForManualCaptcha(page);
       } catch (error) {
         if (error instanceof ResearchError && error.code === 'CAPTCHA_REQUIRED') {
+          captchaEncountered = true;
           const solved = await pauseForManualCaptcha(page, signal);
           if (!solved) {
             throw new ResearchError(
@@ -435,12 +390,12 @@ export async function collectRelatedKeyword(
           config.browser.surferWaitTimeoutMs,
           config.browser.surferRelatedMissingWidgetTimeoutMs,
         );
-        // null = widget genuinely absent → 'error', never 'empty'.
         const related: SurferRelatedOutcome = rows === null
           ? { status: 'error', error: 'SURFER_RELATED_WIDGET_MISSING', rows: [] }
           : rows.length > 0
             ? { status: 'ok', error: null, rows }
             : { status: 'empty', error: null, rows: [] };
+        relatedOutcomeForTiming = related.status;
         outcome = related.status === 'ok' || related.status === 'empty' ? 'completed' : 'partial';
         return { related, debugArtifactPath: null };
       } catch (error) {
@@ -455,45 +410,32 @@ export async function collectRelatedKeyword(
               config,
               debugRoot,
               `${keywordSlug(keyword.normalizedKeyword)}-related`,
-              buildParserFailureContext(
-                keyword.normalizedKeyword,
-                pageUrl,
-                config,
-                code,
-                message,
-              ),
+              buildParserFailureContext(keyword.normalizedKeyword, pageUrl, config, code, message),
             )
           : null;
+        relatedOutcomeForTiming = 'error';
         outcome = 'partial';
-        return {
-          related: { status: 'error', error: code, rows: [] },
-          debugArtifactPath,
-        };
+        return { related: { status: 'error', error: code, rows: [] }, debugArtifactPath };
       }
     } finally {
       relatedSurferMs = Date.now() - relatedStartedAt;
     }
   } catch (error) {
-    // Navigation/CAPTCHA failures happen before the related reader has a
-    // truthful result, so they must not be cached as a genuine empty list.
-    // A cancellation (Ctrl+C) must propagate to the engine so it can leave the
-    // active keyword resumable and record the run as paused.
     if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
       outcome = 'paused';
       throw error;
     }
     outcome = 'failed';
-    return {
-      related: { status: 'not_attempted', error: null, rows: [] },
-      debugArtifactPath: null,
-    };
+    return { related: { status: 'not_attempted', error: null, rows: [] }, debugArtifactPath: null };
   } finally {
-    timingSink?.({
+    emitTiming(timingSink, {
       kind: 'related_only',
       keyword: keyword.keyword,
       normalizedKeyword: keyword.normalizedKeyword,
       isRoot,
       outcome,
+      captchaEncountered,
+      relatedOutcome: relatedOutcomeForTiming,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -511,7 +453,6 @@ async function readDetectedLocation(page: Page): Promise<string | null> {
   try {
     const direct = (await page.evaluate(LOCATION_EXTRACT_SCRIPT)) as string | null;
     if (direct) return direct;
-
     const bodyText = (await page.evaluate(BODY_TEXT_SCRIPT)) as string;
     return detectGoogleLocationFromText(bodyText);
   } catch {
@@ -519,10 +460,16 @@ async function readDetectedLocation(page: Page): Promise<string | null> {
   }
 }
 
-function toComponentError(error: unknown, fallbackCode: ResearchErrorCode): ComponentError {
-  if (error instanceof ResearchError) {
-    return { code: error.code, message: error.message };
+function emitTiming(sink: BrowserCollectionTimingSink | undefined, timing: BrowserCollectionTiming): void {
+  try {
+    sink?.(timing);
+  } catch {
+    // Telemetry is observational only and must never change collection semantics.
   }
+}
+
+function toComponentError(error: unknown, fallbackCode: ResearchErrorCode): ComponentError {
+  if (error instanceof ResearchError) return { code: error.code, message: error.message };
   const message = error instanceof Error ? error.message : String(error);
   return { code: fallbackCode, message };
 }
