@@ -16,7 +16,7 @@ export type DeclaredFilePath = { logicalPath: string; resolvedPath: string };
 export type ResolvedResearchSemantics = {
   research: { label: string; market: string; googleHl: string; googleGl: string; input: { type: 'seeds' | 'microsoft'; logicalPath: string; resolvedPath: string } };
   workflow: { target: WorkflowTargetV1 };
-  discovery: { expand: boolean; requireAhrefs: boolean };
+  discovery: { topN: number; expand: boolean; requireAhrefs: boolean };
   enrichment: null | {
     modules: string[];
     clustering: { topN: number; minSharedDomains: number; minDomainJaccard: number; minSharedUrls: number; minUrlJaccard: number };
@@ -50,6 +50,7 @@ const DEFAULT_MARKET = 'US';
 const DEFAULT_GOOGLE_HL = 'en';
 const DEFAULT_GOOGLE_GL = 'us';
 const DEFAULT_WORKFLOW_TARGET: WorkflowTargetV1 = 'discovery';
+const DEFAULT_DISCOVERY_TOP_N = 10;
 const DEFAULT_EXPAND = false;
 const DEFAULT_REQUIRE_AHREFS = false;
 const DEFAULT_CLUSTER_TOP_N = 10;
@@ -116,6 +117,7 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
   const googleHl = withOrigin(config.research.googleHl, DEFAULT_GOOGLE_HL, '$.research.googleHl', provenance);
   const googleGl = withOrigin(config.research.googleGl, DEFAULT_GOOGLE_GL, '$.research.googleGl', provenance);
   const target = withOrigin(config.workflow?.target, DEFAULT_WORKFLOW_TARGET, '$.workflow.target', provenance);
+  const topN = withOrigin(config.discovery?.topN, DEFAULT_DISCOVERY_TOP_N, '$.discovery.topN', provenance);
   const expand = withOrigin(config.discovery?.expand, DEFAULT_EXPAND, '$.discovery.expand', provenance);
   const requireAhrefs = withOrigin(config.discovery?.requireAhrefs, DEFAULT_REQUIRE_AHREFS, '$.discovery.requireAhrefs', provenance);
   provenance['$.research.label'] = 'file';
@@ -163,7 +165,7 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
     provenance['$.finalization.historyPolicy.repurposeGapMinDays'] = 'file';
   }
 
-  return { research: { label: config.research.label, market, googleHl, googleGl, input: { type: config.research.input.type, logicalPath: inputPath.logicalPath, resolvedPath: inputPath.resolvedPath } }, workflow: { target }, discovery: { expand, requireAhrefs }, enrichment, finalization, provenance };
+  return { research: { label: config.research.label, market, googleHl, googleGl, input: { type: config.research.input.type, logicalPath: inputPath.logicalPath, resolvedPath: inputPath.resolvedPath } }, workflow: { target }, discovery: { topN, expand, requireAhrefs }, enrichment, finalization, provenance };
 }
 
 export function buildStageSemanticFingerprints(semantics: ResolvedResearchSemantics): StageSemanticFingerprints {
