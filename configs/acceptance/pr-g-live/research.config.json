@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "preset": "finalist-validation",
+  "research": {
+    "label": "pr-g-live-acceptance",
+    "market": "US",
+    "googleHl": "en",
+    "googleGl": "us",
+    "input": {
+      "type": "seeds",
+      "path": "seeds.csv"
+    }
+  },
+  "discovery": {
+    "expand": false,
+    "requireAhrefs": false
+  }
+}
