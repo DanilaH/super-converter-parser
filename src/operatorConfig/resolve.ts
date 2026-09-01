@@ -26,20 +26,24 @@ export type ResolvedResearchSemantics = {
   provenance: Record<string, SemanticOrigin>;
 };
 export type StageSemanticFingerprints = { discoverySemanticFingerprint: string; enrichmentSemanticFingerprint: string; finalizationPolicyFingerprint: string };
-export type NewResearchPlanStage = { id: 'discovery' | 'enrichment' | 'finalization'; state: 'ready' | 'requires_predecessor' | 'not_requested'; reason: string | null };
-export type ResolvedExecutionPlan = {
+export type PlanStageState = 'ready' | 'blocked' | 'already_satisfied' | 'not_requested';
+export type PlanStage = { id: 'discovery' | 'enrichment' | 'finalization'; state: PlanStageState; reason: string | null };
+export type ExternalWorkExpectation = { stage: 'discovery' | 'enrichment' | 'finalization'; providers: string[] };
+export type NewResearchExecutionPlan = {
   version: 1;
   stateContext: { kind: 'new' };
+  configAvailability: 'operator_config';
   configPath: string;
   effectiveConfigFingerprint: string;
   stageFingerprints: StageSemanticFingerprints;
   semantics: ResolvedResearchSemantics;
-  stages: NewResearchPlanStage[];
+  stages: PlanStage[];
+  externalWork: ExternalWorkExpectation[];
   filesystemInputs: Array<{ purpose: 'research_input'; logicalPath: string; resolvedPath: string }>;
   unresolvedHumanRequirements: Array<'shortlist' | 'finalist_scope' | 'human_decisions'>;
   expectedStopPoint: 'discovery';
 };
-export type LoadedOperatorResearchConfig = { config: OperatorResearchConfigV1; plan: ResolvedExecutionPlan };
+export type LoadedOperatorResearchConfig = { config: OperatorResearchConfigV1; plan: NewResearchExecutionPlan };
 export type ResolvedOperatorContinuation = { continuation: OperatorContinuationV1; continuationPath: string; declaredFilePath: DeclaredFilePath | null };
 
 const DEFAULT_MARKET = 'US';
@@ -77,7 +81,7 @@ export async function loadOperatorContinuation(continuationPath: string): Promis
   return { continuation, continuationPath: absoluteContinuationPath, declaredFilePath };
 }
 
-export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaringConfigPath: string): ResolvedExecutionPlan {
+export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaringConfigPath: string): NewResearchExecutionPlan {
   const validated = validateOperatorResearchConfig(config);
   const configPath = resolve(declaringConfigPath);
   const semantics = resolveResearchSemantics(validated, configPath);
@@ -88,15 +92,17 @@ export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaring
   return {
     version: 1,
     stateContext: { kind: 'new' },
+    configAvailability: 'operator_config',
     configPath,
     effectiveConfigFingerprint,
     stageFingerprints,
     semantics,
     stages: [
       { id: 'discovery', state: 'ready', reason: null },
-      target === 'discovery' ? { id: 'enrichment', state: 'not_requested', reason: null } : { id: 'enrichment', state: 'requires_predecessor', reason: 'Requires a completed discovery generation.' },
-      target === 'finalization' ? { id: 'finalization', state: 'requires_predecessor', reason: 'Requires a completed enrichment and explicit finalist scope.' } : { id: 'finalization', state: 'not_requested', reason: null },
+      target === 'discovery' ? { id: 'enrichment', state: 'not_requested', reason: null } : { id: 'enrichment', state: 'blocked', reason: 'Requires a completed discovery generation.' },
+      target === 'finalization' ? { id: 'finalization', state: 'blocked', reason: 'Requires a completed enrichment and explicit finalist scope.' } : { id: 'finalization', state: 'not_requested', reason: null },
     ],
+    externalWork: buildNewResearchExternalWork(semantics),
     filesystemInputs: [{ purpose: 'research_input', logicalPath: semantics.research.input.logicalPath, resolvedPath: semantics.research.input.resolvedPath }],
     unresolvedHumanRequirements: [...(requiresShortlist ? ['shortlist' as const] : []), ...(target === 'finalization' ? ['finalist_scope' as const, 'human_decisions' as const] : [])],
     expectedStopPoint: 'discovery',
@@ -195,6 +201,30 @@ export function canonicalJson(value: unknown): string {
 
 export function fingerprint(namespace: string, value: unknown): string {
   return createHash('sha256').update(`${namespace}\n${canonicalJson(value)}`).digest('hex');
+}
+
+function buildNewResearchExternalWork(semantics: ResolvedResearchSemantics): ExternalWorkExpectation[] {
+  const discoveryProviders = [
+    'google',
+    'keyword_surfer',
+    semantics.discovery.requireAhrefs ? 'ahrefs' : 'ahrefs_if_configured',
+  ];
+  const work: ExternalWorkExpectation[] = [{ stage: 'discovery', providers: discoveryProviders }];
+  if (semantics.workflow.target !== 'discovery' && semantics.enrichment !== null) {
+    const providers = new Set<string>();
+    if (semantics.enrichment.querySuggestions !== null) {
+      if (semantics.enrichment.querySuggestions.sources.includes('surfer_related')) providers.add('keyword_surfer');
+      if (semantics.enrichment.querySuggestions.sources.some((source) => source.startsWith('google_'))) providers.add('google');
+    }
+    if (semantics.enrichment.modules.includes('domain_age')) {
+      providers.add('rdap');
+      providers.add('first_seen_provider_if_configured');
+    }
+    if (semantics.enrichment.modules.includes('pages') || semantics.enrichment.modules.includes('site_structure')) providers.add('web_http');
+    work.push({ stage: 'enrichment', providers: [...providers] });
+  }
+  if (semantics.workflow.target === 'finalization') work.push({ stage: 'finalization', providers: ['common_crawl'] });
+  return work;
 }
 
 function effectiveConfigProjection(semantics: ResolvedResearchSemantics): unknown {
