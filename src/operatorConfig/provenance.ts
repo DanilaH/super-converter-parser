@@ -1,11 +1,10 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ResearchError } from '../shared/errors.js';
-import type { OperatorResearchConfigV1 } from './contracts.js';
+import { validateOperatorResearchConfig, type OperatorResearchConfigV1 } from './contracts.js';
 import {
+  buildNewResearchPlan,
   canonicalJson,
-  fingerprint,
-  portableEffectiveConfigProjection,
   type LoadedOperatorResearchConfig,
   type ResolvedResearchSemantics,
   type StageSemanticFingerprints,
@@ -32,13 +31,12 @@ export type PersistedOperatorConfigV1 = {
 };
 
 export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfig): PersistedOperatorConfigV1 {
-  const semantics = toPortableSemantics(loaded.plan.semantics);
   return {
     version: OPERATOR_CONFIG_PROVENANCE_VERSION,
     authoredConfig: loaded.config,
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     stageFingerprints: loaded.plan.stageFingerprints,
-    semantics,
+    semantics: toPortableSemantics(loaded.plan.semantics),
   };
 }
 
@@ -87,28 +85,31 @@ export async function readOperatorConfigProvenance(
 
 export function validatePersistedOperatorConfig(value: unknown, source: string): PersistedOperatorConfigV1 {
   if (!isRecord(value) || value.version !== OPERATOR_CONFIG_PROVENANCE_VERSION) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Unsupported or corrupt operator config provenance: ${source}.`);
+    throw corrupt(source);
   }
-  if (!isRecord(value.authoredConfig) || !isRecord(value.stageFingerprints) || !isRecord(value.semantics)) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Unsupported or corrupt operator config provenance: ${source}.`);
+  let authoredConfig: OperatorResearchConfigV1;
+  try {
+    authoredConfig = validateOperatorResearchConfig(value.authoredConfig);
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Invalid authored operator config inside provenance: ${source}.`,
+      { cause: error },
+    );
   }
-  if (typeof value.effectiveConfigFingerprint !== 'string') {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Unsupported or corrupt operator config provenance: ${source}.`);
+
+  // Rebuild the complete portable projection from the authored config. The
+  // declaring path is synthetic on purpose: resolved absolute input paths are
+  // runtime-only and are removed from persisted semantics/fingerprints.
+  const rebuilt = buildNewResearchPlan(authoredConfig, '/operator-config-provenance/research.config.json');
+  const expected = buildPersistedOperatorConfig({ config: authoredConfig, plan: rebuilt });
+  if (canonicalJson(value) !== canonicalJson(expected)) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `${source} does not match the effective semantics/fingerprints derived from its authored config.`,
+    );
   }
-  const stage = value.stageFingerprints;
-  if (
-    typeof stage.discoverySemanticFingerprint !== 'string'
-    || typeof stage.enrichmentSemanticFingerprint !== 'string'
-    || typeof stage.finalizationPolicyFingerprint !== 'string'
-  ) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Unsupported or corrupt operator config provenance: ${source}.`);
-  }
-  const persisted = value as PersistedOperatorConfigV1;
-  const recomputed = fingerprint('operator-config-v1', portableEffectiveConfigProjection(fromPortableSemantics(persisted.semantics)));
-  if (recomputed !== persisted.effectiveConfigFingerprint) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `${source} effective config fingerprint does not match persisted semantics.`);
-  }
-  return persisted;
+  return expected;
 }
 
 function toPortableSemantics(semantics: ResolvedResearchSemantics): PortableResolvedResearchSemantics {
@@ -124,17 +125,8 @@ function toPortableSemantics(semantics: ResolvedResearchSemantics): PortableReso
   };
 }
 
-function fromPortableSemantics(semantics: PortableResolvedResearchSemantics): ResolvedResearchSemantics {
-  return {
-    ...semantics,
-    research: {
-      ...semantics.research,
-      input: {
-        ...semantics.research.input,
-        resolvedPath: semantics.research.input.logicalPath,
-      },
-    },
-  };
+function corrupt(source: string): ResearchError {
+  return new ResearchError('OUTPUT_WRITE_ERROR', `Unsupported or corrupt operator config provenance: ${source}.`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
