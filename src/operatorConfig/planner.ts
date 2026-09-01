@@ -67,6 +67,8 @@ export function buildExistingResearchPlan(
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
   const enrichmentSatisfied = currentEnrichment?.state === 'completed';
   const finalizationSatisfied = status.finalization.state === 'ready_to_publish' || status.finalization.state === 'published';
+  const action = continuation?.continuation.action.type ?? null;
+  const readyContinuationReason = finalizationContinuationReadyReason(status, action);
 
   const stages: PlanStage[] = [
     discoverySatisfied
@@ -85,19 +87,36 @@ export function buildExistingResearchPlan(
         : currentEnrichment !== null
           ? { id: 'enrichment', state: 'blocked', reason: `Current enrichment is ${currentEnrichment.state}; resume it through the accepted legacy path.` }
           : { id: 'enrichment', state: 'blocked', reason: 'This existing research has no persisted OperatorConfig; downstream enrichment intent cannot be reconstructed safely.' },
-    !enrichmentSatisfied
-      ? { id: 'finalization', state: 'blocked', reason: 'Requires a completed current enrichment.' }
-      : finalizationSatisfied
-        ? { id: 'finalization', state: 'already_satisfied', reason: null }
-        : status.finalization.state === 'awaiting_decisions' && continuation?.continuation.action.type === 'decisions'
-          ? { id: 'finalization', state: 'ready', reason: 'A decisions continuation is supplied for the current finalist scope; execution remains a later PR.' }
-          : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status) },
+    !discoverySatisfied
+      ? { id: 'finalization', state: 'blocked', reason: 'Requires current discovery to be complete and non-repairable.' }
+      : !enrichmentSatisfied
+        ? { id: 'finalization', state: 'blocked', reason: 'Requires a completed current enrichment.' }
+        : finalizationSatisfied
+          ? { id: 'finalization', state: 'already_satisfied', reason: null }
+          : readyContinuationReason !== null
+            ? { id: 'finalization', state: 'ready', reason: readyContinuationReason }
+            : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status) },
   ];
 
   const unresolvedHumanRequirements: ExistingResearchExecutionPlan['unresolvedHumanRequirements'] = [];
-  if (currentEnrichment === null && discoverySatisfied) unresolvedHumanRequirements.push('operator_config');
-  if (status.finalization.state === 'not_started' && enrichmentSatisfied) unresolvedHumanRequirements.push('finalist_scope');
-  if (status.finalization.state === 'awaiting_decisions' && continuation?.continuation.action.type !== 'decisions') unresolvedHumanRequirements.push('human_decisions');
+  if (discoverySatisfied && currentEnrichment === null) pushUnique(unresolvedHumanRequirements, 'operator_config');
+  if (enrichmentSatisfied && (status.finalization.state === 'not_started' || status.finalization.state === 'in_progress')) {
+    pushUnique(unresolvedHumanRequirements, 'operator_config');
+  }
+  if (
+    status.finalization.state === 'not_started'
+    && action !== 'finalists'
+    && action !== 'finalists_all'
+  ) {
+    pushUnique(unresolvedHumanRequirements, 'finalist_scope');
+  }
+  if (
+    status.finalization.state === 'awaiting_decisions'
+    && action !== 'decisions'
+    && action !== 'publication_override'
+  ) {
+    pushUnique(unresolvedHumanRequirements, 'human_decisions');
+  }
 
   const expectedStopPoint: ExistingResearchExecutionPlan['expectedStopPoint'] = !discoverySatisfied
     ? 'discovery'
@@ -151,12 +170,13 @@ export function buildExistingResearchPlan(
 
 export function renderResearchPlan(plan: ResearchExecutionPlan): string {
   const lines = ['Research plan'];
-  if (plan.stateContext.kind === 'new') {
-    lines.push(`  Target: new research (${plan.semantics.research.label})`);
+  if (plan.configAvailability === 'operator_config') {
+    const semantics = plan.semantics;
+    lines.push(`  Target: new research (${semantics.research.label})`);
     lines.push(`  Config: ${plan.configPath}`);
-    lines.push(`  Workflow target: ${plan.semantics.workflow.target}`);
-    lines.push(`  Market: ${plan.semantics.research.market} | Google hl/gl: ${plan.semantics.research.googleHl}/${plan.semantics.research.googleGl}`);
-    lines.push(`  Input: ${plan.semantics.research.input.type} ${plan.semantics.research.input.logicalPath}`);
+    lines.push(`  Workflow target: ${semantics.workflow.target}`);
+    lines.push(`  Market: ${semantics.research.market} | Google hl/gl: ${semantics.research.googleHl}/${semantics.research.googleGl}`);
+    lines.push(`  Input: ${semantics.research.input.type} ${semantics.research.input.logicalPath}`);
   } else {
     lines.push(`  Target: existing research ${plan.stateContext.researchId}`);
     lines.push(`  Discovery: ${plan.stateContext.currentDiscoveryRunId}`);
@@ -185,7 +205,7 @@ export function renderResearchPlan(plan: ResearchExecutionPlan): string {
   else for (const requirement of plan.unresolvedHumanRequirements) lines.push(`  - ${requirement}`);
 
   lines.push('', `Expected stop point: ${plan.expectedStopPoint}`);
-  if (plan.stateContext.kind === 'existing') {
+  if (plan.configAvailability === 'legacy_config_unavailable') {
     lines.push(`Durable next action: ${plan.durableState.nextAction.code} — ${plan.durableState.nextAction.message}`);
     if (plan.continuation) lines.push(`Continuation: ${plan.continuation.actionType} (${plan.continuation.sourcePath})`);
     for (const warning of plan.warnings) lines.push(`Warning: ${warning}`);
@@ -205,18 +225,66 @@ function validateContinuationAgainstDurableState(
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" cannot be planned while discovery is ${status.discovery.state}.`);
   }
   if (action === 'shortlist') return;
+
   const currentEnrichment = status.currentEnrichmentId === null
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
   if (currentEnrichment?.state !== 'completed') {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" requires a completed current enrichment.`);
   }
-  if (action === 'decisions' && status.finalization.finalistCount === 0) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', 'A decisions continuation requires an existing current finalist scope.');
+
+  if (action === 'finalists' || action === 'finalists_all') return;
+  if (action === 'representative_overrides' && status.finalization.finalistCount === 0) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'Representative overrides require an existing current finalist scope.');
+  }
+  if (action === 'traffic' && !hasCurrentEntrantCohort(status)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', 'A traffic continuation requires a current entrant cohort.');
+  }
+  if (action === 'decisions') {
+    if (status.finalization.finalistCount === 0) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', 'A decisions continuation requires an existing current finalist scope.');
+    }
+    if (!hasCurrentEntrantCohort(status)) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', 'A decisions continuation requires a current entrant cohort.');
+    }
   }
   if (action === 'publication_override' && !status.finalization.finalistMatrixPublished) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'A publication override requires a current finalist evidence matrix.');
   }
+}
+
+function finalizationContinuationReadyReason(
+  status: ResearchStatusWithHistoricalPresence,
+  action: ResolvedOperatorContinuation['continuation']['action']['type'] | null,
+): string | null {
+  if (action === 'finalists' || action === 'finalists_all') {
+    return 'An explicit finalist scope continuation can advance the representative step; missing legacy OperatorConfig policy remains visible separately.';
+  }
+  if (action === 'representative_overrides' && status.finalization.finalistCount > 0) {
+    return 'Representative overrides can be applied to the persisted finalist scope; downstream evidence must then be rebuilt.';
+  }
+  if (action === 'traffic' && hasCurrentEntrantCohort(status)) {
+    return 'Traffic evidence can be imported against the current entrant cohort; downstream finalist evidence must then be rebuilt.';
+  }
+  if (action === 'decisions' && status.finalization.state === 'awaiting_decisions') {
+    return 'A decisions continuation is supplied for the current finalist scope; execution remains a later PR.';
+  }
+  if (action === 'publication_override' && status.finalization.finalistMatrixPublished && !status.library.published) {
+    return 'An explicit incomplete-publication override is supplied against the current finalist evidence matrix.';
+  }
+  return null;
+}
+
+function hasCurrentEntrantCohort(status: ResearchStatusWithHistoricalPresence): boolean {
+  if (
+    status.finalization.state === 'awaiting_decisions'
+    || status.finalization.state === 'ready_to_publish'
+    || status.finalization.state === 'published'
+  ) {
+    return true;
+  }
+  if (status.finalization.finalistCount === 0 || status.evidenceCoverage === null) return false;
+  return !status.evidenceCoverage.warnings.some((warning) => warning.code === 'ENTRANT_COHORT_NOT_COLLECTED');
 }
 
 function finalizationBlockReason(status: ResearchStatusWithHistoricalPresence): string {
@@ -229,4 +297,8 @@ function finalizationBlockReason(status: ResearchStatusWithHistoricalPresence): 
   if (status.finalization.state === 'in_progress') return 'Finalization is in progress; continue through the accepted legacy path until config-first execution is implemented.';
   if (status.finalization.state === 'ready_to_publish') return 'Finalization evidence is current; Library publication remains a separate accepted action.';
   return `Finalization is ${status.finalization.state}.`;
+}
+
+function pushUnique<T>(items: T[], value: T): void {
+  if (!items.includes(value)) items.push(value);
 }
