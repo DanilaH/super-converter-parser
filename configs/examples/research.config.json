@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "research": {
+    "label": "json-tools",
+    "market": "US",
+    "googleHl": "en",
+    "googleGl": "us",
+    "input": {"type": "seeds", "path": "input/json-tools.csv"}
+  },
+  "workflow": {"target": "finalization"},
+  "discovery": {"expand": true, "requireAhrefs": false},
+  "enrichment": {
+    "modules": ["clusters", "query_suggestions", "domain_age", "pages", "site_structure"],
+    "querySuggestions": {
+      "sources": ["surfer_related", "google_autocomplete", "google_related_search", "google_paa"],
+      "maxSuggestionsPerSource": 20,
+      "maxParents": 200
+    }
+  },
+  "finalization": {
+    "historyPolicy": {"youngDomainMaxAgeDays": 730, "recentWebPresenceMaxAgeDays": 1095, "repurposeGapMinDays": 365},
+    "historicalPresence": {"collectionMode": "annual", "maxCollections": 24, "domainCap": 30}
+  }
+}

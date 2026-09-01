@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "researchId": "<research-id>",
+  "action": {"type": "shortlist", "path": "input/shortlist.csv"}
+}
