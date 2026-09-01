@@ -27,7 +27,9 @@
     "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "csv-parse": "^7.0.2",
