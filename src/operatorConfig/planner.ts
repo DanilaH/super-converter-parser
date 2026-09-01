@@ -65,6 +65,9 @@ export function buildExistingResearchPlan(
   const discoveryTerminal = status.discovery.state === 'completed' || status.discovery.state === 'completed_with_errors';
   const discoveryOpen = status.discovery.keywordCounts.pending > 0 || status.discovery.keywordCounts.running > 0;
   const discoverySatisfied = discoveryTerminal && !discoveryOpen && status.discovery.keywordCounts.repairable === 0;
+  const finalizationDiscoverySatisfied = status.discovery.state === 'completed'
+    && !discoveryOpen
+    && status.discovery.keywordCounts.repairable === 0;
   const currentEnrichment = status.currentEnrichmentId === null
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
@@ -128,8 +131,14 @@ export function buildExistingResearchPlan(
 
   const finalizationStage: PlanStage = !finalizationRequested
     ? { id: 'finalization', state: 'not_requested', reason: null }
-    : !discoverySatisfied
-      ? { id: 'finalization', state: 'blocked', reason: 'Requires current discovery to be complete and non-repairable.' }
+    : !finalizationDiscoverySatisfied
+      ? {
+          id: 'finalization',
+          state: 'blocked',
+          reason: status.discovery.state === 'completed_with_errors'
+            ? 'Finalization requires the frozen source discovery generation to be exactly completed; completed_with_errors is not an accepted finalization parent.'
+            : 'Requires current discovery to be exactly completed, closed, and non-repairable.',
+        }
       : !enrichmentSatisfied
         ? { id: 'finalization', state: 'blocked', reason: 'Requires a completed current enrichment.' }
         : finalizationSatisfied
@@ -159,7 +168,7 @@ export function buildExistingResearchPlan(
   const unresolvedHumanRequirements: ExistingResearchExecutionPlan['unresolvedHumanRequirements'] = [];
   if (operatorConfig === null) {
     if (discoverySatisfied && currentEnrichment === null) pushUnique(unresolvedHumanRequirements, 'operator_config');
-    if (enrichmentSatisfied && (status.finalization.state === 'not_started' || status.finalization.state === 'in_progress')) {
+    if (enrichmentSatisfied && finalizationDiscoverySatisfied && (status.finalization.state === 'not_started' || status.finalization.state === 'in_progress')) {
       pushUnique(unresolvedHumanRequirements, 'operator_config');
     }
   }
@@ -175,6 +184,7 @@ export function buildExistingResearchPlan(
   }
   if (
     enrichmentSatisfied
+    && finalizationDiscoverySatisfied
     && finalizationRequested
     && status.finalization.state === 'not_started'
     && action !== 'finalists'
@@ -183,7 +193,8 @@ export function buildExistingResearchPlan(
     pushUnique(unresolvedHumanRequirements, 'finalist_scope');
   }
   if (
-    status.finalization.state === 'awaiting_decisions'
+    finalizationDiscoverySatisfied
+    && status.finalization.state === 'awaiting_decisions'
     && action !== 'decisions'
     && action !== 'publication_override'
   ) {
