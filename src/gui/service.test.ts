@@ -128,11 +128,14 @@ test('GUI new-research draft is validated by the production config loader and re
   });
 
   assert.ok(planned.draftId);
-  assert.equal(planned.plan.stateContext.kind, 'new');
-  if (planned.plan.stateContext.kind !== 'new') assert.fail('new GUI draft must produce a new-research plan');
-  assert.deepEqual(planned.plan.preset, { id: 'quick-scan', revision: 1 });
-  assert.equal(planned.plan.semantics.research.input.logicalPath, 'input/seeds.csv');
-  assert.equal((await readFile(planned.plan.semantics.research.input.resolvedPath, 'utf8')).trim(), 'keyword\njson formatter');
+  const plan = planned.plan;
+  assert.equal(plan.stateContext.kind, 'new');
+  if (!('preset' in plan)) assert.fail('new GUI draft must produce a new-research plan');
+  assert.deepEqual(plan.preset, { id: 'quick-scan', revision: 1 });
+  assert.equal(plan.semantics.research.input.logicalPath, 'input/seeds.csv');
+  const resolvedInput = plan.filesystemInputs[0]?.resolvedPath;
+  assert.ok(resolvedInput);
+  assert.equal((await readFile(resolvedInput, 'utf8')).trim(), 'keyword\njson formatter');
 
   const execution = await service.runNew(planned.draftId);
   assert.equal(execution.exitCode, 0);
