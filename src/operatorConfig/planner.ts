@@ -104,7 +104,8 @@ export function buildExistingResearchPlan(
     pushUnique(unresolvedHumanRequirements, 'operator_config');
   }
   if (
-    status.finalization.state === 'not_started'
+    enrichmentSatisfied
+    && status.finalization.state === 'not_started'
     && action !== 'finalists'
     && action !== 'finalists_all'
   ) {
