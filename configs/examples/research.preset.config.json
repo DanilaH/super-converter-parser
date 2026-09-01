@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "preset": "standard",
+  "research": {
+    "label": "json-tools",
+    "input": {
+      "type": "seeds",
+      "path": "input/json-tools.csv"
+    }
+  }
+}
