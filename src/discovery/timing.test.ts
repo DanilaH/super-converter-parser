@@ -17,6 +17,7 @@ const rootSample = {
   outcome: 'completed' as const,
   captchaEncountered: true,
   relatedOutcome: 'ok' as const,
+  googlePacingMs: 0,
   pageCreateMs: 10,
   navigationMs: 100,
   captchaMs: 20,
@@ -27,7 +28,7 @@ const rootSample = {
   totalMs: 700,
 };
 
-test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot timings deterministically', () => {
+test('DiscoveryTimingRecorder aggregates browser, pacing, Ahrefs, sleeps, and snapshot timings deterministically', () => {
   const recorder = new DiscoveryTimingRecorder(1_000);
   recorder.recordBrowser(rootSample);
   recorder.recordBrowser({
@@ -37,6 +38,7 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot t
     isRoot: false,
     captchaEncountered: false,
     relatedOutcome: null,
+    googlePacingMs: 125,
     relatedSurferMs: null,
     totalMs: 500,
   });
@@ -56,12 +58,14 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot t
   assert.equal(summary.counts.relatedOk, 1);
   assert.equal(summary.counts.relatedEmpty, 0);
   assert.equal(summary.counts.relatedError, 0);
+  assert.equal(summary.counts.googlePacingWaits, 1);
   assert.equal(summary.counts.ahrefsClientCalls, 1);
   assert.equal(summary.counts.engineSleepCalls, 2);
   assert.equal(summary.counts.snapshotCallbacks, 3);
   assert.equal(summary.counts.snapshotPublishes, 2);
   assert.equal(summary.counts.snapshotSkips, 1);
   assert.equal(summary.totals.browserCollectionMs, 1_200);
+  assert.equal(summary.totals.googlePacingMs, 125);
   assert.equal(summary.totals.relatedSurferMs, 300);
   assert.equal(summary.totals.ahrefsClientMs, 250);
   assert.equal(summary.totals.engineSleepRequestedMs, 1_500);
@@ -74,6 +78,14 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot t
     maxMs: 700,
     averageMs: 600,
   });
+  assert.deepEqual(summary.distributions.googlePacingMs, {
+    count: 1,
+    minMs: 125,
+    p50Ms: 125,
+    p95Ms: 125,
+    maxMs: 125,
+    averageMs: 125,
+  });
   assert.deepEqual(summary.distributions.snapshotPublishMs, {
     count: 2,
     minMs: 400,
@@ -83,6 +95,7 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, sleeps, and snapshot t
     averageMs: 500,
   });
   assert.match(renderDiscoveryTimingSummary(summary), /wall 2\.0s/);
+  assert.match(renderDiscoveryTimingSummary(summary), /Google pacing 125ms \(1 wait\)/);
   assert.match(renderDiscoveryTimingSummary(summary), /snapshots 1\.0s \(2 write \/ 1 skip\)/);
   assert.match(renderDiscoveryTimingSummary(summary), /CAPTCHA 1/);
 });

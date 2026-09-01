@@ -26,6 +26,7 @@ import {
   saveParserFailureArtifacts,
 } from '../diagnostics/artifacts.js';
 import { keywordSlug } from '../runs/run.js';
+import { GoogleNavigationGate } from './googleNavigationGate.js';
 
 export type SurferRelatedOutcome = {
   status: 'not_attempted' | 'ok' | 'empty' | 'error';
@@ -58,6 +59,7 @@ export type BrowserCollectionTiming = {
   outcome: 'completed' | 'partial' | 'failed' | 'paused';
   captchaEncountered: boolean;
   relatedOutcome: SurferRelatedOutcome['status'] | null;
+  googlePacingMs: number;
   pageCreateMs: number;
   navigationMs: number | null;
   captchaMs: number | null;
@@ -70,6 +72,8 @@ export type BrowserCollectionTiming = {
 
 export type BrowserCollectionTimingSink = (timing: BrowserCollectionTiming) => void;
 
+const GOOGLE_NAVIGATION_GATES = new WeakMap<BrowserContext, GoogleNavigationGate>();
+
 export async function collectKeyword(
   context: BrowserContext,
   config: ResearchConfig,
@@ -79,6 +83,7 @@ export async function collectKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<CollectionResult> {
   const totalStartedAt = Date.now();
+  let googlePacingMs = 0;
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
   const pageCreateMs = Date.now() - pageCreateStartedAt;
@@ -96,6 +101,7 @@ export async function collectKeyword(
   let debugArtifactPath: string | null = null;
 
   try {
+    googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
     const searchUrl = buildSearchUrl(config, keyword.keyword);
     const navigationStartedAt = Date.now();
     try {
@@ -311,6 +317,7 @@ export async function collectKeyword(
       outcome,
       captchaEncountered,
       relatedOutcome: relatedOutcomeForTiming,
+      googlePacingMs,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -333,6 +340,7 @@ export async function collectRelatedKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<RelatedCollectionResult> {
   const totalStartedAt = Date.now();
+  let googlePacingMs = 0;
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
   const pageCreateMs = Date.now() - pageCreateStartedAt;
@@ -346,6 +354,7 @@ export async function collectRelatedKeyword(
   let pageUrl = '';
 
   try {
+    googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
     const navigationStartedAt = Date.now();
     try {
       await page.goto(buildSearchUrl(config, keyword.keyword), {
@@ -436,6 +445,7 @@ export async function collectRelatedKeyword(
       outcome,
       captchaEncountered,
       relatedOutcome: relatedOutcomeForTiming,
+      googlePacingMs,
       pageCreateMs,
       navigationMs,
       captchaMs,
@@ -447,6 +457,22 @@ export async function collectRelatedKeyword(
     });
     await page.close().catch(() => undefined);
   }
+}
+
+async function waitForGoogleNavigationTurn(
+  context: BrowserContext,
+  signal: CancellationSignal,
+): Promise<number> {
+  let gate = GOOGLE_NAVIGATION_GATES.get(context);
+  if (!gate) {
+    gate = new GoogleNavigationGate();
+    GOOGLE_NAVIGATION_GATES.set(context, gate);
+  }
+  return gate.waitForTurn({
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms)),
+    isCancelled: () => signal.isCancelled(),
+  });
 }
 
 async function readDetectedLocation(page: Page): Promise<string | null> {
