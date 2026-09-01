@@ -164,9 +164,10 @@ export async function runResearchFromConfig(
   if (discovery.exitCode !== EXIT_OK || discovery.runId === null || discovery.researchDirectory === null) {
     return { exitCode: discovery.exitCode, result: discoveryOnlyMachineResult(loaded, discovery) };
   }
+  const researchId = discovery.runId;
 
   console.log('');
-  console.log(`  Research ID: ${discovery.runId}`);
+  console.log(`  Research ID: ${researchId}`);
   console.log(`  Operator config: ${join(discovery.researchDirectory, 'operator-config.json')}`);
 
   if (semantics.workflow.target === 'discovery') {
@@ -174,7 +175,7 @@ export async function runResearchFromConfig(
   }
 
   return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
-    researchId: discovery.runId,
+    researchId,
     outputRoot,
     continuation: null,
     deps,
