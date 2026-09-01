@@ -45,6 +45,7 @@ export type DiscoveryTimingSummaryV1 = {
     relatedOk: number;
     relatedEmpty: number;
     relatedError: number;
+    googlePacingWaits: number;
     ahrefsClientCalls: number;
     engineSleepCalls: number;
     snapshotCallbacks: number;
@@ -53,6 +54,7 @@ export type DiscoveryTimingSummaryV1 = {
   };
   totals: {
     browserCollectionMs: number;
+    googlePacingMs: number;
     navigationMs: number;
     captchaMs: number;
     mainSurferMs: number;
@@ -66,6 +68,7 @@ export type DiscoveryTimingSummaryV1 = {
   distributions: {
     primaryBrowserCollectionMs: TimingDistribution;
     relatedOnlyBrowserCollectionMs: TimingDistribution;
+    googlePacingMs: TimingDistribution;
     relatedSurferMs: TimingDistribution;
     ahrefsClientMs: TimingDistribution;
     snapshotPublishMs: TimingDistribution;
@@ -111,6 +114,8 @@ export class DiscoveryTimingRecorder {
     const finishedAtMs = params.finishedAtMs ?? Date.now();
     const primary = this.browserSamples.filter((sample) => sample.kind === 'primary');
     const relatedOnly = this.browserSamples.filter((sample) => sample.kind === 'related_only');
+    const pacingDurations = this.browserSamples.map((sample) => sample.googlePacingMs);
+    const pacingWaitDurations = pacingDurations.filter((value) => value > 0);
     const relatedDurations = this.browserSamples
       .map((sample) => sample.relatedSurferMs)
       .filter((value): value is number => value !== null);
@@ -136,6 +141,7 @@ export class DiscoveryTimingRecorder {
         relatedOk: this.browserSamples.filter((sample) => sample.relatedOutcome === 'ok').length,
         relatedEmpty: this.browserSamples.filter((sample) => sample.relatedOutcome === 'empty').length,
         relatedError: this.browserSamples.filter((sample) => sample.relatedOutcome === 'error').length,
+        googlePacingWaits: pacingWaitDurations.length,
         ahrefsClientCalls: this.ahrefsSamples.length,
         engineSleepCalls: this.engineSleepCalls,
         snapshotCallbacks: this.snapshotSamples.length,
@@ -144,6 +150,7 @@ export class DiscoveryTimingRecorder {
       },
       totals: {
         browserCollectionMs: sum(this.browserSamples.map((sample) => sample.totalMs)),
+        googlePacingMs: sum(pacingDurations),
         navigationMs: sumNullable(this.browserSamples.map((sample) => sample.navigationMs)),
         captchaMs: sumNullable(this.browserSamples.map((sample) => sample.captchaMs)),
         mainSurferMs: sumNullable(this.browserSamples.map((sample) => sample.mainSurferMs)),
@@ -157,6 +164,7 @@ export class DiscoveryTimingRecorder {
       distributions: {
         primaryBrowserCollectionMs: distribution(primary.map((sample) => sample.totalMs)),
         relatedOnlyBrowserCollectionMs: distribution(relatedOnly.map((sample) => sample.totalMs)),
+        googlePacingMs: distribution(pacingWaitDurations),
         relatedSurferMs: distribution(relatedDurations),
         ahrefsClientMs: distribution(ahrefsDurations),
         snapshotPublishMs: distribution(snapshotDurations),
@@ -190,6 +198,7 @@ export function renderDiscoveryTimingSummary(summary: DiscoveryTimingSummaryV1):
   return [
     `wall ${formatMs(summary.wallMs)}`,
     `browser ${formatMs(totals.browserCollectionMs)}`,
+    `Google pacing ${formatMs(totals.googlePacingMs)} (${summary.counts.googlePacingWaits} wait)`,
     `related ${formatMs(totals.relatedSurferMs)}`,
     `Ahrefs client ${formatMs(totals.ahrefsClientMs)}`,
     `engine sleeps ${formatMs(totals.engineSleepRequestedMs)}`,
