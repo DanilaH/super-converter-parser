@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { operatorContinuationJsonSchema, operatorResearchConfigJsonSchema, validateOperatorContinuation, validateOperatorResearchConfig } from './contracts.js';
+import {
+  operatorContinuationJsonSchema,
+  operatorResearchConfigJsonSchema,
+  operatorResearchPresetJsonSchema,
+  validateOperatorContinuation,
+  validateOperatorResearchConfig,
+  validateOperatorResearchConfigSource,
+  validateOperatorResearchPreset,
+} from './contracts.js';
 import { ResearchError } from '../shared/errors.js';
 
 function baseConfig(): unknown {
@@ -64,6 +72,44 @@ test('operator config rejects absolute machine paths', () => {
   expectSchemaError(() => validateOperatorResearchConfig(windows), 'must be relative');
 });
 
+test('preset-backed source config may inherit stage-required fields before effective merge', () => {
+  const source = validateOperatorResearchConfigSource({
+    version: 1,
+    preset: 'finalist-validation',
+    research: { label: 'json-tools', input: { type: 'seeds', path: 'input/seeds.csv' } },
+    finalization: { historyPolicy: { youngDomainMaxAgeDays: 365 } },
+  });
+  assert.equal(source.preset, 'finalist-validation');
+  assert.equal(source.finalization?.historyPolicy?.youngDomainMaxAgeDays, 365);
+  expectSchemaError(
+    () => validateOperatorResearchConfig(source),
+    '$.enrichment is required',
+  );
+});
+
+test('preset contract cannot contain input paths, labels, or human judgment fields', () => {
+  const base = { version: 1, id: 'safe', revision: 1 };
+  expectSchemaError(
+    () => validateOperatorResearchPreset({ ...base, research: { input: { type: 'seeds', path: 'x.csv' } } }),
+    '$.research.input',
+  );
+  expectSchemaError(
+    () => validateOperatorResearchPreset({ ...base, research: { label: 'hidden-label' } }),
+    '$.research.label',
+  );
+  expectSchemaError(
+    () => validateOperatorResearchPreset({ ...base, decisions: { build: true } }),
+    '$.decisions',
+  );
+});
+
+test('preset identity is versioned, strict, and portable', () => {
+  const preset = validateOperatorResearchPreset({ version: 1, id: 'deep-research', revision: 3, discovery: { expand: true } });
+  assert.equal(preset.revision, 3);
+  expectSchemaError(() => validateOperatorResearchPreset({ version: 1, id: '../escape', revision: 1 }), '$.id');
+  expectSchemaError(() => validateOperatorResearchPreset({ version: 1, id: 'safe', revision: 0 }), '$.revision');
+});
+
 test('continuation requires explicit research id and validates discriminated payloads', () => {
   const continuation = validateOperatorContinuation({ version: 1, researchId: 'research-123', action: { type: 'shortlist', path: 'inputs/shortlist.csv' } });
   assert.equal(continuation.researchId, 'research-123');
@@ -75,6 +121,8 @@ test('continuation requires explicit research id and validates discriminated pay
 test('committed JSON schemas stay synchronized with runtime contracts', async () => {
   const researchArtifact = JSON.parse(await readFile(resolve('schemas/operator-research-config-v1.schema.json'), 'utf8')) as unknown;
   const continuationArtifact = JSON.parse(await readFile(resolve('schemas/operator-continuation-v1.schema.json'), 'utf8')) as unknown;
+  const presetArtifact = JSON.parse(await readFile(resolve('schemas/operator-research-preset-v1.schema.json'), 'utf8')) as unknown;
   assert.deepEqual(researchArtifact, operatorResearchConfigJsonSchema());
   assert.deepEqual(continuationArtifact, operatorContinuationJsonSchema());
+  assert.deepEqual(presetArtifact, operatorResearchPresetJsonSchema());
 });
