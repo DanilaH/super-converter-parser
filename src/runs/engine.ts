@@ -131,6 +131,16 @@ export type ExecuteRunOptions = {
 
 const RESUME_COMMAND_PREFIX = 'npm run research -- --resume';
 
+type SettledPrefetch =
+  | { kind: 'result'; result: CollectionResult }
+  | { kind: 'error'; error: unknown };
+
+type PrefetchedCollection = {
+  keywordIdx: number;
+  resolution: CacheResolution;
+  settled: Promise<SettledPrefetch>;
+};
+
 // Validates that a run may be resumed. Throws RESUME_NOT_FOUND,
 // RESUME_TERMINAL_RUN, or RESUME_PARSER_MISMATCH otherwise.
 export function validateResume(store: RunStore, runId: string): StoredRun {
@@ -259,6 +269,77 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
 
   const breaker = new CircuitBreaker(config.circuitBreaker);
   const samples: number[] = [];
+  // Browser lookahead is useful only when real Ahrefs work exists to overlap.
+  // It never opens two browser collections at once: the next collection starts
+  // only after the current collector returned, while current-keyword Ahrefs runs.
+  const lookaheadEnabled = Boolean(
+    options.ahrefs?.client && options.cache?.store instanceof CacheStore,
+  );
+  let prefetched: PrefetchedCollection | null = null;
+  // Access through a function prevents TypeScript from treating the captured
+  // mutable slot as permanently null; startBrowserLookahead mutates it.
+  const readPrefetched = (): PrefetchedCollection | null => prefetched;
+
+  const resolvePrimaryAccess = (keyword: StoredKeyword): CacheResolution =>
+    options.cache?.resolutions?.get(keyword.normalizedKeyword) ??
+    resolveKeywordAccess(
+      keyword.normalizedKeyword,
+      { identity, forceRefresh, refreshKeywords },
+      options.cache?.store ?? null,
+      hooks.now(),
+    );
+
+  const startBrowserLookahead = (currentIdx: number, record: KeywordRecord): void => {
+    // Never speculate after a provider/parser error: that result may trip the
+    // circuit breaker, and an eager next Google request would be semantically
+    // wrong. Successful/clean work cannot newly trip either breaker.
+    if (
+      !lookaheadEnabled ||
+      prefetched !== null ||
+      hooks.pauseRequested() ||
+      record.error !== null ||
+      (record.status !== 'completed' && record.status !== 'partial')
+    ) return;
+
+    const next = liveKeywords.find(
+      (keyword) => keyword.idx !== currentIdx && keyword.status === 'pending',
+    );
+    if (!next) return;
+
+    // Resolve cache access exactly once before the speculative browser request.
+    // A primary cache hit is never prefetched: doing so would create a Google
+    // request that the ordinary engine path would have skipped entirely.
+    const nextResolution = resolvePrimaryAccess(next);
+    if (nextResolution.kind === 'hit') return;
+
+    // Count the lookup when it actually starts, not when the prefetched result
+    // is consumed later. If the process pauses afterwards, accounting still
+    // reflects the real browser attempt that already happened.
+    store.incrementLookups(runId);
+    const settled: Promise<SettledPrefetch> = collect(
+      storedKeywordToRecord(next),
+      debugRoot,
+      signal,
+    ).then(
+      (result): SettledPrefetch => ({ kind: 'result', result }),
+      (error: unknown): SettledPrefetch => ({ kind: 'error', error }),
+    );
+    prefetched = { keywordIdx: next.idx, resolution: nextResolution, settled };
+  };
+
+  const discardPrefetchedOnPause = async (): Promise<void> => {
+    const activePrefetch = readPrefetched();
+    if (activePrefetch === null) return;
+    prefetched = null;
+    const settled = await activePrefetch.settled;
+    if (
+      settled.kind === 'error' &&
+      !(settled.error instanceof ResearchError && settled.error.code === 'RUN_PAUSED')
+    ) {
+      const code = settled.error instanceof ResearchError ? settled.error.code : 'INTERNAL_ERROR';
+      logger(`  ⚠ discarded prefetched browser result after pause (${code}); keyword remains pending`);
+    }
+  };
 
   logger('');
   if (mode === 'resume') {
@@ -290,6 +371,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     // expansion rows appended to the projection during this pass.
     if (!stored) break;
 
+    const queuedPrefetch = readPrefetched();
+    if (queuedPrefetch !== null && queuedPrefetch.keywordIdx !== stored.idx) {
+      throw new ResearchError(
+        'DB_ERROR',
+        `Browser lookahead expected keyword idx ${queuedPrefetch.keywordIdx} next, but queue selected ${stored.idx}.`,
+      );
+    }
+    const currentPrefetch = queuedPrefetch;
+
     const idx = stored.idx;
     stored.status = 'running';
     store.updateKeyword(runId, stored);
@@ -298,17 +388,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     const processedCount = progressBefore.completed + progressBefore.partial + progressBefore.failed;
     logger(`[${processedCount}/${liveKeywords.length}] ${stored.normalizedKeyword}`);
 
-    // The resolution is decided exactly once per keyword; a precomputed plan
-    // (from the same read that drove the browser decision) is authoritative,
-    // so execution can never see a different cache state than planning did.
-    const resolution =
-      options.cache?.resolutions?.get(stored.normalizedKeyword) ??
-      resolveKeywordAccess(
-        stored.normalizedKeyword,
-        { identity, forceRefresh, refreshKeywords },
-        options.cache?.store ?? null,
-        hooks.now(),
-      );
+    // A prefetched request carries the exact cache decision made immediately
+    // before it started. Otherwise resolve once at the normal execution point.
+    const resolution = currentPrefetch?.resolution ?? resolvePrimaryAccess(stored);
 
     if (resolution.kind === 'hit') {
       const entry = resolution.entry;
@@ -391,6 +473,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         }
         store.recordRelatedKeywords(runId, stored.idx, stored.keyword, relatedOutcome, new Set(added));
       }
+      // Start one guaranteed-fresh next browser collection while this cached
+      // keyword performs serial Ahrefs. The cache-hit next-keyword case is
+      // excluded inside startBrowserLookahead, so this never adds a request.
+      startBrowserLookahead(stored.idx, entry.record);
+
       // Commit the cached primary only after any required related lookup. If
       // the process exits during that lookup, the root remains resumable and
       // related observation cannot be silently skipped on restart.
@@ -413,12 +500,24 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     } else {
       const startAt = hooks.now();
       let result: CollectionResult | null = null;
+      // Claim the one-keyword lookahead before the retry loop. Its browser
+      // lookup was already counted at start time, so attempt #1 must not count
+      // or execute another request.
+      if (currentPrefetch !== null) prefetched = null;
 
       try {
         for (let attempt = 1; attempt <= config.retry.maxAttempts; attempt += 1) {
-          store.incrementLookups(runId);
-          result = await collect(storedKeywordToRecord(stored), debugRoot, signal);
-          const record = result.record;
+          let attemptResult: CollectionResult;
+          if (attempt === 1 && currentPrefetch !== null) {
+            const settled = await currentPrefetch.settled;
+            if (settled.kind === 'error') throw settled.error;
+            attemptResult = settled.result;
+          } else {
+            store.incrementLookups(runId);
+            attemptResult = await collect(storedKeywordToRecord(stored), debugRoot, signal);
+          }
+          result = attemptResult;
+          const record = attemptResult.record;
           if (!isTerminalKeywordStatus(record.status)) {
             throw new ResearchError(
               'DB_ERROR',
@@ -457,8 +556,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       }
 
       if (outcome !== null) break;
+      if (result === null) {
+        throw new ResearchError('DB_ERROR', `No collection result for "${stored.normalizedKeyword}".`);
+      }
 
-      const record = result?.record as KeywordRecord;
+      const record = result.record;
+      // A clean terminal result cannot newly trip the breaker, so starting the
+      // next known-fresh browser request here is safe. Ahrefs below remains
+      // serial and unchanged, but its network + rate-limit waits overlap it.
+      startBrowserLookahead(idx, record);
+
       const collectedAt = new Date(hooks.now()).toISOString();
       const committed: StoredKeyword = {
         idx,
@@ -480,7 +587,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             ? 'expired'
             : 'miss'
         : null;
-      const serpRows = result?.serpRows ?? [];
+      const serpRows = result.serpRows;
       const missSourceByDomain = await applyDomainRatings({
         serpRows,
         ahrefs: options.ahrefs?.client ?? null,
@@ -500,7 +607,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       if (record.surfer) {
         const volume = formatVolume(record.surfer.volume);
         const cpc = record.surfer.cpc === null ? 'n/a' : `$${record.surfer.cpc.toFixed(2)}`;
-        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${formatOrganicResultCount(record, result?.serpRows.length ?? 0)}`);
+        logger(`  ✓ volume: ${volume} | cpc: ${cpc} | organic: ${formatOrganicResultCount(record, result.serpRows.length)}`);
       } else {
         logger(`  ✗ surfer: ${record.error?.code ?? 'unknown'} (${record.error?.message ?? ''})`);
       }
@@ -509,7 +616,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         logger(`  ⚠ SERP GEO WARNING: target ${config.research.market}, Google detected location: ${record.google.detectedLocation}`);
       }
 
-      if (result?.debugArtifactPath) {
+      if (result.debugArtifactPath) {
         logger(`  ⚠ parser debug artifacts saved to ${result.debugArtifactPath}`);
       }
 
@@ -523,7 +630,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             normalizedKeyword: record.normalizedKeyword,
             identity,
             record,
-            serpRows: result?.serpRows ?? [],
+            serpRows: result.serpRows,
             collectedAt,
             storedAt: collectedAt,
             expiresAt: new Date(
@@ -548,11 +655,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           cache: options.cache,
           identity,
           keyword: record,
-          related: result?.related ?? { status: 'not_attempted', error: null, rows: [] },
+          related: result.related,
           config,
           collectedAt,
         });
-        if (result) reportRelatedOutcome(result, record.normalizedKeyword, logger);
+        reportRelatedOutcome(result, record.normalizedKeyword, logger);
 
         // Expansion queues depth-one related candidates for Google collection.
         // It triggers only when expansion is enabled and the related outcome is
@@ -561,7 +668,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         if (
           config.expansion.enabled &&
           config.expansion.depth >= 1 &&
-          result &&
           result.related.status === 'ok'
         ) {
           added = applySurferExpansion({
@@ -578,7 +684,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             logger(`  ↳ expansion: +${name} (parent: ${record.keyword})`);
           }
         }
-        store.recordRelatedKeywords(runId, idx, record.keyword, result?.related ?? { status: 'not_attempted', error: null, rows: [] }, new Set(added));
+        store.recordRelatedKeywords(runId, idx, record.keyword, result.related, new Set(added));
       }
     }
 
@@ -628,6 +734,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     store.setRunState(runId, state);
     outcome = { kind: 'finished', state, ahrefs, scoringCompleteness };
   } else {
+    // The prefetched keyword was never marked running or persisted, so pausing
+    // discards only speculative browser evidence. Await its settled promise so
+    // the caller can safely close Research Chrome after executeRun returns.
+    await discardPrefetchedOnPause();
+
     // Paused state: publish the Ahrefs summary + scoring completeness so the
     // paused run's artifacts are consistent with a final run (and with the
     // resume that recomputes them from persisted state).
