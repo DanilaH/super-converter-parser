@@ -250,30 +250,28 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     }
   }
 
-  // All keywords currently known (seeds + any previously expanded rows from a
-  // prior interrupted run) participate in de-duplication, so expansion never
-  // re-adds a candidate that is already queued or processed.
-  const seenNormalized = new Set(
-    store.loadKeywords(runId).map((keyword) => keyword.normalizedKeyword),
-  );
+  // One process-local projection is enough for queue/progress accounting. It is
+  // loaded only after stale-running repair and is mutated only after the
+  // corresponding SQLite write succeeds. SQLite remains the durable truth; a
+  // crash/resume rebuilds this projection from the store.
+  const liveKeywords = store.loadKeywords(runId);
+  const seenNormalized = new Set(liveKeywords.map((keyword) => keyword.normalizedKeyword));
 
   const breaker = new CircuitBreaker(config.circuitBreaker);
   const samples: number[] = [];
 
   logger('');
   if (mode === 'resume') {
-    const remaining = store
-      .loadKeywords(runId)
-      .filter((keyword) => !isTerminalKeywordStatus(keyword.status)).length;
+    const remaining = liveKeywords.filter((keyword) => !isTerminalKeywordStatus(keyword.status)).length;
     logger(`[resume] ${runId}: ${remaining} keyword(s) remaining`);
   }
 
   let outcome: RunOutcome | null = null;
 
-  // Dynamic queue: the next keyword is re-read from the database on every
-  // iteration, so keywords discovered by Surfer expansion mid-run are processed
-  // in the same pass instead of being left pending (which previously forced the
-  // run into a terminal state while related candidates stayed unprocessed).
+  // Dynamic queue is process-local but follows durable writes exactly. Newly
+  // persisted Surfer expansion rows are appended to liveKeywords immediately,
+  // so they are collected in the same pass without rescanning/parsing every
+  // keyword row from SQLite on each iteration.
   while (outcome === null) {
     if (hooks.pauseRequested()) {
       outcome = { kind: 'paused', reason: 'SIGINT received; run paused safely.', ahrefs: null, scoringCompleteness: null };
@@ -286,25 +284,19 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       break;
     }
 
-    const stored = store
-      .loadKeywords(runId)
-      .filter((keyword) => !isTerminalKeywordStatus(keyword.status) && keyword.status !== 'running')
-      .sort((a, b) => a.idx - b.idx)[0];
+    const stored = liveKeywords.find((keyword) => keyword.status === 'pending');
 
-    // No pending/running keyword remains: the run is genuinely complete, even
-    // if expansion added rows during this pass. The run must not be marked
-    // terminal while related candidates are still queued.
+    // No pending keyword remains: the run is genuinely complete, including any
+    // expansion rows appended to the projection during this pass.
     if (!stored) break;
 
     const idx = stored.idx;
     stored.status = 'running';
     store.updateKeyword(runId, stored);
 
-    const total = store.loadKeywords(runId).length;
-    const processedCount = store
-      .loadKeywords(runId)
-      .filter((keyword) => isTerminalKeywordStatus(keyword.status)).length;
-    logger(`[${processedCount}/${total}] ${stored.normalizedKeyword}`);
+    const progressBefore = countProgress(liveKeywords);
+    const processedCount = progressBefore.completed + progressBefore.partial + progressBefore.failed;
+    logger(`[${processedCount}/${liveKeywords.length}] ${stored.normalizedKeyword}`);
 
     // The resolution is decided exactly once per keyword; a precomputed plan
     // (from the same read that drove the browser decision) is authoritative,
@@ -390,6 +382,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             related: relatedOutcome.rows,
             config,
             seenNormalized,
+            liveKeywords,
             logger,
           });
           for (const name of added) {
@@ -413,6 +406,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       });
       store.recordDomains(runId, stored.idx, stored.keyword, entry.serpRows, hitSourceByDomain);
       store.commitKeyword(runId, committed, entry.serpRows, 'hit');
+      Object.assign(stored, committed, { cacheStatus: 'hit' as const });
       logger(
         `  ✓ cache hit (${entry.record.status}) | volume: ${formatVolume(entry.record.surfer?.volume ?? null)} | organic: ${formatOrganicResultCount(entry.record, entry.serpRows.length)}`,
       );
@@ -425,27 +419,27 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           store.incrementLookups(runId);
           result = await collect(storedKeywordToRecord(stored), debugRoot, signal);
           const record = result.record;
-        if (!isTerminalKeywordStatus(record.status)) {
-          throw new ResearchError(
-            'DB_ERROR',
-            `Collector returned non-terminal status "${record.status}" for "${record.normalizedKeyword}".`,
-          );
-        }
+          if (!isTerminalKeywordStatus(record.status)) {
+            throw new ResearchError(
+              'DB_ERROR',
+              `Collector returned non-terminal status "${record.status}" for "${record.normalizedKeyword}".`,
+            );
+          }
 
-        const retryable =
-          record.status === 'failed' &&
-          record.error !== null &&
-          isTransientErrorCode(record.error.code) &&
-          attempt < config.retry.maxAttempts;
+          const retryable =
+            record.status === 'failed' &&
+            record.error !== null &&
+            isTransientErrorCode(record.error.code) &&
+            attempt < config.retry.maxAttempts;
 
-        if (retryable) {
-          const delay = retryDelayMs(attempt, config.retry, hooks.random);
-          logger(`  ⚠ ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
-          await hooks.sleep(delay);
-          continue;
+          if (retryable) {
+            const delay = retryDelayMs(attempt, config.retry, hooks.random);
+            logger(`  ⚠ ${record.error?.code}: retry ${attempt}/${config.retry.maxAttempts} in ${delay}ms`);
+            await hooks.sleep(delay);
+            continue;
+          }
+          break;
         }
-        break;
-      }
       } catch (error) {
         if (error instanceof ResearchError && error.code === 'RUN_PAUSED') {
           // Collection was cancelled (Ctrl+C) while this keyword was in flight.
@@ -499,6 +493,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
       });
       store.recordDomains(runId, idx, record.keyword, serpRows, missSourceByDomain);
       store.commitKeyword(runId, committed, serpRows, cacheStatus);
+      Object.assign(stored, committed, { cacheStatus });
       breaker.record(record.status, record.error?.code ?? null);
       samples.push(hooks.now() - startAt);
 
@@ -576,6 +571,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
             related: result.related.rows,
             config,
             seenNormalized,
+            liveKeywords,
             logger,
           });
           for (const name of added) {
@@ -587,17 +583,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     }
 
     await publish(store, runId, runDirectory, 'running');
-    const liveTotal = store.loadKeywords(runId).length;
-    const liveProcessed = store
-      .loadKeywords(runId)
-      .filter((keyword) => isTerminalKeywordStatus(keyword.status)).length;
+    const liveProgress = countProgress(liveKeywords);
+    const liveProcessed = liveProgress.completed + liveProgress.partial + liveProgress.failed;
     logger(
       progressLine(
-        liveTotal,
-        countProgress(store.loadKeywords(runId)),
-        countCacheStats(store.loadKeywords(runId)),
+        liveKeywords.length,
+        liveProgress,
+        countCacheStats(liveKeywords),
         store.loadRun(runId)?.lookups ?? 0,
-        liveTotal - liveProcessed,
+        liveKeywords.length - liveProcessed,
         samples,
       ),
     );
@@ -612,7 +606,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   }
 
   if (outcome === null) {
-    const progress = countProgress(store.loadKeywords(runId));
+    const progress = countProgress(liveKeywords);
     const ahrefs = ahrefsTracker.finish(store.loadDomains(runId));
     const baseState: 'completed' | 'completed_with_errors' =
       progress.errors > 0 ? 'completed_with_errors' : 'completed';
@@ -886,9 +880,10 @@ function applySurferExpansion(params: {
   related: SurferRelatedKeyword[];
   config: ResearchConfig;
   seenNormalized: Set<string>;
+  liveKeywords: StoredKeyword[];
   logger: (line: string) => void;
 }): string[] {
-  const { runId, store, parentKeyword, related, config, seenNormalized, logger } = params;
+  const { runId, store, parentKeyword, related, config, seenNormalized, liveKeywords, logger } = params;
   if (!config.expansion.enabled || config.expansion.depth < 1) return [];
 
   const candidates = related
@@ -906,11 +901,12 @@ function applySurferExpansion(params: {
   const added: string[] = [];
   for (const candidate of candidates) {
     seenNormalized.add(candidate.normalizedKeyword);
-    store.addKeyword(runId, {
+    const persisted = store.addKeyword(runId, {
       keyword: candidate.keyword,
       normalizedKeyword: candidate.normalizedKeyword,
       sources: [{ type: 'surfer_related', parentKeyword, overlap: candidate.overlap ?? null }],
     });
+    liveKeywords.push(persisted);
     added.push(candidate.keyword);
   }
   return added;
