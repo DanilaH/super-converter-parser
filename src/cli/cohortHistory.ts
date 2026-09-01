@@ -118,9 +118,9 @@ async function main(): Promise<void> {
   await runCohortHistory({
     outputRoot: resolveOutputRoot(args.outputRoot),
     enrichmentId: args.enrichmentId,
-    youngDomainMaxAgeDays: args.youngDomainMaxAgeDays,
-    recentWebPresenceMaxAgeDays: args.recentWebPresenceMaxAgeDays,
-    repurposeGapMinDays: args.repurposeGapMinDays,
+    ...(args.youngDomainMaxAgeDays === undefined ? {} : { youngDomainMaxAgeDays: args.youngDomainMaxAgeDays }),
+    ...(args.recentWebPresenceMaxAgeDays === undefined ? {} : { recentWebPresenceMaxAgeDays: args.recentWebPresenceMaxAgeDays }),
+    ...(args.repurposeGapMinDays === undefined ? {} : { repurposeGapMinDays: args.repurposeGapMinDays }),
   });
 }
 
