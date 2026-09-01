@@ -83,13 +83,29 @@ export function buildExistingResearchPlan(
   const hasDurableEnrichmentWork = currentEnrichment !== null;
   const finalizationHasDurableState = status.finalization.state !== 'not_started';
   const finalizationRequested = operatorConfig === null || wantsFinalization || finalizationHasDurableState;
+  const configuredEnrichmentResumable = currentEnrichment !== null
+    && operatorConfig !== null
+    && wantsEnrichment
+    && ['created', 'paused', 'failed'].includes(currentEnrichment.state);
 
   const enrichmentStage: PlanStage = !discoverySatisfied
     ? { id: 'enrichment', state: 'blocked', reason: 'Requires current discovery to be complete and non-repairable.' }
     : enrichmentSatisfied
       ? { id: 'enrichment', state: 'already_satisfied', reason: null }
       : currentEnrichment !== null
-        ? { id: 'enrichment', state: 'blocked', reason: `Current enrichment is ${currentEnrichment.state}; resume it through the accepted legacy path.` }
+        ? configuredEnrichmentResumable
+          ? {
+              id: 'enrichment',
+              state: 'ready',
+              reason: `Current configured enrichment is ${currentEnrichment.state}; resume it against its persisted discovery parent and config.`,
+            }
+          : {
+              id: 'enrichment',
+              state: 'blocked',
+              reason: currentEnrichment.state === 'running'
+                ? 'Current enrichment is running and may still be active; config-driven execution will not start a concurrent enrichment.'
+                : `Current enrichment is ${currentEnrichment.state}; config-driven resume requires persisted OperatorConfig enrichment intent.`,
+            }
         : operatorConfig === null
           ? { id: 'enrichment', state: 'blocked', reason: 'This existing research has no persisted OperatorConfig; downstream enrichment intent cannot be reconstructed safely.' }
           : !wantsEnrichment

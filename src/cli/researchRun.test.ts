@@ -91,6 +91,13 @@ test('research:run executes resolved semantics, publishes provenance before prov
       order.push('provenance');
       return DEFAULT_RESEARCH_RUN_DEPS.writeProvenance(...args);
     },
+    runConfiguredEnrichment: async (...args: Parameters<typeof DEFAULT_RESEARCH_RUN_DEPS.runConfiguredEnrichment>) => ({
+      outcome: { kind: 'completed' as const, enrichmentId: 'test-enrichment', state: 'completed' as const, result: {} },
+      enrichmentId: 'test-enrichment',
+      enrichmentDirectory: join(args[0].researchDirectory, 'test-enrichment'),
+      resumed: false,
+      archivePath: null,
+    }),
   };
 
   const execution = await runResearchFromConfig(
@@ -131,6 +138,10 @@ test('research:run executes resolved semantics, publishes provenance before prov
   assert.equal(execution.result.discoveryRunId, indexRecord.runId);
   assert.equal(execution.result.discoveryState, 'completed');
   assert.equal(execution.result.workflowTarget, 'enrichment');
+  assert.equal(execution.result.enrichmentId, 'test-enrichment');
+  assert.equal(execution.result.enrichmentState, 'completed');
+  assert.equal(execution.result.workflowState, 'completed');
+  assert.equal(execution.result.stopPoint, 'complete');
   assert.equal(execution.result.operatorConfigPath, join(indexRecord.researchDirectory, 'operator-config.json'));
 
   const store = RunStore.openReadOnly(join(indexRecord.discoveryDirectory, 'run.sqlite'));
