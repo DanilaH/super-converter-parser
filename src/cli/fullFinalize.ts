@@ -173,19 +173,22 @@ async function main(): Promise<void> {
     printUsage();
     return;
   }
+  const selectedClusterIds = parseClusterIds(parsed.clusters);
 
   await runFullFinalization({
     outputRoot: resolveOutputRoot(parsed.outputRoot, process.env),
     enrichmentId: parsed.enrichmentId,
-    selectedClusterIds: parseClusterIds(parsed.clusters),
+    ...(selectedClusterIds === undefined ? {} : { selectedClusterIds }),
     allClusters: parsed.allClusters,
-    representativeCount: parsed.representativeCount,
-    representativeOverridesPath: parsed.representativeOverrides,
-    youngDomainMaxAgeDays: parsed.youngDomainMaxAgeDays,
-    recentWebPresenceMaxAgeDays: parsed.recentWebPresenceMaxAgeDays,
-    repurposeGapMinDays: parsed.repurposeGapMinDays,
+    ...(parsed.representativeCount === undefined ? {} : { representativeCount: parsed.representativeCount }),
+    ...(parsed.representativeOverrides === undefined ? {} : { representativeOverridesPath: parsed.representativeOverrides }),
+    ...(parsed.youngDomainMaxAgeDays === undefined ? {} : { youngDomainMaxAgeDays: parsed.youngDomainMaxAgeDays }),
+    ...(parsed.recentWebPresenceMaxAgeDays === undefined ? {} : { recentWebPresenceMaxAgeDays: parsed.recentWebPresenceMaxAgeDays }),
+    ...(parsed.repurposeGapMinDays === undefined ? {} : { repurposeGapMinDays: parsed.repurposeGapMinDays }),
     trafficInputPath: parsed.trafficInput,
-    lowBaseOrganicTrafficThreshold: parsed.lowBaseOrganicTrafficThreshold,
+    ...(parsed.lowBaseOrganicTrafficThreshold === undefined
+      ? {}
+      : { lowBaseOrganicTrafficThreshold: parsed.lowBaseOrganicTrafficThreshold }),
     decisionsPath: parsed.decisions,
     publishWithoutDecisions: parsed.publishWithoutDecisions,
     env: process.env,
