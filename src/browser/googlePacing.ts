@@ -1,9 +1,9 @@
 import type { BrowserCollectionTiming } from './collect.js';
 
 /**
- * Keeps the next Google navigation from starting earlier than a conservative
- * floor derived from the pre-PERF-B serial collector while allowing recovered
- * wait time to overlap post-collection work such as Ahrefs.
+ * Keeps the next Google navigation from becoming more aggressive merely because
+ * Related lazy-mount work was moved earlier. The hold is context-local and can
+ * naturally expire while post-collection work (for example Ahrefs) is running.
  */
 export class GoogleLegacyCadencePacer {
   private notBeforeMs = 0;
@@ -27,27 +27,21 @@ export class GoogleLegacyCadencePacer {
 }
 
 /**
- * Before PERF-B, root collection waited for main Surfer, then an unconditional
- * 1000 ms, then Surfer Related. PERF-B overlaps the two Surfer readers and
- * removes that fixed sleep. `min(main, related) + 1000` is therefore a
- * conservative estimate of serial time that could have been removed. SERP and
- * location remain after both readers, so their measured time has already
- * consumed part of that recovered interval before collection returns.
+ * PERF-B only moves the root Related lazy-mount trigger (scroll) ahead of main
+ * Surfer completion. The terminal Related reader still starts after main Surfer
+ * plus the historical 1000 ms warm-up, so missing/error deadlines do not move
+ * earlier. Moving the mount trigger earlier can at most recover roughly the
+ * amount of time main Surfer itself was pending. Holding that full main-Surfer
+ * duration after collection is intentionally conservative: it prevents this
+ * optimization from increasing Google navigation cadence by default. Ahrefs or
+ * other work between browser calls can consume the hold without extra sleeping.
  *
- * This intentionally overestimates rather than underestimates when Related was
- * already becoming ready while main Surfer was pending. The default therefore
- * cannot make Google cadence more aggressive merely because collection became
- * faster. A future evidence-backed pacing policy may relax this floor.
+ * Expanded children do not read Related, and related-only cache repair keeps its
+ * old scroll + 1000 ms + reader sequence, so neither needs compensation.
  */
 export function conservativeLegacyHoldMs(sample: BrowserCollectionTiming): number {
-  if (sample.kind === 'related_only') {
-    return sample.relatedSurferMs === null ? 0 : 1000;
-  }
-  if (!sample.isRoot || sample.mainSurferMs === null || sample.relatedSurferMs === null) {
+  if (sample.kind !== 'primary' || !sample.isRoot || sample.mainSurferMs === null) {
     return 0;
   }
-
-  const recoveredSerialMs = Math.min(sample.mainSurferMs, sample.relatedSurferMs) + 1000;
-  const postSurferMs = (sample.serpParseMs ?? 0) + (sample.locationParseMs ?? 0);
-  return Math.max(0, Math.round(recoveredSerialMs - postSurferMs));
+  return Math.max(0, Math.round(sample.mainSurferMs));
 }
