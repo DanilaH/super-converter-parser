@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { CacheStore } from '../cache/store.js';
@@ -139,6 +139,7 @@ export async function runConfiguredEnrichment(
   let activePagesConfig: EnrichmentPagesConfig = CONFIGURED_ENRICHMENT_PAGES_DEFAULTS;
   let activeSiteStructureConfig: EnrichmentSiteStructureConfig = CONFIGURED_ENRICHMENT_SITE_STRUCTURE_DEFAULTS;
   let activeCacheConfig = { dbPath: CONFIGURED_ENRICHMENT_HTTP_CACHE_PATH, ttl: DEFAULT_CACHE_TTL };
+  let freshAllocation: { enrichmentId: string; enrichmentDirectory: string } | null = null;
   const resumed = request.currentEnrichmentId !== null;
 
   try {
@@ -204,6 +205,7 @@ export async function runConfiguredEnrichment(
         researchDirectory: request.researchDirectory,
         enrichmentDirectory,
       });
+      freshAllocation = { enrichmentId, enrichmentDirectory };
       enrichmentStore = RunStore.open(join(enrichmentDirectory, 'enrichment.sqlite'));
       enrichmentConfig = buildConfiguredModuleConfig(request.operatorConfig);
       if (modules.includes('domain_age')) {
@@ -254,6 +256,22 @@ export async function runConfiguredEnrichment(
       resume: resumed,
     });
 
+    if (!resumed && enrichmentStore.loadEnrichmentRun(enrichmentId) === null) {
+      const startupMessage = outcome.kind === 'failed'
+        ? outcome.error
+        : `engine returned ${outcome.kind} without creating its durable enrichment run row`;
+      enrichmentStore.close();
+      enrichmentStore = undefined;
+      cacheStore?.close();
+      cacheStore = undefined;
+      await rollbackUndurableFreshEnrichment(request.outputRoot, enrichmentId, enrichmentDirectory);
+      freshAllocation = null;
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Configured enrichment ${enrichmentId} failed before durable run initialization: ${startupMessage}`,
+      );
+    }
+
     let archivePath: string | null = null;
     if (outcome.kind === 'completed') {
       enrichmentStore.close();
@@ -268,6 +286,25 @@ export async function runConfiguredEnrichment(
     }
 
     return { outcome, enrichmentId, enrichmentDirectory, resumed, archivePath };
+  } catch (error) {
+    if (!resumed && freshAllocation !== null) {
+      const durableState = enrichmentStore === undefined
+        ? false
+        : inspectDurableRun(enrichmentStore, freshAllocation.enrichmentId);
+      if (durableState === false) {
+        enrichmentStore?.close();
+        enrichmentStore = undefined;
+        cacheStore?.close();
+        cacheStore = undefined;
+        await rollbackUndurableFreshEnrichment(
+          request.outputRoot,
+          freshAllocation.enrichmentId,
+          freshAllocation.enrichmentDirectory,
+        );
+        freshAllocation = null;
+      }
+    }
+    throw error;
   } finally {
     enrichmentStore?.close();
     cacheStore?.close();
@@ -394,5 +431,30 @@ function assertConfiguredResumeCompatible(
     if (canonicalJson(persistedConfig.query_suggestions ?? null) !== canonicalJson(expected.query_suggestions ?? null)) {
       throw new ResearchError('RESUME_CONFIG_MISMATCH', 'Persisted query-suggestion config differs from OperatorConfig enrichment semantics.');
     }
+  }
+}
+
+function inspectDurableRun(store: RunStore, enrichmentId: string): boolean | null {
+  try {
+    return store.loadEnrichmentRun(enrichmentId) !== null;
+  } catch {
+    return null;
+  }
+}
+
+async function rollbackUndurableFreshEnrichment(
+  outputRoot: string,
+  enrichmentId: string,
+  enrichmentDirectory: string,
+): Promise<void> {
+  try {
+    await rm(enrichmentDirectory, { recursive: true, force: true });
+    await rm(join(outputRoot, 'index', 'enrichments', `${enrichmentId}.json`), { force: true });
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to roll back undurable enrichment allocation ${enrichmentId}.`,
+      { cause: error },
+    );
   }
 }
