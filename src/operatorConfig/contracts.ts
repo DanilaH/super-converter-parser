@@ -18,6 +18,7 @@ export type JsonContractSchema = {
   maxItems?: number;
   uniqueItems?: boolean;
   minLength?: number;
+  pattern?: string;
   minimum?: number;
   maximum?: number;
   default?: unknown;
@@ -29,6 +30,7 @@ export type ResearchInputV1 =
   | { type: 'microsoft'; path: string };
 
 export type WorkflowTargetV1 = 'discovery' | 'enrichment' | 'finalization';
+export type EnrichmentModuleV1 = (typeof IMPLEMENTED_ENRICHMENT_MODULES)[number];
 
 export type OperatorResearchConfigV1 = {
   version: 1;
@@ -42,7 +44,7 @@ export type OperatorResearchConfigV1 = {
   workflow?: { target?: WorkflowTargetV1 };
   discovery?: { topN?: number; expand?: boolean; requireAhrefs?: boolean };
   enrichment?: {
-    modules: Array<(typeof IMPLEMENTED_ENRICHMENT_MODULES)[number]>;
+    modules: EnrichmentModuleV1[];
     clustering?: {
       topN?: number;
       minSharedDomains?: number;
@@ -72,6 +74,81 @@ export type OperatorResearchConfigV1 = {
   };
 };
 
+/** Author-facing config before preset inheritance is applied. */
+export type OperatorResearchConfigSourceV1 = {
+  version: 1;
+  preset?: string;
+  research: OperatorResearchConfigV1['research'];
+  workflow?: OperatorResearchConfigV1['workflow'];
+  discovery?: OperatorResearchConfigV1['discovery'];
+  enrichment?: {
+    modules?: EnrichmentModuleV1[];
+    clustering?: OperatorResearchConfigV1['enrichment'] extends infer T
+      ? T extends { clustering?: infer C } ? C : never
+      : never;
+    querySuggestions?: OperatorResearchConfigV1['enrichment'] extends infer T
+      ? T extends { querySuggestions?: infer Q } ? Q : never
+      : never;
+  };
+  finalization?: {
+    representativeCount?: number;
+    historyPolicy?: {
+      youngDomainMaxAgeDays?: number;
+      recentWebPresenceMaxAgeDays?: number;
+      repurposeGapMinDays?: number;
+    };
+    historicalPresence?: {
+      collectionMode?: 'latest' | 'annual';
+      recentMonths?: number;
+      maxCollections?: number;
+      domainCap?: number;
+    };
+  };
+};
+
+/** Built-in preset overlay. It deliberately cannot contain labels, input paths, human decisions, or machine settings. */
+export type OperatorResearchPresetV1 = {
+  version: 1;
+  id: string;
+  revision: number;
+  research?: {
+    market?: string;
+    googleHl?: string;
+    googleGl?: string;
+  };
+  workflow?: { target?: WorkflowTargetV1 };
+  discovery?: { topN?: number; expand?: boolean; requireAhrefs?: boolean };
+  enrichment?: {
+    modules?: EnrichmentModuleV1[];
+    clustering?: {
+      topN?: number;
+      minSharedDomains?: number;
+      minDomainJaccard?: number;
+      minSharedUrls?: number;
+      minUrlJaccard?: number;
+    };
+    querySuggestions?: {
+      sources?: QuerySuggestionSource[];
+      maxSuggestionsPerSource?: number;
+      maxParents?: number;
+    };
+  };
+  finalization?: {
+    representativeCount?: number;
+    historyPolicy?: {
+      youngDomainMaxAgeDays?: number;
+      recentWebPresenceMaxAgeDays?: number;
+      repurposeGapMinDays?: number;
+    };
+    historicalPresence?: {
+      collectionMode?: 'latest' | 'annual';
+      recentMonths?: number;
+      maxCollections?: number;
+      domainCap?: number;
+    };
+  };
+};
+
 export type OperatorContinuationV1 =
   | { version: 1; researchId: string; action: { type: 'shortlist'; path: string } }
   | { version: 1; researchId: string; action: { type: 'finalists'; clusters: string[] } }
@@ -82,6 +159,12 @@ export type OperatorContinuationV1 =
   | { version: 1; researchId: string; action: { type: 'publication_override'; publishWithoutDecisions: true } };
 
 const STRING_NON_EMPTY = { type: 'string', minLength: 1 } as const satisfies JsonContractSchema;
+const PRESET_ID = {
+  type: 'string',
+  minLength: 1,
+  pattern: '^[a-z0-9][a-z0-9-]*$',
+  description: 'Built-in preset id using lowercase letters, digits, and hyphens.',
+} as const satisfies JsonContractSchema;
 const PORTABLE_PATH = {
   type: 'string',
   minLength: 1,
@@ -95,76 +178,152 @@ const INPUT_SCHEMA = {
   ],
 } as const satisfies JsonContractSchema;
 
+const RESEARCH_SOURCE_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['label', 'input'],
+  properties: {
+    label: STRING_NON_EMPTY,
+    market: { type: 'string', minLength: 1, default: 'US' },
+    googleHl: { type: 'string', minLength: 1, default: 'en' },
+    googleGl: { type: 'string', minLength: 1, default: 'us' },
+    input: INPUT_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
+const RESEARCH_PRESET_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    market: { type: 'string', minLength: 1 },
+    googleHl: { type: 'string', minLength: 1 },
+    googleGl: { type: 'string', minLength: 1 },
+  },
+} as const satisfies JsonContractSchema;
+
+const WORKFLOW_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: { target: { type: 'string', enum: ['discovery', 'enrichment', 'finalization'], default: 'discovery' } },
+} as const satisfies JsonContractSchema;
+
+const DISCOVERY_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    topN: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
+    expand: { type: 'boolean', default: false },
+    requireAhrefs: { type: 'boolean', default: false },
+  },
+} as const satisfies JsonContractSchema;
+
+const CLUSTERING_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    topN: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
+    minSharedDomains: { type: 'integer', minimum: 1, maximum: 30, default: 3 },
+    minDomainJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.3 },
+    minSharedUrls: { type: 'integer', minimum: 1, maximum: 30, default: 2 },
+    minUrlJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.1 },
+  },
+} as const satisfies JsonContractSchema;
+
+const QUERY_SUGGESTIONS_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    sources: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: QUERY_SUGGESTION_SOURCES } },
+    maxSuggestionsPerSource: { type: 'integer', minimum: 1, default: 20 },
+    maxParents: { type: 'integer', minimum: 5, maximum: 200, default: 200 },
+  },
+} as const satisfies JsonContractSchema;
+
+const ENRICHMENT_SOURCE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    modules: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: IMPLEMENTED_ENRICHMENT_MODULES } },
+    clustering: CLUSTERING_SCHEMA,
+    querySuggestions: QUERY_SUGGESTIONS_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
+const ENRICHMENT_EFFECTIVE_SCHEMA = {
+  ...ENRICHMENT_SOURCE_SCHEMA,
+  required: ['modules'],
+} as const satisfies JsonContractSchema;
+
+const HISTORY_POLICY_SOURCE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    youngDomainMaxAgeDays: { type: 'integer', minimum: 0 },
+    recentWebPresenceMaxAgeDays: { type: 'integer', minimum: 0 },
+    repurposeGapMinDays: { type: 'integer', minimum: 0 },
+  },
+} as const satisfies JsonContractSchema;
+
+const HISTORY_POLICY_EFFECTIVE_SCHEMA = {
+  ...HISTORY_POLICY_SOURCE_SCHEMA,
+  required: ['youngDomainMaxAgeDays', 'recentWebPresenceMaxAgeDays', 'repurposeGapMinDays'],
+} as const satisfies JsonContractSchema;
+
+const HISTORICAL_PRESENCE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    collectionMode: { type: 'string', enum: ['latest', 'annual'], default: 'annual' },
+    recentMonths: { type: 'integer', minimum: 1, maximum: 120, default: 18 },
+    maxCollections: { type: 'integer', minimum: 1, maximum: 100, default: 24 },
+    domainCap: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
+  },
+} as const satisfies JsonContractSchema;
+
+const FINALIZATION_SOURCE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    representativeCount: { type: 'integer', minimum: 3, maximum: 10, default: 5 },
+    historyPolicy: HISTORY_POLICY_SOURCE_SCHEMA,
+    historicalPresence: HISTORICAL_PRESENCE_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
+const FINALIZATION_EFFECTIVE_SCHEMA = {
+  ...FINALIZATION_SOURCE_SCHEMA,
+  required: ['historyPolicy'],
+  properties: {
+    ...FINALIZATION_SOURCE_SCHEMA.properties,
+    historyPolicy: HISTORY_POLICY_EFFECTIVE_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
 export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['version', 'research'],
   properties: {
     version: { const: 1 },
-    research: {
-      type: 'object', additionalProperties: false, required: ['label', 'input'],
-      properties: {
-        label: STRING_NON_EMPTY,
-        market: { type: 'string', minLength: 1, default: 'US' },
-        googleHl: { type: 'string', minLength: 1, default: 'en' },
-        googleGl: { type: 'string', minLength: 1, default: 'us' },
-        input: INPUT_SCHEMA,
-      },
-    },
-    workflow: { type: 'object', additionalProperties: false, properties: { target: { type: 'string', enum: ['discovery', 'enrichment', 'finalization'], default: 'discovery' } } },
-    discovery: {
-      type: 'object', additionalProperties: false,
-      properties: {
-        topN: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
-        expand: { type: 'boolean', default: false },
-        requireAhrefs: { type: 'boolean', default: false },
-      },
-    },
-    enrichment: {
-      type: 'object', additionalProperties: false, required: ['modules'],
-      properties: {
-        modules: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: IMPLEMENTED_ENRICHMENT_MODULES } },
-        clustering: {
-          type: 'object', additionalProperties: false,
-          properties: {
-            topN: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
-            minSharedDomains: { type: 'integer', minimum: 1, maximum: 30, default: 3 },
-            minDomainJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.3 },
-            minSharedUrls: { type: 'integer', minimum: 1, maximum: 30, default: 2 },
-            minUrlJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.1 },
-          },
-        },
-        querySuggestions: {
-          type: 'object', additionalProperties: false,
-          properties: {
-            sources: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: QUERY_SUGGESTION_SOURCES } },
-            maxSuggestionsPerSource: { type: 'integer', minimum: 1, default: 20 },
-            maxParents: { type: 'integer', minimum: 5, maximum: 200, default: 200 },
-          },
-        },
-      },
-    },
-    finalization: {
-      type: 'object', additionalProperties: false, required: ['historyPolicy'],
-      properties: {
-        representativeCount: { type: 'integer', minimum: 3, maximum: 10, default: 5 },
-        historyPolicy: {
-          type: 'object', additionalProperties: false, required: ['youngDomainMaxAgeDays', 'recentWebPresenceMaxAgeDays', 'repurposeGapMinDays'],
-          properties: {
-            youngDomainMaxAgeDays: { type: 'integer', minimum: 0 },
-            recentWebPresenceMaxAgeDays: { type: 'integer', minimum: 0 },
-            repurposeGapMinDays: { type: 'integer', minimum: 0 },
-          },
-        },
-        historicalPresence: {
-          type: 'object', additionalProperties: false,
-          properties: {
-            collectionMode: { type: 'string', enum: ['latest', 'annual'], default: 'annual' },
-            recentMonths: { type: 'integer', minimum: 1, maximum: 120, default: 18 },
-            maxCollections: { type: 'integer', minimum: 1, maximum: 100, default: 24 },
-            domainCap: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
-          },
-        },
-      },
-    },
+    preset: PRESET_ID,
+    research: RESEARCH_SOURCE_SCHEMA,
+    workflow: WORKFLOW_SCHEMA,
+    discovery: DISCOVERY_SCHEMA,
+    enrichment: ENRICHMENT_SOURCE_SCHEMA,
+    finalization: FINALIZATION_SOURCE_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
+const EFFECTIVE_OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['version', 'research'],
+  properties: {
+    version: { const: 1 },
+    research: RESEARCH_SOURCE_SCHEMA,
+    workflow: WORKFLOW_SCHEMA,
+    discovery: DISCOVERY_SCHEMA,
+    enrichment: ENRICHMENT_EFFECTIVE_SCHEMA,
+    finalization: FINALIZATION_EFFECTIVE_SCHEMA,
+  },
+} as const satisfies JsonContractSchema;
+
+export const OPERATOR_RESEARCH_PRESET_V1_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['version', 'id', 'revision'],
+  properties: {
+    version: { const: 1 },
+    id: PRESET_ID,
+    revision: { type: 'integer', minimum: 1 },
+    research: RESEARCH_PRESET_SCHEMA,
+    workflow: WORKFLOW_SCHEMA,
+    discovery: DISCOVERY_SCHEMA,
+    enrichment: ENRICHMENT_SOURCE_SCHEMA,
+    finalization: FINALIZATION_SOURCE_SCHEMA,
   },
 } as const satisfies JsonContractSchema;
 
@@ -189,18 +348,36 @@ export function operatorResearchConfigJsonSchema(): Record<string, unknown> {
   return { $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'https://local.utility-research-runner/schemas/operator-research-config-v1.schema.json', title: 'Utility Research Runner OperatorResearchConfigV1', ...OPERATOR_RESEARCH_CONFIG_V1_SCHEMA };
 }
 
+export function operatorResearchPresetJsonSchema(): Record<string, unknown> {
+  return { $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'https://local.utility-research-runner/schemas/operator-research-preset-v1.schema.json', title: 'Utility Research Runner OperatorResearchPresetV1', ...OPERATOR_RESEARCH_PRESET_V1_SCHEMA };
+}
+
 export function operatorContinuationJsonSchema(): Record<string, unknown> {
   return { $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'https://local.utility-research-runner/schemas/operator-continuation-v1.schema.json', title: 'Utility Research Runner OperatorContinuationV1', ...OPERATOR_CONTINUATION_V1_SCHEMA };
 }
 
-export function validateOperatorResearchConfig(value: unknown): OperatorResearchConfigV1 {
+export function validateOperatorResearchConfigSource(value: unknown): OperatorResearchConfigSourceV1 {
   validateContract(OPERATOR_RESEARCH_CONFIG_V1_SCHEMA, value, '$');
+  const config = value as OperatorResearchConfigSourceV1;
+  validateResearchIdentity(config.research);
+  if (config.preset !== undefined) assertPresetId(config.preset, '$.preset');
+  return config;
+}
+
+export function validateOperatorResearchPreset(value: unknown): OperatorResearchPresetV1 {
+  validateContract(OPERATOR_RESEARCH_PRESET_V1_SCHEMA, value, '$');
+  const preset = value as OperatorResearchPresetV1;
+  assertPresetId(preset.id, '$.id');
+  if (preset.research?.market !== undefined) assertNonBlank(preset.research.market, '$.research.market');
+  if (preset.research?.googleHl !== undefined) assertNonBlank(preset.research.googleHl, '$.research.googleHl');
+  if (preset.research?.googleGl !== undefined) assertNonBlank(preset.research.googleGl, '$.research.googleGl');
+  return preset;
+}
+
+export function validateOperatorResearchConfig(value: unknown): OperatorResearchConfigV1 {
+  validateContract(EFFECTIVE_OPERATOR_RESEARCH_CONFIG_V1_SCHEMA, value, '$');
   const config = value as OperatorResearchConfigV1;
-  assertNonBlank(config.research.label, '$.research.label');
-  if (config.research.market !== undefined) assertNonBlank(config.research.market, '$.research.market');
-  if (config.research.googleHl !== undefined) assertNonBlank(config.research.googleHl, '$.research.googleHl');
-  if (config.research.googleGl !== undefined) assertNonBlank(config.research.googleGl, '$.research.googleGl');
-  assertPortableRelativePath(config.research.input.path, '$.research.input.path');
+  validateResearchIdentity(config.research);
 
   const target = config.workflow?.target ?? 'discovery';
   if ((target === 'enrichment' || target === 'finalization') && config.enrichment === undefined) {
@@ -239,6 +416,21 @@ export function assertPortableRelativePath(value: string, pathLabel: string): vo
   const portable = value.replaceAll('\\', '/');
   if (portable.startsWith('/') || portable.startsWith('//') || /^[A-Za-z]:\//.test(portable)) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `${pathLabel} must be relative to the JSON file that declares it; absolute machine paths are not allowed.`);
+  }
+}
+
+function validateResearchIdentity(research: OperatorResearchConfigV1['research']): void {
+  assertNonBlank(research.label, '$.research.label');
+  if (research.market !== undefined) assertNonBlank(research.market, '$.research.market');
+  if (research.googleHl !== undefined) assertNonBlank(research.googleHl, '$.research.googleHl');
+  if (research.googleGl !== undefined) assertNonBlank(research.googleGl, '$.research.googleGl');
+  assertPortableRelativePath(research.input.path, '$.research.input.path');
+}
+
+function assertPresetId(value: string, pathLabel: string): void {
+  assertNonBlank(value, pathLabel);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(value)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `${pathLabel} must use lowercase letters, digits, and hyphens only.`);
   }
 }
 
@@ -289,7 +481,12 @@ function validateInto(schema: JsonContractSchema, value: unknown, path: string, 
       return;
     }
     case 'string':
-      if (typeof value !== 'string') issues.push(`${path} must be a string.`); else if (schema.minLength !== undefined && value.length < schema.minLength) issues.push(`${path} must contain at least ${schema.minLength} character(s).`);
+      if (typeof value !== 'string') {
+        issues.push(`${path} must be a string.`);
+      } else {
+        if (schema.minLength !== undefined && value.length < schema.minLength) issues.push(`${path} must contain at least ${schema.minLength} character(s).`);
+        if (schema.pattern !== undefined && !new RegExp(schema.pattern).test(value)) issues.push(`${path} must match pattern ${schema.pattern}.`);
+      }
       return;
     case 'number':
     case 'integer':
