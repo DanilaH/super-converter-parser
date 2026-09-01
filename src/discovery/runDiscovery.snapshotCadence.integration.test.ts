@@ -63,23 +63,20 @@ test('runDiscovery keeps per-keyword SQLite truth while bounding full running sn
   assert.ok(timingName, 'timing artifact must be published');
   const timing = JSON.parse(await readFile(join(result.discoveryDirectory, timingName), 'utf8')) as {
     counts: { snapshotCallbacks: number; snapshotPublishes: number; snapshotSkips: number };
-    snapshotSamples: Array<{ state: string; reason: string; published: boolean }>;
+    snapshotSamples: Array<{ state: string; reason: string; published: boolean; durationMs: number }>;
   };
 
-  assert.deepEqual(timing.counts, {
-    ...timing.counts,
-    snapshotCallbacks: 56,
-    snapshotPublishes: 3,
-    snapshotSkips: 53,
-  });
+  assert.equal(timing.counts.snapshotCallbacks, 56);
+  assert.equal(timing.counts.snapshotPublishes, 3);
+  assert.equal(timing.counts.snapshotSkips, 53);
   assert.equal(timing.snapshotSamples[0]?.reason, 'first');
   assert.equal(timing.snapshotSamples.some((sample) => sample.reason === 'keyword_interval' && sample.published), true);
-  assert.deepEqual(timing.snapshotSamples.at(-1), {
-    state: 'completed',
-    reason: 'terminal',
-    published: true,
-    durationMs: timing.snapshotSamples.at(-1)?.durationMs,
-  });
+  const finalSnapshot = timing.snapshotSamples.at(-1);
+  assert.ok(finalSnapshot);
+  assert.equal(finalSnapshot.state, 'completed');
+  assert.equal(finalSnapshot.reason, 'terminal');
+  assert.equal(finalSnapshot.published, true);
+  assert.ok(finalSnapshot.durationMs >= 0);
 
   const keywordCsv = await readFile(join(result.discoveryDirectory, 'keywords.csv'), 'utf8');
   const nonEmptyLines = keywordCsv.split(/\r?\n/).filter((line) => line.length > 0);
