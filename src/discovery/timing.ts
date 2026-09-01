@@ -39,6 +39,7 @@ export type DiscoveryTimingSummaryV1 = {
     relatedError: number;
     ahrefsClientCalls: number;
     engineSleepCalls: number;
+    googlePacingWaits: number;
   };
   totals: {
     browserCollectionMs: number;
@@ -50,6 +51,7 @@ export type DiscoveryTimingSummaryV1 = {
     locationParseMs: number;
     ahrefsClientMs: number;
     engineSleepRequestedMs: number;
+    googlePacingRequestedMs: number;
   };
   distributions: {
     primaryBrowserCollectionMs: TimingDistribution;
@@ -66,6 +68,8 @@ export class DiscoveryTimingRecorder {
   private readonly ahrefsSamples: AhrefsTimingSample[] = [];
   private engineSleepCalls = 0;
   private engineSleepRequestedMs = 0;
+  private googlePacingWaits = 0;
+  private googlePacingRequestedMs = 0;
 
   constructor(private readonly startedAtMs: number = Date.now()) {}
 
@@ -81,6 +85,12 @@ export class DiscoveryTimingRecorder {
     if (!Number.isFinite(ms) || ms < 0) return;
     this.engineSleepCalls += 1;
     this.engineSleepRequestedMs += ms;
+  }
+
+  recordGooglePacing(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    this.googlePacingWaits += 1;
+    this.googlePacingRequestedMs += ms;
   }
 
   snapshot(params: {
@@ -117,6 +127,7 @@ export class DiscoveryTimingRecorder {
         relatedError: this.browserSamples.filter((sample) => sample.relatedOutcome === 'error').length,
         ahrefsClientCalls: this.ahrefsSamples.length,
         engineSleepCalls: this.engineSleepCalls,
+        googlePacingWaits: this.googlePacingWaits,
       },
       totals: {
         browserCollectionMs: sum(this.browserSamples.map((sample) => sample.totalMs)),
@@ -128,6 +139,7 @@ export class DiscoveryTimingRecorder {
         locationParseMs: sumNullable(this.browserSamples.map((sample) => sample.locationParseMs)),
         ahrefsClientMs: sum(ahrefsDurations),
         engineSleepRequestedMs: this.engineSleepRequestedMs,
+        googlePacingRequestedMs: this.googlePacingRequestedMs,
       },
       distributions: {
         primaryBrowserCollectionMs: distribution(primary.map((sample) => sample.totalMs)),
@@ -166,6 +178,7 @@ export function renderDiscoveryTimingSummary(summary: DiscoveryTimingSummaryV1):
     `related ${formatMs(totals.relatedSurferMs)}`,
     `Ahrefs client ${formatMs(totals.ahrefsClientMs)}`,
     `engine sleeps ${formatMs(totals.engineSleepRequestedMs)}`,
+    `Google pacing ${formatMs(totals.googlePacingRequestedMs)}`,
     `CAPTCHA ${summary.counts.captchaEncounters}`,
   ].join(' | ');
 }
