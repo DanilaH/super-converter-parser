@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { createAhrefsClient, type AhrefsClient } from '../ahrefs/client.js';
@@ -125,11 +126,12 @@ export async function runDiscovery(
   deps: CliDeps = DEFAULT_CLI_DEPS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DiscoveryRunResult> {
+  const requestInput = request.input;
   const retryFailed = request.retryFailed ?? false;
   const forceRefresh = request.forceRefresh ?? false;
   const rawRefreshKeywords = request.refreshKeywords ?? [];
   const jsonStatus = request.jsonStatus ?? false;
-  const isResume = request.input.kind === 'resume';
+  const isResume = requestInput.kind === 'resume';
   if (retryFailed && !isResume) {
     console.error('--retry-failed requires a resume request.');
     return emptyResult(EXIT_INVALID_INPUT);
@@ -183,7 +185,7 @@ export async function runDiscovery(
     let ahrefsApiKey: string | null = null;
     const outputRoot = resolveOutputRoot(request.outputRoot, env);
 
-    if (!isResume) {
+    if (requestInput.kind !== 'resume') {
       if (request.semanticConfig) {
         runConfig = {
           ...runConfig,
@@ -204,14 +206,14 @@ export async function runDiscovery(
       if (candidateConfig.ahrefs.requireAhrefs && !key) {
         throw new ResearchError(
           'AHREFS_REQUIRE_CONFIG',
-          'Ahrefs DR is required but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
+          'Ahrefs DR is required (--require-ahrefs / REQUIRE_AHREFS=true) but AHREFS_API_KEY is not set. Export AHREFS_API_KEY and retry.',
         );
       }
       return key;
     };
 
-    if (isResume) {
-      runId = request.input.runId;
+    if (requestInput.kind === 'resume') {
+      runId = requestInput.runId;
       const location = await resolveRunLocation(outputRoot, runId);
       runDirectory = location.discoveryDirectory;
       researchDirectory = location.researchDirectory;
@@ -253,13 +255,13 @@ export async function runDiscovery(
       console.log('');
     } else {
       mode = 'fresh';
-      input = { kind: request.input.kind, path: request.input.path };
-      if (request.input.kind === 'microsoft') {
-        const rows = await loadMicrosoftRows(request.input.path);
+      input = { kind: requestInput.kind, path: requestInput.path };
+      if (requestInput.kind === 'microsoft') {
+        const rows = await loadMicrosoftRows(requestInput.path);
         keywords = buildMicrosoftKeywords(rows);
         console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords (Microsoft)`);
       } else {
-        const rows = await loadSeedRows(request.input.path);
+        const rows = await loadSeedRows(requestInput.path);
         keywords = buildSeedKeywords(rows);
         console.log(`  Input: ${rows.length} rows, ${keywords.length} unique keywords`);
       }
@@ -379,7 +381,21 @@ export async function runDiscovery(
       });
       store.setRunState(runId, 'created');
       if (request.onFreshResearchInitialized) {
-        await request.onFreshResearchInitialized({ runId, researchDirectory, discoveryDirectory: runDirectory });
+        try {
+          await request.onFreshResearchInitialized({ runId, researchDirectory, discoveryDirectory: runDirectory });
+        } catch (error) {
+          // This callback is part of fresh durable initialization (Config v1 uses
+          // it for immutable operator provenance). It must fail before browser
+          // work and must not leave an indexed research whose intent was lost.
+          store.close();
+          store = null;
+          await rollbackFreshInitialization(outputRoot, runId, researchDirectory);
+          runId = '';
+          runDirectory = '';
+          researchDirectory = '';
+          debugRoot = '';
+          throw error;
+        }
       }
     }
 
@@ -520,6 +536,23 @@ export async function runDiscovery(
 
 function emptyResult(exitCode: number): DiscoveryRunResult {
   return { exitCode, researchId: null, runId: null, researchDirectory: null, discoveryDirectory: null, state: null };
+}
+
+async function rollbackFreshInitialization(
+  outputRoot: string,
+  runId: string,
+  researchDirectory: string,
+): Promise<void> {
+  try {
+    await rm(join(outputRoot, 'index', 'runs', `${runId}.json`), { force: true });
+    await rm(researchDirectory, { recursive: true, force: true });
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Fresh research initialization failed and rollback could not remove ${researchDirectory}.`,
+      { cause: error },
+    );
+  }
 }
 
 function validateRefreshKeywords(rawKeywords: string[], knownKeywords: string[]): string[] {
