@@ -2,7 +2,13 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { createAhrefsClient, type AhrefsClient } from '../ahrefs/client.js';
-import { collectKeyword, collectRelatedKeyword, type CollectionResult, type RelatedCollectionResult } from '../browser/collect.js';
+import {
+  collectKeyword,
+  collectRelatedKeyword,
+  type BrowserCollectionTimingSink,
+  type CollectionResult,
+  type RelatedCollectionResult,
+} from '../browser/collect.js';
 import type { CancellationSignal } from '../browser/captcha.js';
 import { connectResearchChrome, getPrimaryContext } from '../browser/cdp.js';
 import { preflightGoogleAndSurfer } from '../browser/preflight.js';
@@ -24,6 +30,11 @@ import { createRunId, ensureWritableDirectory, type KeywordRecord } from '../run
 import { buildRunStatus, writeSnapshots } from '../runs/snapshots.js';
 import { ResearchError } from '../shared/errors.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import {
+  DiscoveryTimingRecorder,
+  renderDiscoveryTimingSummary,
+  writeDiscoveryTimingArtifact,
+} from './timing.js';
 
 export const EXIT_OK = 0;
 export const EXIT_INTERNAL = 1;
@@ -77,6 +88,7 @@ export type CliDeps = {
     record: KeywordRecord,
     debugRoot: string,
     signal: CancellationSignal,
+    timingSink?: BrowserCollectionTimingSink,
   ) => Promise<CollectionResult>;
   collectRelated?: (
     context: BrowserContext,
@@ -84,6 +96,7 @@ export type CliDeps = {
     record: KeywordRecord,
     debugRoot: string,
     signal: CancellationSignal,
+    timingSink?: BrowserCollectionTimingSink,
   ) => Promise<RelatedCollectionResult>;
 };
 
@@ -126,6 +139,7 @@ export async function runDiscovery(
   deps: CliDeps = DEFAULT_CLI_DEPS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DiscoveryRunResult> {
+  const timingRecorder = new DiscoveryTimingRecorder();
   const requestInput = request.input;
   const retryFailed = request.retryFailed ?? false;
   const forceRefresh = request.forceRefresh ?? false;
@@ -174,6 +188,22 @@ export async function runDiscovery(
     discoveryDirectory: runDirectory || null,
     state: terminalState,
   });
+
+  const publishTimingBestEffort = async (
+    mode: 'fresh' | 'resume',
+    state: string | null,
+  ): Promise<void> => {
+    if (!runId || !runDirectory) return;
+    const summary = timingRecorder.snapshot({ runId, mode, state });
+    try {
+      const path = await writeDiscoveryTimingArtifact(runDirectory, summary);
+      console.log(`  Timing: ${renderDiscoveryTimingSummary(summary)}`);
+      console.log(`  Timing artifact: ${path}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`  Timing warning: ${message}`);
+    }
+  };
 
   try {
     const config = loadConfig(env);
@@ -301,14 +331,25 @@ export async function runDiscovery(
 
     let ahrefs: { apiKey: string; client: AhrefsClient } | null = null;
     if (ahrefsApiKey) {
+      const rawAhrefsClient = createAhrefsClient(ahrefsApiKey, {
+        endpoint: runConfig.ahrefs.endpoint,
+        timeoutMs: runConfig.ahrefs.timeoutMs,
+        minDelayMs: runConfig.ahrefs.rateLimitMinDelayMs,
+        maxDelayMs: runConfig.ahrefs.rateLimitMaxDelayMs,
+      });
       ahrefs = {
         apiKey: ahrefsApiKey,
-        client: createAhrefsClient(ahrefsApiKey, {
-          endpoint: runConfig.ahrefs.endpoint,
-          timeoutMs: runConfig.ahrefs.timeoutMs,
-          minDelayMs: runConfig.ahrefs.rateLimitMinDelayMs,
-          maxDelayMs: runConfig.ahrefs.rateLimitMaxDelayMs,
-        }),
+        client: async (domain) => {
+          const startedAt = Date.now();
+          try {
+            const result = await rawAhrefsClient(domain);
+            timingRecorder.recordAhrefs(domain, Date.now() - startedAt, result.status);
+            return result;
+          } catch (error) {
+            timingRecorder.recordAhrefs(domain, Date.now() - startedAt, 'throw');
+            throw error;
+          }
+        },
       };
       console.log(`  ✓ Ahrefs DR enrichment enabled (${runConfig.ahrefs.endpoint})`);
     } else {
@@ -368,6 +409,7 @@ export async function runDiscovery(
     );
     const needsBrowser = plan.needsBrowser;
     const signal: CancellationSignal = { isCancelled: () => pauseRequested };
+    const timingSink: BrowserCollectionTimingSink = (sample) => timingRecorder.recordBrowser(sample);
 
     if (mode === 'fresh') {
       store.createRun({
@@ -414,7 +456,10 @@ export async function runDiscovery(
     }
 
     const hooks: EngineHooks = {
-      sleep: (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms)),
+      sleep: (ms) => {
+        timingRecorder.recordSleep(ms);
+        return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+      },
       now: () => Date.now(),
       random: Math.random,
       logger: (line) => console.log(line),
@@ -432,14 +477,28 @@ export async function runDiscovery(
       runDirectory,
       debugRoot,
       collect: async (record, debugRootForKeyword) => {
-        const result = await deps.collect(context as BrowserContext, runConfig, record, debugRootForKeyword, signal);
+        const result = await deps.collect(
+          context as BrowserContext,
+          runConfig,
+          record,
+          debugRootForKeyword,
+          signal,
+          timingSink,
+        );
         if (!preservedRelatedRepairKeywordIds.has(record.id)) return result;
         return { ...result, related: { status: 'not_attempted', error: null, rows: [] } };
       },
       ...(relatedCollector
         ? {
             collectRelated: (record: KeywordRecord, debugRootForKeyword: string) =>
-              relatedCollector(context as BrowserContext, runConfig, record, debugRootForKeyword, signal),
+              relatedCollector(
+                context as BrowserContext,
+                runConfig,
+                record,
+                debugRootForKeyword,
+                signal,
+                timingSink,
+              ),
           }
         : {}),
       hooks,
@@ -472,6 +531,7 @@ export async function runDiscovery(
       console.log(`Run paused: ${outcome.reason}`);
       console.log('Resume with:');
       console.log(`  npm run research -- --resume ${runId}`);
+      await publishTimingBestEffort(mode, terminalState);
       if (jsonStatus && store) console.log(JSON.stringify(buildRunStatus(store, runId, runDirectory, 'paused', outcome.ahrefs ?? undefined, outcome.scoringCompleteness ?? undefined)));
       return currentResult(EXIT_PAUSED);
     }
@@ -484,6 +544,7 @@ export async function runDiscovery(
     console.log(`  Artifacts: ${runDirectory}`);
     console.log(`  CSV: ${join(runDirectory, 'keywords.csv')}`);
     console.log(`  CSV: ${join(runDirectory, 'serp.csv')}`);
+    await publishTimingBestEffort(mode, terminalState);
     const finalJsonStatus = jsonStatus && store
       ? JSON.stringify(buildRunStatus(store, runId, runDirectory, outcome.state, outcome.ahrefs, outcome.scoringCompleteness))
       : null;
@@ -515,15 +576,18 @@ export async function runDiscovery(
           // Best effort: the run may not exist yet if cancelled before initialization.
         }
       }
+      await publishTimingBestEffort(isResume ? 'resume' : 'fresh', terminalState);
       return currentResult(EXIT_PAUSED);
     }
     if (error instanceof ResearchError) {
       console.error(`  ${error.code}: ${error.message}`);
+      await publishTimingBestEffort(isResume ? 'resume' : 'fresh', 'failed');
       return currentResult(exitCodeForError(error));
     }
     const message = error instanceof Error ? error.message : String(error);
     console.error(`  INTERNAL ERROR: ${message}`);
     if (error instanceof Error && error.stack) console.error(error.stack);
+    await publishTimingBestEffort(isResume ? 'resume' : 'fresh', 'failed');
     return currentResult(EXIT_INTERNAL);
   } finally {
     store?.close();
