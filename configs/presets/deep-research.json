@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "deep-research",
+  "revision": 1,
+  "overlay": {
+    "workflow": {
+      "target": "finalization"
+    },
+    "discovery": {
+      "topN": 10,
+      "expand": true,
+      "requireAhrefs": false
+    },
+    "enrichment": {
+      "modules": [
+        "clusters",
+        "query_suggestions",
+        "domain_age",
+        "pages",
+        "site_structure"
+      ],
+      "querySuggestions": {
+        "sources": [
+          "surfer_related",
+          "google_autocomplete",
+          "google_related_search",
+          "google_paa"
+        ],
+        "maxSuggestionsPerSource": 20,
+        "maxParents": 200
+      }
+    },
+    "finalization": {
+      "representativeCount": 5,
+      "historyPolicy": {
+        "youngDomainMaxAgeDays": 730,
+        "recentWebPresenceMaxAgeDays": 1095,
+        "repurposeGapMinDays": 365
+      },
+      "historicalPresence": {
+        "collectionMode": "annual",
+        "recentMonths": 18,
+        "maxCollections": 24,
+        "domainCap": 30
+      }
+    }
+  }
+}
