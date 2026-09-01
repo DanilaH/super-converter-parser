@@ -5,9 +5,16 @@ import test from 'node:test';
 import { operatorContinuationJsonSchema, operatorResearchConfigJsonSchema, validateOperatorContinuation, validateOperatorResearchConfig } from './contracts.js';
 import { ResearchError } from '../shared/errors.js';
 
-function baseConfig(): unknown { return { version: 1, research: { label: 'json-tools', input: { type: 'seeds', path: 'input/seeds.csv' } } }; }
+function baseConfig(): unknown {
+  return { version: 1, research: { label: 'json-tools', input: { type: 'seeds', path: 'input/seeds.csv' } } };
+}
 function expectSchemaError(fn: () => unknown, messageFragment: string): void {
-  assert.throws(fn, (error: unknown) => { assert.ok(error instanceof ResearchError); assert.equal(error.code, 'INPUT_SCHEMA_ERROR'); assert.ok(error.message.includes(messageFragment)); return true; });
+  assert.throws(fn, (error: unknown) => {
+    assert.ok(error instanceof ResearchError);
+    assert.equal(error.code, 'INPUT_SCHEMA_ERROR');
+    assert.ok(error.message.includes(messageFragment));
+    return true;
+  });
 }
 
 test('operator config accepts a minimal discovery config', () => {
@@ -31,6 +38,15 @@ test('operator config rejects invalid enum and numeric ranges', () => {
 test('operator config requires stage sections for requested workflow target', () => {
   expectSchemaError(() => validateOperatorResearchConfig({ ...(baseConfig() as Record<string, unknown>), workflow: { target: 'enrichment' } }), '$.enrichment is required');
   expectSchemaError(() => validateOperatorResearchConfig({ ...(baseConfig() as Record<string, unknown>), workflow: { target: 'finalization' }, enrichment: { modules: ['clusters'] } }), '$.finalization is required');
+});
+
+test('operator config rejects whitespace-only semantic strings', () => {
+  const blankLabel = baseConfig() as { research: { label: string } };
+  blankLabel.research.label = '   ';
+  expectSchemaError(() => validateOperatorResearchConfig(blankLabel), '$.research.label must not be blank');
+  const blankMarket = baseConfig() as { research: { market?: string } };
+  blankMarket.research.market = ' ';
+  expectSchemaError(() => validateOperatorResearchConfig(blankMarket), '$.research.market must not be blank');
 });
 
 test('operator config rejects absolute machine paths', () => {

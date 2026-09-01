@@ -35,13 +35,8 @@ export type OperatorResearchConfigV1 = {
     googleHl?: string;
     googleGl?: string;
   };
-  workflow?: {
-    target?: WorkflowTargetV1;
-  };
-  discovery?: {
-    expand?: boolean;
-    requireAhrefs?: boolean;
-  };
+  workflow?: { target?: WorkflowTargetV1 };
+  discovery?: { expand?: boolean; requireAhrefs?: boolean };
   enrichment?: {
     modules: Array<(typeof IMPLEMENTED_ENRICHMENT_MODULES)[number]>;
     clustering?: {
@@ -78,11 +73,7 @@ export type OperatorContinuationV1 =
   | { version: 1; researchId: string; action: { type: 'publication_override'; publishWithoutDecisions: true } };
 
 const STRING_NON_EMPTY = { type: 'string', minLength: 1 } as const satisfies JsonContractSchema;
-const PORTABLE_PATH = {
-  type: 'string',
-  minLength: 1,
-  description: 'Path relative to the JSON file that declares it.',
-} as const satisfies JsonContractSchema;
+const PORTABLE_PATH = { type: 'string', minLength: 1, description: 'Path relative to the JSON file that declares it.' } as const satisfies JsonContractSchema;
 
 const INPUT_SCHEMA = {
   oneOf: [
@@ -92,15 +83,11 @@ const INPUT_SCHEMA = {
 } as const satisfies JsonContractSchema;
 
 export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['version', 'research'],
+  type: 'object', additionalProperties: false, required: ['version', 'research'],
   properties: {
     version: { const: 1 },
     research: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['label', 'input'],
+      type: 'object', additionalProperties: false, required: ['label', 'input'],
       properties: {
         label: STRING_NON_EMPTY,
         market: { type: 'string', minLength: 1, default: 'US' },
@@ -109,14 +96,8 @@ export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
         input: INPUT_SCHEMA,
       },
     },
-    workflow: {
-      type: 'object', additionalProperties: false,
-      properties: { target: { type: 'string', enum: ['discovery', 'enrichment', 'finalization'], default: 'discovery' } },
-    },
-    discovery: {
-      type: 'object', additionalProperties: false,
-      properties: { expand: { type: 'boolean', default: false }, requireAhrefs: { type: 'boolean', default: false } },
-    },
+    workflow: { type: 'object', additionalProperties: false, properties: { target: { type: 'string', enum: ['discovery', 'enrichment', 'finalization'], default: 'discovery' } } },
+    discovery: { type: 'object', additionalProperties: false, properties: { expand: { type: 'boolean', default: false }, requireAhrefs: { type: 'boolean', default: false } } },
     enrichment: {
       type: 'object', additionalProperties: false, required: ['modules'],
       properties: {
@@ -138,8 +119,7 @@ export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
       properties: {
         representativeCount: { type: 'integer', minimum: 3, maximum: 10, default: 5 },
         historyPolicy: {
-          type: 'object', additionalProperties: false,
-          required: ['youngDomainMaxAgeDays', 'recentWebPresenceMaxAgeDays', 'repurposeGapMinDays'],
+          type: 'object', additionalProperties: false, required: ['youngDomainMaxAgeDays', 'recentWebPresenceMaxAgeDays', 'repurposeGapMinDays'],
           properties: {
             youngDomainMaxAgeDays: { type: 'integer', minimum: 0 },
             recentWebPresenceMaxAgeDays: { type: 'integer', minimum: 0 },
@@ -188,7 +168,12 @@ export function operatorContinuationJsonSchema(): Record<string, unknown> {
 export function validateOperatorResearchConfig(value: unknown): OperatorResearchConfigV1 {
   validateContract(OPERATOR_RESEARCH_CONFIG_V1_SCHEMA, value, '$');
   const config = value as OperatorResearchConfigV1;
+  assertNonBlank(config.research.label, '$.research.label');
+  if (config.research.market !== undefined) assertNonBlank(config.research.market, '$.research.market');
+  if (config.research.googleHl !== undefined) assertNonBlank(config.research.googleHl, '$.research.googleHl');
+  if (config.research.googleGl !== undefined) assertNonBlank(config.research.googleGl, '$.research.googleGl');
   assertPortableRelativePath(config.research.input.path, '$.research.input.path');
+
   const target = config.workflow?.target ?? 'discovery';
   if ((target === 'enrichment' || target === 'finalization') && config.enrichment === undefined) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', '$.enrichment is required when $.workflow.target is enrichment or finalization.');
@@ -208,18 +193,18 @@ export function validateOperatorResearchConfig(value: unknown): OperatorResearch
 export function validateOperatorContinuation(value: unknown): OperatorContinuationV1 {
   validateContract(OPERATOR_CONTINUATION_V1_SCHEMA, value, '$');
   const continuation = value as OperatorContinuationV1;
-  if (continuation.researchId.trim() === '') throw new ResearchError('INPUT_SCHEMA_ERROR', '$.researchId must not be blank.');
+  assertNonBlank(continuation.researchId, '$.researchId');
   if ('path' in continuation.action) assertPortableRelativePath(continuation.action.path, '$.action.path');
   if (continuation.action.type === 'finalists') {
     for (let index = 0; index < continuation.action.clusters.length; index += 1) {
-      if (continuation.action.clusters[index]?.trim() === '') throw new ResearchError('INPUT_SCHEMA_ERROR', `$.action.clusters[${index}] must not be blank.`);
+      assertNonBlank(continuation.action.clusters[index] ?? '', `$.action.clusters[${index}]`);
     }
   }
   return continuation;
 }
 
 export function assertPortableRelativePath(value: string, pathLabel: string): void {
-  if (value.trim() === '') throw new ResearchError('INPUT_SCHEMA_ERROR', `${pathLabel} must not be blank.`);
+  assertNonBlank(value, pathLabel);
   const portable = value.replaceAll('\\', '/');
   if (portable.startsWith('/') || portable.startsWith('//') || /^[A-Za-z]:\//.test(portable)) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `${pathLabel} must be relative to the JSON file that declares it; absolute machine paths are not allowed.`);
@@ -234,15 +219,27 @@ function validateContract(schema: JsonContractSchema, value: unknown, path: stri
 
 function validateInto(schema: JsonContractSchema, value: unknown, path: string, issues: string[]): void {
   if (schema.oneOf !== undefined) {
-    const candidates = schema.oneOf.map((candidate) => { const nested: string[] = []; validateInto(candidate, value, path, nested); return nested; });
-    if (candidates.filter((candidate) => candidate.length === 0).length !== 1) {
-      const closest = [...candidates].sort((a, b) => a.length - b.length)[0];
-      issues.push(closest?.[0] ?? `${path} does not match exactly one allowed shape.`);
+    const candidates = schema.oneOf.map((candidate) => {
+      const nested: string[] = [];
+      validateInto(candidate, value, path, nested);
+      return { schema: candidate, issues: nested };
+    });
+    if (candidates.filter((candidate) => candidate.issues.length === 0).length !== 1) {
+      const discriminator = isPlainObject(value) && typeof value.type === 'string' ? value.type : null;
+      const discriminated = discriminator === null ? undefined : candidates.find((candidate) => candidate.schema.properties?.type?.const === discriminator);
+      const closest = discriminated ?? [...candidates].sort((a, b) => a.issues.length - b.issues.length)[0];
+      issues.push(closest?.issues[0] ?? `${path} does not match exactly one allowed shape.`);
     }
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(schema, 'const') && !Object.is(value, schema.const)) { issues.push(`${path} must equal ${JSON.stringify(schema.const)}.`); return; }
-  if (schema.enum !== undefined && !schema.enum.some((candidate) => Object.is(candidate, value))) { issues.push(`${path} must be one of: ${schema.enum.map((item) => JSON.stringify(item)).join(', ')}.`); return; }
+  if (Object.prototype.hasOwnProperty.call(schema, 'const') && !Object.is(value, schema.const)) {
+    issues.push(`${path} must equal ${JSON.stringify(schema.const)}.`);
+    return;
+  }
+  if (schema.enum !== undefined && !schema.enum.some((candidate) => Object.is(candidate, value))) {
+    issues.push(`${path} must be one of: ${schema.enum.map((item) => JSON.stringify(item)).join(', ')}.`);
+    return;
+  }
   switch (schema.type) {
     case 'object': {
       if (!isPlainObject(value)) { issues.push(`${path} must be an object.`); return; }
@@ -276,6 +273,10 @@ function validateInto(schema: JsonContractSchema, value: unknown, path: string, 
     default:
       return;
   }
+}
+
+function assertNonBlank(value: string, pathLabel: string): void {
+  if (value.trim() === '') throw new ResearchError('INPUT_SCHEMA_ERROR', `${pathLabel} must not be blank.`);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
