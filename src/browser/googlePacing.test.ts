@@ -34,25 +34,25 @@ test('conservativeLegacyHoldMs compensates only root primary premount accelerati
   );
 });
 
-test('GoogleLegacyCadencePacer lets downstream work consume the hold before the next navigation', async () => {
+test('GoogleLegacyCadencePacer pays the full budget even after downstream work elapsed', async () => {
   const pacer = new GoogleLegacyCadencePacer();
   const hold = pacer.observe(sample(), 10_000);
   assert.equal(hold, 4000);
 
   const sleeps: number[] = [];
   const waited = await pacer.wait({
-    now: () => 12_000,
+    now: () => 99_000,
     sleep: async (ms) => {
       sleeps.push(ms);
     },
   });
-  assert.equal(waited, 2000);
-  assert.deepEqual(sleeps, [2000]);
+  assert.equal(waited, 4000);
+  assert.deepEqual(sleeps, [4000]);
 
   const noWait = await pacer.wait({
-    now: () => 14_500,
+    now: () => 100_000,
     sleep: async () => {
-      throw new Error('must not sleep after the cadence floor has elapsed');
+      throw new Error('budget must be consumed exactly once');
     },
   });
   assert.equal(noWait, 0);
