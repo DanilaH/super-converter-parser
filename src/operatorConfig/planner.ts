@@ -89,7 +89,13 @@ export function buildExistingResearchPlan(
     : enrichmentSatisfied
       ? { id: 'enrichment', state: 'already_satisfied', reason: null }
       : currentEnrichment !== null
-        ? { id: 'enrichment', state: 'blocked', reason: `Current enrichment is ${currentEnrichment.state}; resume it through the accepted legacy path.` }
+        ? operatorConfig !== null && wantsEnrichment
+          ? {
+              id: 'enrichment',
+              state: 'ready',
+              reason: `Current configured enrichment is ${currentEnrichment.state}; resume it against its persisted discovery parent and config.`,
+            }
+          : { id: 'enrichment', state: 'blocked', reason: `Current enrichment is ${currentEnrichment.state}; config-driven resume requires persisted OperatorConfig enrichment intent.` }
         : operatorConfig === null
           ? { id: 'enrichment', state: 'blocked', reason: 'This existing research has no persisted OperatorConfig; downstream enrichment intent cannot be reconstructed safely.' }
           : !wantsEnrichment
