@@ -100,7 +100,7 @@ function status(input: {
       lookupError: null,
     },
     evidenceCoverage: null,
-    nextAction: { code: 'continue', message: 'continue workflow', command: null },
+    nextAction: { code: 'run_finalization', message: 'continue workflow', command: null },
     sampledHistoricalPresence: null,
   };
 }
@@ -175,7 +175,7 @@ test('configured finalization outcome is projected into machine-readable awaitin
   const result: ConfiguredFinalizationResult = {
     outcome: {
       kind: 'awaiting_decisions',
-      enrichmentId: 'enrichment-1',
+      state: 'awaiting_decisions',
       finalistCount: 2,
       currentDecisionCount: 0,
     },
