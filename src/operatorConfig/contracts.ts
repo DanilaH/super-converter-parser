@@ -1,4 +1,8 @@
-import { IMPLEMENTED_ENRICHMENT_MODULES } from '../enrichment/types.js';
+import {
+  IMPLEMENTED_ENRICHMENT_MODULES,
+  QUERY_SUGGESTION_SOURCES,
+  type QuerySuggestionSource,
+} from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
 
 export type JsonContractSchema = {
@@ -46,6 +50,11 @@ export type OperatorResearchConfigV1 = {
       minSharedUrls?: number;
       minUrlJaccard?: number;
     };
+    querySuggestions?: {
+      sources?: QuerySuggestionSource[];
+      maxSuggestionsPerSource?: number;
+      maxParents?: number;
+    };
   };
   finalization?: {
     representativeCount?: number;
@@ -73,7 +82,11 @@ export type OperatorContinuationV1 =
   | { version: 1; researchId: string; action: { type: 'publication_override'; publishWithoutDecisions: true } };
 
 const STRING_NON_EMPTY = { type: 'string', minLength: 1 } as const satisfies JsonContractSchema;
-const PORTABLE_PATH = { type: 'string', minLength: 1, description: 'Path relative to the JSON file that declares it.' } as const satisfies JsonContractSchema;
+const PORTABLE_PATH = {
+  type: 'string',
+  minLength: 1,
+  description: 'Path relative to the JSON file that declares it.',
+} as const satisfies JsonContractSchema;
 
 const INPUT_SCHEMA = {
   oneOf: [
@@ -110,6 +123,14 @@ export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
             minDomainJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.3 },
             minSharedUrls: { type: 'integer', minimum: 1, maximum: 30, default: 2 },
             minUrlJaccard: { type: 'number', minimum: 0, maximum: 1, default: 0.1 },
+          },
+        },
+        querySuggestions: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            sources: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: QUERY_SUGGESTION_SOURCES } },
+            maxSuggestionsPerSource: { type: 'integer', minimum: 1, default: 20 },
+            maxParents: { type: 'integer', minimum: 5, maximum: 200, default: 200 },
           },
         },
       },
@@ -186,6 +207,9 @@ export function validateOperatorResearchConfig(value: unknown): OperatorResearch
     const topN = clustering.topN ?? 10;
     if ((clustering.minSharedDomains ?? 3) > topN) throw new ResearchError('INPUT_SCHEMA_ERROR', '$.enrichment.clustering.minSharedDomains cannot exceed topN.');
     if ((clustering.minSharedUrls ?? 2) > topN) throw new ResearchError('INPUT_SCHEMA_ERROR', '$.enrichment.clustering.minSharedUrls cannot exceed topN.');
+  }
+  if (config.enrichment?.querySuggestions !== undefined && !config.enrichment.modules.includes('query_suggestions')) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', '$.enrichment.querySuggestions requires "query_suggestions" in $.enrichment.modules.');
   }
   return config;
 }

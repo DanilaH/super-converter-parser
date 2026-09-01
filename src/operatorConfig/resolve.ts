@@ -1,8 +1,15 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { dirname, posix, resolve, win32 } from 'node:path';
-import { type OperatorContinuationV1, type OperatorResearchConfigV1, type WorkflowTargetV1, validateOperatorContinuation, validateOperatorResearchConfig } from './contracts.js';
+import { QUERY_SUGGESTION_SOURCES, type QuerySuggestionSource } from '../enrichment/types.js';
 import { ResearchError } from '../shared/errors.js';
+import {
+  type OperatorContinuationV1,
+  type OperatorResearchConfigV1,
+  type WorkflowTargetV1,
+  validateOperatorContinuation,
+  validateOperatorResearchConfig,
+} from './contracts.js';
 
 export type SemanticOrigin = 'default' | 'file';
 export type DeclaredFilePath = { logicalPath: string; resolvedPath: string };
@@ -10,7 +17,11 @@ export type ResolvedResearchSemantics = {
   research: { label: string; market: string; googleHl: string; googleGl: string; input: { type: 'seeds' | 'microsoft'; logicalPath: string; resolvedPath: string } };
   workflow: { target: WorkflowTargetV1 };
   discovery: { expand: boolean; requireAhrefs: boolean };
-  enrichment: null | { modules: string[]; clustering: { topN: number; minSharedDomains: number; minDomainJaccard: number; minSharedUrls: number; minUrlJaccard: number } };
+  enrichment: null | {
+    modules: string[];
+    clustering: { topN: number; minSharedDomains: number; minDomainJaccard: number; minSharedUrls: number; minUrlJaccard: number };
+    querySuggestions: null | { sources: QuerySuggestionSource[]; maxSuggestionsPerSource: number; maxParents: number };
+  };
   finalization: null | { representativeCount: number; historyPolicy: { youngDomainMaxAgeDays: number; recentWebPresenceMaxAgeDays: number; repurposeGapMinDays: number }; historicalPresence: { collectionMode: 'latest' | 'annual'; recentMonths: number; maxCollections: number; domainCap: number } };
   provenance: Record<string, SemanticOrigin>;
 };
@@ -42,6 +53,8 @@ const DEFAULT_CLUSTER_MIN_SHARED_DOMAINS = 3;
 const DEFAULT_CLUSTER_MIN_DOMAIN_JACCARD = 0.3;
 const DEFAULT_CLUSTER_MIN_SHARED_URLS = 2;
 const DEFAULT_CLUSTER_MIN_URL_JACCARD = 0.1;
+const DEFAULT_QUERY_SUGGESTIONS_PER_SOURCE = 20;
+const DEFAULT_QUERY_SUGGESTION_MAX_PARENTS = 200;
 const DEFAULT_REPRESENTATIVE_COUNT = 5;
 const DEFAULT_HISTORY_COLLECTION_MODE = 'annual' as const;
 const DEFAULT_HISTORY_RECENT_MONTHS = 18;
@@ -106,6 +119,8 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
   let enrichment: ResolvedResearchSemantics['enrichment'] = null;
   if (config.enrichment !== undefined) {
     const clustering = config.enrichment.clustering;
+    const usesQuerySuggestions = config.enrichment.modules.includes('query_suggestions');
+    const querySuggestions = config.enrichment.querySuggestions;
     enrichment = {
       modules: [...config.enrichment.modules].sort(),
       clustering: {
@@ -115,6 +130,11 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
         minSharedUrls: withOrigin(clustering?.minSharedUrls, DEFAULT_CLUSTER_MIN_SHARED_URLS, '$.enrichment.clustering.minSharedUrls', provenance),
         minUrlJaccard: withOrigin(clustering?.minUrlJaccard, DEFAULT_CLUSTER_MIN_URL_JACCARD, '$.enrichment.clustering.minUrlJaccard', provenance),
       },
+      querySuggestions: usesQuerySuggestions ? {
+        sources: normalizeQuerySuggestionSources(withOrigin(querySuggestions?.sources, [...QUERY_SUGGESTION_SOURCES], '$.enrichment.querySuggestions.sources', provenance)),
+        maxSuggestionsPerSource: withOrigin(querySuggestions?.maxSuggestionsPerSource, DEFAULT_QUERY_SUGGESTIONS_PER_SOURCE, '$.enrichment.querySuggestions.maxSuggestionsPerSource', provenance),
+        maxParents: withOrigin(querySuggestions?.maxParents, DEFAULT_QUERY_SUGGESTION_MAX_PARENTS, '$.enrichment.querySuggestions.maxParents', provenance),
+      } : null,
     };
     provenance['$.enrichment.modules'] = 'file';
   }
@@ -179,6 +199,11 @@ export function fingerprint(namespace: string, value: unknown): string {
 
 function effectiveConfigProjection(semantics: ResolvedResearchSemantics): unknown {
   return { version: 1, research: { label: semantics.research.label, market: semantics.research.market, googleHl: semantics.research.googleHl, googleGl: semantics.research.googleGl, input: { type: semantics.research.input.type, path: semantics.research.input.logicalPath } }, workflow: semantics.workflow, discovery: semantics.discovery, enrichment: semantics.enrichment, finalization: semantics.finalization };
+}
+
+function normalizeQuerySuggestionSources(sources: QuerySuggestionSource[]): QuerySuggestionSource[] {
+  const selected = new Set(sources);
+  return QUERY_SUGGESTION_SOURCES.filter((source) => selected.has(source));
 }
 
 function withOrigin<T>(value: T | undefined, fallback: T, path: string, provenance: Record<string, SemanticOrigin>): T {

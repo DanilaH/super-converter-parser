@@ -38,6 +38,29 @@ test('same effective config gets stable fingerprints even when defaults are expl
   assert.deepEqual(a.stageFingerprints, b.stageFingerprints);
 });
 
+test('query suggestion defaults are stable and query suggestion changes stay enrichment-local', () => {
+  const configPath = resolve('/tmp/project/research.config.json');
+  const baseConfig = finalizationConfig();
+  const implicit = buildNewResearchPlan(baseConfig, configPath);
+  const explicit = buildNewResearchPlan(finalizationConfig({ enrichment: {
+    ...baseConfig.enrichment!,
+    querySuggestions: {
+      sources: ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'],
+      maxSuggestionsPerSource: 20,
+      maxParents: 200,
+    },
+  } }), configPath);
+  assert.equal(implicit.stageFingerprints.enrichmentSemanticFingerprint, explicit.stageFingerprints.enrichmentSemanticFingerprint);
+
+  const changed = buildNewResearchPlan(finalizationConfig({ enrichment: {
+    ...baseConfig.enrichment!,
+    querySuggestions: { sources: ['surfer_related', 'google_autocomplete'], maxSuggestionsPerSource: 10, maxParents: 50 },
+  } }), configPath);
+  assert.equal(implicit.stageFingerprints.discoverySemanticFingerprint, changed.stageFingerprints.discoverySemanticFingerprint);
+  assert.notEqual(implicit.stageFingerprints.enrichmentSemanticFingerprint, changed.stageFingerprints.enrichmentSemanticFingerprint);
+  assert.equal(implicit.stageFingerprints.finalizationPolicyFingerprint, changed.stageFingerprints.finalizationPolicyFingerprint);
+});
+
 test('later-stage policy changes do not invalidate discovery semantics', () => {
   const configPath = resolve('/tmp/project/research.config.json'); const base = buildNewResearchPlan(finalizationConfig(), configPath);
   const changed = buildNewResearchPlan(finalizationConfig({ finalization: { representativeCount: 7, historyPolicy: { youngDomainMaxAgeDays: 1000, recentWebPresenceMaxAgeDays: 1095, repurposeGapMinDays: 365 }, historicalPresence: { collectionMode: 'annual', recentMonths: 18, maxCollections: 12, domainCap: 20 } } }), configPath);

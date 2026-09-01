@@ -40,6 +40,14 @@ test('operator config requires stage sections for requested workflow target', ()
   expectSchemaError(() => validateOperatorResearchConfig({ ...(baseConfig() as Record<string, unknown>), workflow: { target: 'finalization' }, enrichment: { modules: ['clusters'] } }), '$.finalization is required');
 });
 
+test('query suggestion controls require the query_suggestions module', () => {
+  expectSchemaError(() => validateOperatorResearchConfig({
+    ...(baseConfig() as Record<string, unknown>),
+    workflow: { target: 'enrichment' },
+    enrichment: { modules: ['clusters'], querySuggestions: { maxParents: 25 } },
+  }), '$.enrichment.querySuggestions requires "query_suggestions"');
+});
+
 test('operator config rejects whitespace-only semantic strings', () => {
   const blankLabel = baseConfig() as { research: { label: string } };
   blankLabel.research.label = '   ';
