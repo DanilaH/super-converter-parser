@@ -28,6 +28,7 @@ export type PortableResolvedResearchSemantics = Omit<ResolvedResearchSemantics, 
       logicalPath: string;
     };
   };
+  preset?: { id: string; revision: number };
 };
 
 export type PersistedOperatorConfigV1 = {
@@ -46,7 +47,7 @@ export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfi
     version: 1 as const,
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     stageFingerprints: loaded.plan.stageFingerprints,
-    semantics: toPortableSemantics(loaded.plan.semantics),
+    semantics: toPortableSemantics(loaded.plan.semantics, preset),
   };
 
   if (preset === null) {
@@ -196,7 +197,10 @@ export function validatePersistedOperatorConfig(value: unknown, source: string):
   return expected;
 }
 
-function toPortableSemantics(semantics: ResolvedResearchSemantics): PortableResolvedResearchSemantics {
+function toPortableSemantics(
+  semantics: ResolvedResearchSemantics,
+  preset: OperatorResearchPresetV1 | null,
+): PortableResolvedResearchSemantics {
   return {
     ...semantics,
     research: {
@@ -206,6 +210,7 @@ function toPortableSemantics(semantics: ResolvedResearchSemantics): PortableReso
         logicalPath: semantics.research.input.logicalPath,
       },
     },
+    ...(preset === null ? {} : { preset: { id: preset.id, revision: preset.revision } }),
   };
 }
 
