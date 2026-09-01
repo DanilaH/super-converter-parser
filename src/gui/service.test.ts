@@ -78,7 +78,7 @@ test('GUI new-research draft is validated by the production config loader and re
   const outputRoot = join(root, 'output');
   const draftRoot = join(root, 'drafts');
   await mkdir(draftRoot, { recursive: true });
-  let executedConfigPath: string | null = null;
+  const executedConfigPaths: string[] = [];
 
   const service = new OperatorGuiService({
     outputRoot,
@@ -86,7 +86,7 @@ test('GUI new-research draft is validated by the production config loader and re
     env: {} as NodeJS.ProcessEnv,
     deps: {
       runNew: async (configPath) => {
-        executedConfigPath = configPath;
+        executedConfigPaths.push(configPath);
         return {
           exitCode: 0,
           result: {
@@ -129,14 +129,15 @@ test('GUI new-research draft is validated by the production config loader and re
 
   assert.ok(planned.draftId);
   assert.equal(planned.plan.stateContext.kind, 'new');
-  assert.deepEqual('preset' in planned.plan ? planned.plan.preset : null, { id: 'quick-scan', revision: 1 });
-  assert.equal(planned.plan.semantics?.research.input.logicalPath, 'input/seeds.csv');
-  assert.equal((await readFile(planned.plan.semantics?.research.input.resolvedPath ?? '', 'utf8')).trim(), 'keyword\njson formatter');
+  if (planned.plan.stateContext.kind !== 'new') assert.fail('new GUI draft must produce a new-research plan');
+  assert.deepEqual(planned.plan.preset, { id: 'quick-scan', revision: 1 });
+  assert.equal(planned.plan.semantics.research.input.logicalPath, 'input/seeds.csv');
+  assert.equal((await readFile(planned.plan.semantics.research.input.resolvedPath, 'utf8')).trim(), 'keyword\njson formatter');
 
   const execution = await service.runNew(planned.draftId);
   assert.equal(execution.exitCode, 0);
-  assert.ok(executedConfigPath);
-  assert.equal(executedConfigPath.endsWith('research.config.json'), true);
+  assert.equal(executedConfigPaths.length, 1);
+  assert.equal(executedConfigPaths[0]?.endsWith('research.config.json'), true);
 
   await service.close();
 });
@@ -167,7 +168,7 @@ test('existing-research planning uses stable identity and canonical persisted Op
     outputRoot: join(root, 'output'),
     draftRoot: join(root, 'drafts'),
     deps: {
-      buildStatus: async ({ targetRunId }) => completedStatus('research-1', researchDirectory, '2026-09-01T00:00:02.000Z'),
+      buildStatus: async () => completedStatus('research-1', researchDirectory, '2026-09-01T00:00:02.000Z'),
       readProvenance: async () => discoveryOnlyProvenance(),
       runExisting: async (researchId, continuationPath) => {
         assert.equal(researchId, 'research-1');
