@@ -1,11 +1,11 @@
 # V2.3 Historical Presence Acceptance
 
 **Scope:** post-V2.2 Common Crawl sampled historical-presence productionization  
-**Acceptance date:** 2026-08-31  
+**Acceptance date:** 2026-09-01  
 **Operator transport smoke:** PASS  
 **Engineering integration:** PASS  
-**Integrated finalist-cohort operator acceptance:** PENDING  
-**Overall status:** IMPLEMENTED IN `main`; FULL LIVE ACCEPTANCE NOT YET DECLARED
+**Integrated finalist-cohort operator acceptance:** PASS  
+**Overall status:** ACCEPTED
 
 This document keeps three different claims separate:
 
@@ -13,7 +13,7 @@ This document keeps three different claims separate:
 2. the production transport, cache, cohort lifecycle, status projection, finalist evidence integration, and invalidation contracts pass deterministic cross-platform engineering gates;
 3. the complete merged `finalize:full` path has been exercised on a real finalist cohort and inspected end to end.
 
-Claims 1 and 2 are demonstrated. Claim 3 is still pending and must not be inferred from GitHub Actions.
+All three claims are now demonstrated. Claim 3 was established by the integrated operator-machine acceptance recorded in section 5.
 
 ## 1. Why this exists separately from V2.2
 
@@ -181,7 +181,7 @@ Therefore:
 
 ## 4. What engineering acceptance proves
 
-The merged implementation is now defensible at the code-contract level:
+The merged implementation is defensible at the code-contract level:
 
 - immutable parent identity is checked on load;
 - stale sampled state fails closed after entrant changes;
@@ -191,35 +191,59 @@ The merged implementation is now defensible at the code-contract level:
 - cross-platform CI passes on the exact merged PR heads;
 - no V3/commercial scoring or generic provider framework was introduced.
 
-This does **not** prove that a complete real finalist-cohort `finalize:full` run behaves acceptably under the operator's current network, Common Crawl latency/rate conditions, cache state, and real cohort size.
+Engineering acceptance alone did not prove that a complete real finalist-cohort `finalize:full` run behaves acceptably under the operator's current network, Common Crawl latency/rate conditions, cache state, and real cohort size. That remaining live condition is now covered by the operator acceptance below.
 
-## 5. Remaining integrated operator acceptance
+## 5. Integrated operator acceptance — PASS
 
-Run this on the operator machine from current `main` at or after:
+The merged production path was exercised on the real V2.2 research from current `main`.
 
-```text
-c1add2026f9b55c89a480f11490184b77b5017fc
-```
-
-Use a real completed enrichment and a genuine finalist scope. The acceptance path is:
+Research:
 
 ```text
-1. run finalize:full on a representative real finalist cohort
-2. confirm the sampled historical-presence stage completes or fails truthfully without corrupting downstream state
-3. inspect cohort-historical-presence.csv / .json
-4. inspect finalist-evidence-matrix.json / .csv
-5. run research:status in text and --json modes
-6. confirm unique-domain checked/observed denominators are understandable
-7. confirm not_found / omitted / not_attempted / unavailable / error remain distinguishable
-8. confirm sampled timestamps are visibly labeled bounded/sampled and never appear as exact first-seen
-9. rerun the same finalist scope and confirm cache reuse is visible and sane
-10. if the sampled snapshot materially changes, confirm stale finalist publication is invalidated and regenerated
-11. record any actual operator friction; fix only observed defects
+20260831143913996_357a43e8-597f-4da1-8eb0-30faee966303
 ```
 
-Human decisions do not need to be fabricated merely to make this gate pass. If the real research legitimately remains `awaiting_decisions`, that is acceptable provided the evidence matrix/status surfaces are current and truthful.
+Enrichment:
 
-## 6. Current decision
+```text
+20260831150111426_14b5a777-3aac-447a-96e7-41f1da3ebe71
+```
+
+Acceptance sequence:
+
+```text
+1. finalize:full on the real enrichment/finalist cohort
+2. research:status in text mode
+3. research:status --json
+4. identical second finalize:full on the same enrichment
+```
+
+Observed historical-presence metrics:
+
+| Metric | First `finalize:full` | Second `finalize:full` |
+| --- | ---: | ---: |
+| Historical presence checked | 19/19 | 19/19 |
+| Observed | 18 | 18 |
+| `not_found` | 1 | 1 |
+| Cache hits | 0 | 19 |
+| Domain lookup requests | 144 | 0 |
+
+Acceptance observations:
+
+- the real finalist cohort completed with `19/19` unique domains checked;
+- the semantic result was stable across reruns: `18 observed / 1 not_found` on both passes;
+- the first pass exercised the live Common Crawl path with 144 domain lookup requests and no cache hits;
+- the second identical pass reused all 19 cached domain results and issued zero new Common Crawl domain lookup requests;
+- text and JSON `research:status` completed in the integrated sequence;
+- the second pass did not invent a different sampled-history result or require network refetching when the cache was valid;
+- the real cohort exercised observed and `not_found` outcomes; the remaining omission/unavailable/error/not-attempted distinctions continue to be enforced by the deterministic integration/regression coverage recorded above;
+- Common Crawl evidence remains a separate sampled historical-presence block and is not promoted to exact first-seen/site-age semantics.
+
+The rerun evidence directly demonstrates cache reuse and deterministic semantic behavior for this real cohort. This acceptance does not make a stronger byte-for-byte artifact-immutability claim because no independent file-hash comparison was recorded; no such stronger claim is required for this gate.
+
+No operator defect requiring a code fix was observed.
+
+## 6. Final decision
 
 ```text
 OPERATOR COMMON CRAWL TRANSPORT SMOKE: PASS
@@ -227,8 +251,8 @@ PRODUCTION TRANSPORT/CACHE: PASS
 FINALIST-COHORT LIFECYCLE: PASS
 FINALIZATION/STATUS/EVIDENCE INTEGRATION: PASS
 EXACT-HEAD UBUNTU/WINDOWS CI: PASS
-INTEGRATED REAL FINALIST-COHORT OPERATOR RUN: PENDING
-FULL V2.3 HISTORICAL-PRESENCE ACCEPTANCE: NOT YET DECLARED
+INTEGRATED REAL FINALIST-COHORT OPERATOR RUN: PASS
+FULL V2.3 HISTORICAL-PRESENCE ACCEPTANCE: PASS
 ```
 
-No further speculative framework work is justified before the integrated operator pass. The next useful evidence is a real merged-path run, not another abstraction layer.
+V2.3 historical-presence productionization is accepted and closed. No further work on this track is justified unless new evidence reveals a concrete defect or requirements change.
