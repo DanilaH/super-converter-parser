@@ -15,6 +15,8 @@ const rootSample = {
   normalizedKeyword: 'alpha',
   isRoot: true,
   outcome: 'completed' as const,
+  captchaEncountered: true,
+  relatedOutcome: 'ok' as const,
   pageCreateMs: 10,
   navigationMs: 100,
   captchaMs: 20,
@@ -33,6 +35,8 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
     keyword: 'beta',
     normalizedKeyword: 'beta',
     isRoot: false,
+    captchaEncountered: false,
+    relatedOutcome: null,
     relatedSurferMs: null,
     totalMs: 500,
   });
@@ -45,6 +49,10 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
   assert.equal(summary.counts.primaryBrowserCollections, 2);
   assert.equal(summary.counts.rootPrimaryCollections, 1);
   assert.equal(summary.counts.expandedPrimaryCollections, 1);
+  assert.equal(summary.counts.captchaEncounters, 1);
+  assert.equal(summary.counts.relatedOk, 1);
+  assert.equal(summary.counts.relatedEmpty, 0);
+  assert.equal(summary.counts.relatedError, 0);
   assert.equal(summary.counts.ahrefsClientCalls, 1);
   assert.equal(summary.counts.engineSleepCalls, 2);
   assert.equal(summary.totals.browserCollectionMs, 1_200);
@@ -60,6 +68,7 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, and engine sleep timin
     averageMs: 600,
   });
   assert.match(renderDiscoveryTimingSummary(summary), /wall 2\.0s/);
+  assert.match(renderDiscoveryTimingSummary(summary), /CAPTCHA 1/);
 });
 
 test('writeDiscoveryTimingArtifact writes an attempt-scoped immutable filename', async () => {
