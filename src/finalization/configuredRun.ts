@@ -111,7 +111,11 @@ export async function runConfiguredFinalization(
 
   if (
     action?.type === 'traffic'
-    && (request.status.finalization.state === 'awaiting_decisions' || request.status.finalization.state === 'ready_to_publish')
+    && (
+      request.status.finalization.state === 'awaiting_decisions'
+      || request.status.finalization.state === 'ready_to_publish'
+      || request.status.finalization.state === 'published'
+    )
   ) {
     if (resolvedPath === null) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', 'Traffic continuation is missing its resolved file path.');
