@@ -87,6 +87,10 @@ export function buildExistingResearchPlan(
     && operatorConfig !== null
     && wantsEnrichment
     && ['created', 'paused', 'failed'].includes(currentEnrichment.state);
+  const configuredFinalizationResumable = operatorConfig !== null
+    && wantsFinalization
+    && status.finalization.state === 'in_progress'
+    && status.finalization.finalistCount > 0;
 
   const enrichmentStage: PlanStage = !discoverySatisfied
     ? { id: 'enrichment', state: 'blocked', reason: 'Requires current discovery to be complete and non-repairable.' }
@@ -132,7 +136,9 @@ export function buildExistingResearchPlan(
             ? { id: 'finalization', state: 'ready', reason: 'Finalist evidence and human decisions are current; Library publication is the remaining accepted action.' }
             : readyContinuationReason !== null
               ? { id: 'finalization', state: 'ready', reason: readyContinuationReason }
-              : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status, operatorConfig !== null) };
+              : configuredFinalizationResumable
+                ? { id: 'finalization', state: 'ready', reason: 'Persisted finalist scope exists; resume config-driven finalization from current durable parent state.' }
+                : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status, operatorConfig !== null) };
 
   const stages: PlanStage[] = [
     discoverySatisfied
@@ -209,7 +215,7 @@ export function buildExistingResearchPlan(
     stageFingerprints: operatorConfig?.stageFingerprints ?? null,
     semantics,
     stages,
-    externalWork: buildExistingExternalWork(semantics, enrichmentStage, finalizationStage),
+    externalWork: buildExistingExternalWork(semantics, enrichmentStage, finalizationStage, status, action),
     filesystemInputs: continuation?.declaredFilePath
       ? [{ purpose: 'continuation_input', ...continuation.declaredFilePath }]
       : [],
@@ -345,7 +351,7 @@ function finalizationContinuationReadyReason(
     return 'Traffic evidence can be imported against the current entrant cohort; downstream finalist evidence must then be rebuilt.';
   }
   if (action === 'decisions' && status.finalization.state === 'awaiting_decisions') {
-    return 'A decisions continuation is supplied for the current finalist scope; execution remains a later PR.';
+    return 'A decisions continuation is supplied for the current finalist scope; current human facts can be applied without rerunning upstream network evidence.';
   }
   if (action === 'publication_override' && status.finalization.finalistMatrixPublished && !status.library.published) {
     return 'An explicit incomplete-publication override is supplied against the current finalist evidence matrix.';
@@ -374,8 +380,12 @@ function finalizationBlockReason(status: ResearchStatusWithHistoricalPresence, h
       ? 'Finalization is configured but has not started; an explicit finalist scope is required.'
       : 'Finalization has not started. This legacy research has no persisted OperatorConfig policy to reconstruct it safely.';
   }
-  if (status.finalization.state === 'in_progress') return 'Finalization is in progress; continue through the accepted legacy path until config-first finalization execution is implemented.';
-  if (status.finalization.state === 'ready_to_publish') return 'Finalization evidence is current; Library publication remains a separate accepted action.';
+  if (status.finalization.state === 'in_progress') {
+    return hasOperatorConfig
+      ? 'Finalization has partial durable state but no reusable finalist scope; supply an explicit finalist scope.'
+      : 'Finalization is in progress, but this legacy research has no persisted OperatorConfig policy to resume it safely.';
+  }
+  if (status.finalization.state === 'ready_to_publish') return 'Finalization evidence is current; Library publication remains the accepted remaining action.';
   return `Finalization is ${status.finalization.state}.`;
 }
 
@@ -383,6 +393,8 @@ function buildExistingExternalWork(
   semantics: PortableResolvedResearchSemantics | null,
   enrichmentStage: PlanStage,
   finalizationStage: PlanStage,
+  status: ResearchStatusWithHistoricalPresence,
+  action: ResolvedOperatorContinuation['continuation']['action']['type'] | null,
 ): ExternalWorkExpectation[] {
   if (semantics === null) return [];
   const work: ExternalWorkExpectation[] = [];
@@ -399,12 +411,12 @@ function buildExistingExternalWork(
     if (semantics.enrichment.modules.includes('pages') || semantics.enrichment.modules.includes('site_structure')) providers.add('web_http');
     work.push({ stage: 'enrichment', providers: [...providers] });
   }
-  if (
-    finalizationStage.state === 'ready'
-    && semantics.workflow.target === 'finalization'
-    && finalizationStage.reason?.includes('finalist scope')
-  ) {
-    work.push({ stage: 'finalization', providers: ['common_crawl'] });
+  if (finalizationStage.state === 'ready' && semantics.workflow.target === 'finalization') {
+    const needsHistoricalNetwork = status.finalization.state === 'in_progress'
+      || action === 'finalists'
+      || action === 'finalists_all'
+      || action === 'representative_overrides';
+    if (needsHistoricalNetwork) work.push({ stage: 'finalization', providers: ['common_crawl'] });
   }
   return work;
 }
