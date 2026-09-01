@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.utility-research-runner/schemas/operator-research-preset-v1.schema.json",
+  "title": "Utility Research Runner OperatorResearchPresetV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "revision", "overlay"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "research": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "market": { "type": "string", "minLength": 1, "default": "US" },
+            "googleHl": { "type": "string", "minLength": 1, "default": "en" },
+            "googleGl": { "type": "string", "minLength": 1, "default": "us" }
+          }
+        },
+        "workflow": { "type": "object", "additionalProperties": false, "properties": { "target": { "type": "string", "enum": ["discovery", "enrichment", "finalization"], "default": "discovery" } } },
+        "discovery": { "type": "object", "additionalProperties": false, "properties": {
+          "topN": { "type": "integer", "minimum": 1, "maximum": 30, "default": 10 },
+          "expand": { "type": "boolean", "default": false },
+          "requireAhrefs": { "type": "boolean", "default": false }
+        } },
+        "enrichment": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "modules": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["clusters", "query_suggestions", "domain_age", "pages", "site_structure"] } },
+            "clustering": { "type": "object", "additionalProperties": false, "properties": {
+              "topN": { "type": "integer", "minimum": 1, "maximum": 30, "default": 10 },
+              "minSharedDomains": { "type": "integer", "minimum": 1, "maximum": 30, "default": 3 },
+              "minDomainJaccard": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
+              "minSharedUrls": { "type": "integer", "minimum": 1, "maximum": 30, "default": 2 },
+              "minUrlJaccard": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
+            } },
+            "querySuggestions": { "type": "object", "additionalProperties": false, "properties": {
+              "sources": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["surfer_related", "google_autocomplete", "google_related_search", "google_paa"] } },
+              "maxSuggestionsPerSource": { "type": "integer", "minimum": 1, "default": 20 },
+              "maxParents": { "type": "integer", "minimum": 5, "maximum": 200, "default": 200 }
+            } }
+          }
+        },
+        "finalization": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "representativeCount": { "type": "integer", "minimum": 3, "maximum": 10, "default": 5 },
+            "historyPolicy": { "type": "object", "additionalProperties": false, "properties": {
+              "youngDomainMaxAgeDays": { "type": "integer", "minimum": 0 },
+              "recentWebPresenceMaxAgeDays": { "type": "integer", "minimum": 0 },
+              "repurposeGapMinDays": { "type": "integer", "minimum": 0 }
+            } },
+            "historicalPresence": { "type": "object", "additionalProperties": false, "properties": {
+              "collectionMode": { "type": "string", "enum": ["latest", "annual"], "default": "annual" },
+              "recentMonths": { "type": "integer", "minimum": 1, "maximum": 120, "default": 18 },
+              "maxCollections": { "type": "integer", "minimum": 1, "maximum": 100, "default": 24 },
+              "domainCap": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+            } }
+          }
+        }
+      }
+    }
+  }
+}
