@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { mkdir, readFile } from 'node:fs/promises';
+import { dirname, extname, join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { CacheStore } from '../cache/store.js';
-import { loadConfig, type ResearchConfig } from '../config/config.js';
+import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { createFirstSeenClient } from '../firstseen/client.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
@@ -26,8 +26,6 @@ import {
 import { ResearchError } from '../shared/errors.js';
 import {
   CLUSTERING_ALGORITHM_VERSION,
-  DEFAULT_CLUSTER_MIN_SHARED_URLS,
-  DEFAULT_CLUSTER_MIN_URL_JACCARD,
   type ClusteringConfig,
 } from './clustering.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from './cache.js';
@@ -229,6 +227,11 @@ export async function runConfiguredEnrichment(
       ? createFirstSeenClient(snapshotToFirstSeenClientConfig(domainAgeSnapshot, {}))
       : null;
 
+    const needsHttpCache = modules.includes('pages') || modules.includes('site_structure');
+    if (needsHttpCache) {
+      await mkdir(dirname(resolve(activeCacheConfig.dbPath)), { recursive: true });
+    }
+
     const outcome = await runEnrichment({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
@@ -245,7 +248,7 @@ export async function runConfiguredEnrichment(
       httpConfig: activeHttpConfig,
       pagesConfig: activePagesConfig,
       siteStructureConfig: activeSiteStructureConfig,
-      cacheConfig: activeCacheConfig,
+      ...(needsHttpCache ? { cacheConfig: activeCacheConfig } : {}),
       logger,
       signal: request.signal,
       resume: resumed,
