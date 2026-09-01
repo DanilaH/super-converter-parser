@@ -61,8 +61,19 @@ function statusBeforeMatrix(): ResearchStatusWithHistoricalPresence {
       lookupError: null,
     },
     evidenceCoverage: {
-      warnings: [],
-    } as ResearchStatusWithHistoricalPresence['evidenceCoverage'],
+      representativeUrlCoverage: { numerator: 1, denominator: 1, ratio: 1 },
+      entrantDomainRows: 1,
+      drKnownCoverage: { numerator: 1, denominator: 1, ratio: 1 },
+      pageIdentityCoverage: { numerator: 1, denominator: 1, ratio: 1 },
+      history: null,
+      traffic: null,
+      warnings: [{
+        code: 'FINALIST_EVIDENCE_NOT_CURRENT',
+        affectedCount: 1,
+        denominator: 1,
+        message: 'Current finalist matrix has not been published yet.',
+      }],
+    },
     nextAction: { code: 'run_finalization', message: 'continue finalization', command: null },
     sampledHistoricalPresence: null,
   };
