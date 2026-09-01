@@ -42,12 +42,21 @@ test('existing research planner refuses mismatched continuation research id', ()
   assert.throws(() => buildExistingResearchPlan(status(), continuation({ type: 'shortlist', path: 'shortlist.csv' }, 'other')), (error: unknown) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR');
 });
 
-test('legacy existing research does not invent missing operator config', () => {
+test('legacy existing research does not invent missing operator config or premature finalist gates', () => {
   const plan = buildExistingResearchPlan(status(), null);
   assert.equal(plan.configAvailability, 'legacy_config_unavailable');
   assert.deepEqual(plan.stages.map((item) => [item.id, item.state]), [['discovery', 'already_satisfied'], ['enrichment', 'blocked'], ['finalization', 'blocked']]);
-  assert.deepEqual(plan.unresolvedHumanRequirements, ['operator_config', 'finalist_scope']);
+  assert.deepEqual(plan.unresolvedHumanRequirements, ['operator_config']);
   assert.match(renderResearchPlan(plan), /will not infer downstream research intent/i);
+});
+
+test('completed enrichment exposes the finalist gate without inventing finalization policy', () => {
+  const current = status({
+    enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
+    finalization: { state: 'not_started', enrichmentId: 'enrich-1', finalistCount: 0, currentDecisionCount: 0, allFinalistsHaveCurrentDecisions: false, finalistMatrixPublished: false, artifactWarning: null },
+  });
+  const plan = buildExistingResearchPlan(current, null);
+  assert.deepEqual(plan.unresolvedHumanRequirements, ['operator_config', 'finalist_scope']);
 });
 
 test('explicit finalist scope can advance one legacy finalization step without pretending config is recovered', () => {
