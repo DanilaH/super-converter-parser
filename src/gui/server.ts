@@ -12,7 +12,15 @@ const DEFAULT_STATIC_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'publi
 
 type GuiServiceLike = Pick<
   OperatorGuiService,
-  'bootstrap' | 'listResearches' | 'status' | 'planNew' | 'runNew' | 'planExisting' | 'runExisting'
+  | 'bootstrap'
+  | 'listResearches'
+  | 'status'
+  | 'clusters'
+  | 'finalistEvidence'
+  | 'planNew'
+  | 'runNew'
+  | 'planExisting'
+  | 'runExisting'
 >;
 
 export type OperatorGuiServer = {
@@ -87,6 +95,16 @@ async function handleRequest(
     sendJson(response, 200, await service.status(decodeURIComponent(statusMatch[1] as string)));
     return;
   }
+  const clustersMatch = url.pathname.match(/^\/api\/researches\/([^/]+)\/clusters$/);
+  if (method === 'GET' && clustersMatch) {
+    sendJson(response, 200, await service.clusters(decodeURIComponent(clustersMatch[1] as string)));
+    return;
+  }
+  const evidenceMatch = url.pathname.match(/^\/api\/researches\/([^/]+)\/finalist-evidence$/);
+  if (method === 'GET' && evidenceMatch) {
+    sendJson(response, 200, await service.finalistEvidence(decodeURIComponent(evidenceMatch[1] as string)));
+    return;
+  }
 
   if (method === 'POST') assertMutationOrigin(request);
 
@@ -156,8 +174,13 @@ function assertMutationOrigin(request: IncomingMessage): void {
   } catch {
     throw new HttpError(403, 'FORBIDDEN', 'Invalid Origin header.');
   }
-  if (parsed.protocol !== 'http:' || (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost')) {
-    throw new HttpError(403, 'FORBIDDEN', 'Operator GUI mutation requests must come from the loopback origin.');
+  const host = request.headers.host ?? '';
+  if (
+    parsed.protocol !== 'http:'
+    || (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost')
+    || parsed.host !== host
+  ) {
+    throw new HttpError(403, 'FORBIDDEN', 'Operator GUI mutation requests must come from this exact loopback origin.');
   }
 }
 
