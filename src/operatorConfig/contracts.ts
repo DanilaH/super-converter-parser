@@ -40,7 +40,7 @@ export type OperatorResearchConfigV1 = {
     googleGl?: string;
   };
   workflow?: { target?: WorkflowTargetV1 };
-  discovery?: { expand?: boolean; requireAhrefs?: boolean };
+  discovery?: { topN?: number; expand?: boolean; requireAhrefs?: boolean };
   enrichment?: {
     modules: Array<(typeof IMPLEMENTED_ENRICHMENT_MODULES)[number]>;
     clustering?: {
@@ -110,7 +110,14 @@ export const OPERATOR_RESEARCH_CONFIG_V1_SCHEMA = {
       },
     },
     workflow: { type: 'object', additionalProperties: false, properties: { target: { type: 'string', enum: ['discovery', 'enrichment', 'finalization'], default: 'discovery' } } },
-    discovery: { type: 'object', additionalProperties: false, properties: { expand: { type: 'boolean', default: false }, requireAhrefs: { type: 'boolean', default: false } } },
+    discovery: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        topN: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
+        expand: { type: 'boolean', default: false },
+        requireAhrefs: { type: 'boolean', default: false },
+      },
+    },
     enrichment: {
       type: 'object', additionalProperties: false, required: ['modules'],
       properties: {
