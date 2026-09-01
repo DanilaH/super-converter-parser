@@ -20,6 +20,7 @@ export type ExistingResearchExecutionPlan = {
   };
   configAvailability: 'operator_config' | 'legacy_config_unavailable';
   configPath: null;
+  preset: { id: string; revision: number } | null;
   effectiveConfigFingerprint: string | null;
   stageFingerprints: StageSemanticFingerprints | null;
   semantics: PortableResolvedResearchSemantics | null;
@@ -224,6 +225,9 @@ export function buildExistingResearchPlan(
     },
     configAvailability: operatorConfig === null ? 'legacy_config_unavailable' : 'operator_config',
     configPath: null,
+    preset: operatorConfig?.preset === undefined
+      ? null
+      : { id: operatorConfig.preset.id, revision: operatorConfig.preset.revision },
     effectiveConfigFingerprint: operatorConfig?.effectiveConfigFingerprint ?? null,
     stageFingerprints: operatorConfig?.stageFingerprints ?? null,
     semantics,
@@ -263,6 +267,7 @@ export function renderResearchPlan(plan: ResearchExecutionPlan): string {
     lines.push(`  Enrichment: ${plan.stateContext.currentEnrichmentId ?? 'none'}`);
     if (plan.configAvailability === 'operator_config' && plan.semantics !== null) {
       lines.push('  Operator config: persisted immutable provenance');
+      lines.push(`  Preset: ${plan.preset === null ? 'none' : `${plan.preset.id}@${plan.preset.revision}`}`);
       lines.push(`  Workflow target: ${plan.semantics.workflow.target}`);
       lines.push(`  Market: ${plan.semantics.research.market} | Google hl/gl: ${plan.semantics.research.googleHl}/${plan.semantics.research.googleGl}`);
     } else {
@@ -272,9 +277,17 @@ export function renderResearchPlan(plan: ResearchExecutionPlan): string {
     const semantics = plan.semantics;
     lines.push(`  Target: new research (${semantics.research.label})`);
     lines.push(`  Config: ${plan.configPath}`);
+    lines.push(`  Preset: ${plan.preset === null ? 'none' : `${plan.preset.id}@${plan.preset.revision}`}`);
     lines.push(`  Workflow target: ${semantics.workflow.target}`);
     lines.push(`  Market: ${semantics.research.market} | Google hl/gl: ${semantics.research.googleHl}/${semantics.research.googleGl}`);
     lines.push(`  Input: ${semantics.research.input.type} ${semantics.research.input.logicalPath}`);
+  }
+
+  if (plan.semantics !== null) {
+    lines.push('', 'Semantic origins');
+    for (const [path, origin] of Object.entries(plan.semantics.provenance).sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push(`  ${path}: ${origin}`);
+    }
   }
 
   lines.push('', 'Stages');
