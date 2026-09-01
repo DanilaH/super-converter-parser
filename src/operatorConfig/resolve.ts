@@ -204,7 +204,11 @@ export function fingerprint(namespace: string, value: unknown): string {
 }
 
 function buildNewResearchExternalWork(semantics: ResolvedResearchSemantics): ExternalWorkExpectation[] {
-  const discoveryProviders = ['google', 'keyword_surfer', ...(semantics.discovery.requireAhrefs ? ['ahrefs'] : [])];
+  const discoveryProviders = [
+    'google',
+    'keyword_surfer',
+    semantics.discovery.requireAhrefs ? 'ahrefs' : 'ahrefs_if_configured',
+  ];
   const work: ExternalWorkExpectation[] = [{ stage: 'discovery', providers: discoveryProviders }];
   if (semantics.workflow.target !== 'discovery' && semantics.enrichment !== null) {
     const providers = new Set<string>();
@@ -212,7 +216,10 @@ function buildNewResearchExternalWork(semantics: ResolvedResearchSemantics): Ext
       if (semantics.enrichment.querySuggestions.sources.includes('surfer_related')) providers.add('keyword_surfer');
       if (semantics.enrichment.querySuggestions.sources.some((source) => source.startsWith('google_'))) providers.add('google');
     }
-    if (semantics.enrichment.modules.includes('domain_age')) { providers.add('rdap'); providers.add('configured_first_seen_provider'); }
+    if (semantics.enrichment.modules.includes('domain_age')) {
+      providers.add('rdap');
+      providers.add('first_seen_provider_if_configured');
+    }
     if (semantics.enrichment.modules.includes('pages') || semantics.enrichment.modules.includes('site_structure')) providers.add('web_http');
     work.push({ stage: 'enrichment', providers: [...providers] });
   }
