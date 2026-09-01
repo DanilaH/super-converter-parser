@@ -1,24 +1,7 @@
 import process from 'node:process';
-import { join } from 'node:path';
 import { loadDotEnv } from '../config/env.js';
-import { loadConfig } from '../config/config.js';
-import { RunStore } from '../db/store.js';
-import { loadEntrantCohortState } from '../db/entrantCohorts.js';
-import { entrantCohortFingerprint } from '../db/cohortHistory.js';
-import { saveCohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
-import {
-  archiveResearchDirectory,
-  resolveEnrichmentLocation,
-  resolveOutputRoot,
-} from '../outputs/researchLayout.js';
-import { HistoricalPresenceCache, defaultHistoricalPresenceCachePath } from '../historicalPresence/cache.js';
-import { collectCohortHistoricalPresence } from '../historicalPresence/cohortCollector.js';
-import { createCommonCrawlHistoricalPresenceClient } from '../historicalPresence/commonCrawl.js';
-import {
-  writeCohortHistoricalPresenceCsv,
-  writeCohortHistoricalPresenceJson,
-} from '../historicalPresence/cohortOutputs.js';
-import { publishCohortHistoricalPresenceMetadata } from '../historicalPresence/cohortPublication.js';
+import { runCohortHistoricalPresence } from '../finalization/historicalPresenceRun.js';
+import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import {
   DEFAULT_HISTORICAL_PRESENCE_CONFIG,
   type HistoricalPresenceCollectionMode,
@@ -122,84 +105,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  const outputRoot = resolveOutputRoot(args.outputRoot);
-  const location = await resolveEnrichmentLocation(outputRoot, args.enrichmentId);
-  const store = RunStore.open(join(location.enrichmentDirectory, 'enrichment.sqlite'));
-  const appConfig = loadConfig();
-  const cachePath = defaultHistoricalPresenceCachePath(appConfig.cache.path);
-  const cache = HistoricalPresenceCache.open(cachePath);
-
-  try {
-    const enrichment = store.loadEnrichmentRun(args.enrichmentId);
-    if (!enrichment) throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment not found: ${args.enrichmentId}`);
-    if (enrichment.state !== 'completed') {
-      throw new ResearchError(
-        'INPUT_SCHEMA_ERROR',
-        `Sampled historical presence requires a completed enrichment; ${args.enrichmentId} is ${enrichment.state}.`,
-      );
-    }
-    const entrant = loadEntrantCohortState(store, args.enrichmentId);
-    if (!entrant) {
-      throw new ResearchError(
-        'INPUT_SCHEMA_ERROR',
-        `Enrichment ${args.enrichmentId} has no persisted entrant cohort. Run npm run entrant-cohort first.`,
-      );
-    }
-
-    const config = {
-      ...DEFAULT_HISTORICAL_PRESENCE_CONFIG,
-      collectionMode: args.collectionMode,
-      recentMonths: args.recentMonths,
-      maxCollections: args.maxCollections,
-    };
-    const client = createCommonCrawlHistoricalPresenceClient(config);
-    const collection = await collectCohortHistoricalPresence({
-      cohorts: entrant.cohorts,
-      client,
-      cache,
-      domainCap: args.domainCap,
-    });
-    const snapshot = {
-      enrichmentId: args.enrichmentId,
-      sourceRunId: entrant.sourceRunId,
-      entrantRepresentativeRevision: entrant.representativeRevision,
-      entrantFingerprint: entrantCohortFingerprint(entrant),
-      collectionVersion: collection.version,
-      config: { ...config, domainCap: args.domainCap },
-      collection,
-    };
-    const saved = saveCohortHistoricalPresenceSnapshot(store, snapshot);
-
-    const csvPath = join(location.enrichmentDirectory, 'cohort-historical-presence.csv');
-    const jsonPath = join(location.enrichmentDirectory, 'cohort-historical-presence.json');
-    await writeCohortHistoricalPresenceCsv(csvPath, snapshot);
-    await writeCohortHistoricalPresenceJson(jsonPath, snapshot);
-    await publishCohortHistoricalPresenceMetadata({
-      enrichmentDirectory: location.enrichmentDirectory,
-      snapshot,
-      changed: saved.changed,
-    });
-    await archiveResearchDirectory(location.researchDirectory);
-
-    const summary = collection.summary;
-    console.log(
-      `Sampled historical presence: ${summary.checkedDomainCount}/${summary.uniqueDomainCount} entrant domain(s) checked, `
-      + `${summary.omittedDomainCount} cap-omitted.`,
-    );
-    console.log(
-      `Observed=${summary.knownPresenceDomainCount}, not_found=${summary.notFoundDomainCount}, `
-      + `unavailable=${summary.unavailableDomainCount}, error=${summary.errorDomainCount}.`,
-    );
-    console.log(
-      `Complete selected-history observations=${summary.completeSelectedHistoryDomainCount}/${summary.knownPresenceDomainCount}; `
-      + `cache hits=${summary.cacheHitCount}; domain lookup requests=${summary.networkRequestCount}.`,
-    );
-    console.log('Semantics: earliestSampledCaptureAt is bounded sampled Common Crawl evidence, not exact first-seen.');
-    console.log(`Artifacts: ${csvPath}, ${jsonPath}`);
-  } finally {
-    cache.close();
-    store.close();
-  }
+  await runCohortHistoricalPresence({
+    outputRoot: resolveOutputRoot(args.outputRoot),
+    enrichmentId: args.enrichmentId,
+    collectionMode: args.collectionMode,
+    recentMonths: args.recentMonths,
+    maxCollections: args.maxCollections,
+    domainCap: args.domainCap,
+  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/cohortHistoricalPresence.ts') || process.argv[1]?.endsWith('\\cohortHistoricalPresence.ts')) {
