@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { parseFinalistDecisionsJson } from '../enrichment/finalistDecisionConfig.js';
 import type { ConfiguredFinalizationResult } from '../finalization/configuredRun.js';
 import type { ResearchStatusWithHistoricalPresence } from '../research/statusWithHistoricalPresence.js';
 import {
@@ -77,11 +78,11 @@ function statusForPhase(researchDirectory: string, phase: Phase): ResearchStatus
     evidenceCoverage: null,
     sampledHistoricalPresence: null,
     nextAction: published
-      ? { code: 'complete', message: 'Research complete.', command: null }
+      ? { code: 'none', message: 'Research complete.', command: null }
       : awaitingDecisions
         ? { code: 'supply_decisions', message: 'Supply human decisions.', command: null }
         : enriched
-          ? { code: 'select_finalists', message: 'Select finalist scope.', command: null }
+          ? { code: 'run_finalization', message: 'Select finalist scope.', command: null }
           : { code: 'run_enrichment', message: 'Run enrichment.', command: null },
   };
 }
@@ -257,10 +258,20 @@ test('config-first operator lifecycle plans first, preserves stable identity, st
   assert.deepEqual(finalizationActions, ['finalists']);
 
   const decisionsPath = join(configDirectory, 'decisions.json');
-  await writeFile(decisionsPath, JSON.stringify({
-    version: 1,
-    decisions: [{ clusterId: 'cluster-1', decision: 'skip', notes: 'acceptance fixture decision' }],
-  }), 'utf8');
+  await writeFile(decisionsPath, JSON.stringify([
+    {
+      clusterId: 'cluster-1',
+      buildDecision: 'watch',
+      seoProductRole: 'experimental',
+    },
+  ]), 'utf8');
+  const parsedDecisions = parseFinalistDecisionsJson(await readFile(decisionsPath, 'utf8'));
+  assert.deepEqual(parsedDecisions, [{
+    clusterId: 'cluster-1',
+    buildDecision: 'watch',
+    seoProductRole: 'experimental',
+  }]);
+
   const decisionsContinuationPath = join(configDirectory, 'decisions-continuation.json');
   await writeFile(decisionsContinuationPath, JSON.stringify({
     version: 1,
