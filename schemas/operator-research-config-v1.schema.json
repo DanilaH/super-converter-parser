@@ -7,6 +7,7 @@
   "required": ["version", "research"],
   "properties": {
     "version": { "const": 1 },
+    "preset": { "type": "string", "minLength": 1 },
     "research": {
       "type": "object",
       "additionalProperties": false,
@@ -31,7 +32,7 @@
       "requireAhrefs": { "type": "boolean", "default": false }
     } },
     "enrichment": {
-      "type": "object", "additionalProperties": false, "required": ["modules"],
+      "type": "object", "additionalProperties": false,
       "properties": {
         "modules": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["clusters", "query_suggestions", "domain_age", "pages", "site_structure"] } },
         "clustering": { "type": "object", "additionalProperties": false, "properties": {
@@ -49,10 +50,10 @@
       }
     },
     "finalization": {
-      "type": "object", "additionalProperties": false, "required": ["historyPolicy"],
+      "type": "object", "additionalProperties": false,
       "properties": {
         "representativeCount": { "type": "integer", "minimum": 3, "maximum": 10, "default": 5 },
-        "historyPolicy": { "type": "object", "additionalProperties": false, "required": ["youngDomainMaxAgeDays", "recentWebPresenceMaxAgeDays", "repurposeGapMinDays"], "properties": {
+        "historyPolicy": { "type": "object", "additionalProperties": false, "properties": {
           "youngDomainMaxAgeDays": { "type": "integer", "minimum": 0 },
           "recentWebPresenceMaxAgeDays": { "type": "integer", "minimum": 0 },
           "repurposeGapMinDays": { "type": "integer", "minimum": 0 }
