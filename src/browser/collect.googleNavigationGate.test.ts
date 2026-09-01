@@ -32,7 +32,10 @@ function expandedKeyword(): KeywordRecord {
 
 test('primary and related-only collectors share the BrowserContext navigation gate', async () => {
   let newPageCalls = 0;
-  const page = fakePage();
+  let gotoCalls = 0;
+  const page = fakePage(() => {
+    gotoCalls += 1;
+  });
   const context = {
     newPage: async () => {
       newPageCalls += 1;
@@ -44,6 +47,7 @@ test('primary and related-only collectors share the BrowserContext navigation ga
   const first = await collectKeyword(context, config, expandedKeyword(), debugRoot);
   assert.equal(first.record.status, 'completed');
   assert.equal(newPageCalls, 1);
+  assert.equal(gotoCalls, 1);
 
   await assert.rejects(
     collectRelatedKeyword(
@@ -55,14 +59,17 @@ test('primary and related-only collectors share the BrowserContext navigation ga
     ),
     (error: unknown) => error instanceof ResearchError && error.code === 'RUN_PAUSED',
   );
-  assert.equal(newPageCalls, 1, 'cancelled pacing must stop before opening a second page');
+  assert.equal(newPageCalls, 2, 'page may be prepared before pacing is cancelled');
+  assert.equal(gotoCalls, 1, 'cancelled pacing must stop before a second Google request starts');
 });
 
-function fakePage(): Page {
+function fakePage(onGoto: () => void): Page {
   const captchaSelector = 'form[action*="sorry"], iframe[src*="recaptcha"], #captcha';
   return {
     isClosed: () => false,
-    goto: async () => undefined,
+    goto: async () => {
+      onGoto();
+    },
     url: () => 'https://google.com/search?q=favicon+maker',
     locator: (selector: string) => {
       if (selector === captchaSelector) {
