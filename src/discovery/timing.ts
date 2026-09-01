@@ -1,6 +1,7 @@
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BrowserCollectionTiming } from '../browser/collect.js';
+import type { SnapshotCadenceReason } from './snapshotCadence.js';
 
 export type AhrefsTimingStatus = 'ok' | 'not_found' | 'error' | 'throw';
 
@@ -8,6 +9,13 @@ export type AhrefsTimingSample = {
   domain: string;
   durationMs: number;
   status: AhrefsTimingStatus;
+};
+
+export type SnapshotTimingSample = {
+  state: string;
+  reason: SnapshotCadenceReason;
+  published: boolean;
+  durationMs: number;
 };
 
 export type TimingDistribution = {
@@ -39,6 +47,9 @@ export type DiscoveryTimingSummaryV1 = {
     relatedError: number;
     ahrefsClientCalls: number;
     engineSleepCalls: number;
+    snapshotCallbacks: number;
+    snapshotPublishes: number;
+    snapshotSkips: number;
   };
   totals: {
     browserCollectionMs: number;
@@ -50,20 +61,24 @@ export type DiscoveryTimingSummaryV1 = {
     locationParseMs: number;
     ahrefsClientMs: number;
     engineSleepRequestedMs: number;
+    snapshotPublishMs: number;
   };
   distributions: {
     primaryBrowserCollectionMs: TimingDistribution;
     relatedOnlyBrowserCollectionMs: TimingDistribution;
     relatedSurferMs: TimingDistribution;
     ahrefsClientMs: TimingDistribution;
+    snapshotPublishMs: TimingDistribution;
   };
   browserSamples: BrowserCollectionTiming[];
   ahrefsSamples: AhrefsTimingSample[];
+  snapshotSamples: SnapshotTimingSample[];
 };
 
 export class DiscoveryTimingRecorder {
   private readonly browserSamples: BrowserCollectionTiming[] = [];
   private readonly ahrefsSamples: AhrefsTimingSample[] = [];
+  private readonly snapshotSamples: SnapshotTimingSample[] = [];
   private engineSleepCalls = 0;
   private engineSleepRequestedMs = 0;
 
@@ -83,6 +98,10 @@ export class DiscoveryTimingRecorder {
     this.engineSleepRequestedMs += ms;
   }
 
+  recordSnapshot(state: string, reason: SnapshotCadenceReason, published: boolean, durationMs: number): void {
+    this.snapshotSamples.push({ state, reason, published, durationMs: nonNegative(durationMs) });
+  }
+
   snapshot(params: {
     runId: string;
     mode: 'fresh' | 'resume';
@@ -96,6 +115,8 @@ export class DiscoveryTimingRecorder {
       .map((sample) => sample.relatedSurferMs)
       .filter((value): value is number => value !== null);
     const ahrefsDurations = this.ahrefsSamples.map((sample) => sample.durationMs);
+    const publishedSnapshots = this.snapshotSamples.filter((sample) => sample.published);
+    const snapshotDurations = publishedSnapshots.map((sample) => sample.durationMs);
 
     return {
       version: 1,
@@ -117,6 +138,9 @@ export class DiscoveryTimingRecorder {
         relatedError: this.browserSamples.filter((sample) => sample.relatedOutcome === 'error').length,
         ahrefsClientCalls: this.ahrefsSamples.length,
         engineSleepCalls: this.engineSleepCalls,
+        snapshotCallbacks: this.snapshotSamples.length,
+        snapshotPublishes: publishedSnapshots.length,
+        snapshotSkips: this.snapshotSamples.length - publishedSnapshots.length,
       },
       totals: {
         browserCollectionMs: sum(this.browserSamples.map((sample) => sample.totalMs)),
@@ -128,15 +152,18 @@ export class DiscoveryTimingRecorder {
         locationParseMs: sumNullable(this.browserSamples.map((sample) => sample.locationParseMs)),
         ahrefsClientMs: sum(ahrefsDurations),
         engineSleepRequestedMs: this.engineSleepRequestedMs,
+        snapshotPublishMs: sum(snapshotDurations),
       },
       distributions: {
         primaryBrowserCollectionMs: distribution(primary.map((sample) => sample.totalMs)),
         relatedOnlyBrowserCollectionMs: distribution(relatedOnly.map((sample) => sample.totalMs)),
         relatedSurferMs: distribution(relatedDurations),
         ahrefsClientMs: distribution(ahrefsDurations),
+        snapshotPublishMs: distribution(snapshotDurations),
       },
       browserSamples: this.browserSamples.map((sample) => ({ ...sample })),
       ahrefsSamples: this.ahrefsSamples.map((sample) => ({ ...sample })),
+      snapshotSamples: this.snapshotSamples.map((sample) => ({ ...sample })),
     };
   }
 }
@@ -166,6 +193,7 @@ export function renderDiscoveryTimingSummary(summary: DiscoveryTimingSummaryV1):
     `related ${formatMs(totals.relatedSurferMs)}`,
     `Ahrefs client ${formatMs(totals.ahrefsClientMs)}`,
     `engine sleeps ${formatMs(totals.engineSleepRequestedMs)}`,
+    `snapshots ${formatMs(totals.snapshotPublishMs)} (${summary.counts.snapshotPublishes} write / ${summary.counts.snapshotSkips} skip)`,
     `CAPTCHA ${summary.counts.captchaEncounters}`,
   ].join(' | ');
 }
