@@ -479,6 +479,22 @@ function machineResultAfterFinalization(
       },
     };
   }
+  if (
+    base.finalizationState === 'awaiting_decisions'
+    && configured.finalistEvidence === null
+  ) {
+    return {
+      exitCode: EXIT_OK,
+      result: {
+        ...base,
+        workflowState: 'awaiting_decisions',
+        stopPoint: 'finalization',
+        finalizationState: 'awaiting_decisions',
+        publicationId: configured.outcome.publicationId,
+        unresolvedHumanRequirements: ['human_decisions'],
+      },
+    };
+  }
   return {
     exitCode: EXIT_OK,
     result: {
