@@ -33,6 +33,10 @@ export type DiscoveryTimingSummaryV1 = {
     relatedOnlyBrowserCollections: number;
     rootPrimaryCollections: number;
     expandedPrimaryCollections: number;
+    captchaEncounters: number;
+    relatedOk: number;
+    relatedEmpty: number;
+    relatedError: number;
     ahrefsClientCalls: number;
     engineSleepCalls: number;
   };
@@ -107,6 +111,10 @@ export class DiscoveryTimingRecorder {
         relatedOnlyBrowserCollections: relatedOnly.length,
         rootPrimaryCollections: primary.filter((sample) => sample.isRoot).length,
         expandedPrimaryCollections: primary.filter((sample) => !sample.isRoot).length,
+        captchaEncounters: this.browserSamples.filter((sample) => sample.captchaEncountered).length,
+        relatedOk: this.browserSamples.filter((sample) => sample.relatedOutcome === 'ok').length,
+        relatedEmpty: this.browserSamples.filter((sample) => sample.relatedOutcome === 'empty').length,
+        relatedError: this.browserSamples.filter((sample) => sample.relatedOutcome === 'error').length,
         ahrefsClientCalls: this.ahrefsSamples.length,
         engineSleepCalls: this.engineSleepCalls,
       },
@@ -158,6 +166,7 @@ export function renderDiscoveryTimingSummary(summary: DiscoveryTimingSummaryV1):
     `related ${formatMs(totals.relatedSurferMs)}`,
     `Ahrefs client ${formatMs(totals.ahrefsClientMs)}`,
     `engine sleeps ${formatMs(totals.engineSleepRequestedMs)}`,
+    `CAPTCHA ${summary.counts.captchaEncounters}`,
   ].join(' | ');
 }
 
