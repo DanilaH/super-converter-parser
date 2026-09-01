@@ -69,9 +69,9 @@ export async function runFullFinalization(
   const representative = await runRepresentativeQueries({
     outputRoot: request.outputRoot,
     enrichmentId: request.enrichmentId,
-    targetCount: request.representativeCount,
-    overridesPath: request.representativeOverridesPath,
-    selectedClusterIds: request.selectedClusterIds,
+    ...(request.representativeCount === undefined ? {} : { targetCount: request.representativeCount }),
+    ...(request.representativeOverridesPath === undefined ? {} : { overridesPath: request.representativeOverridesPath }),
+    ...(request.selectedClusterIds === undefined ? {} : { selectedClusterIds: request.selectedClusterIds }),
     allClusters: request.allClusters ?? false,
     logger,
   });
@@ -99,7 +99,7 @@ export async function runFullFinalization(
     recentMonths: historicalConfig.recentMonths,
     maxCollections: historicalConfig.maxCollections,
     domainCap: historicalConfig.domainCap,
-    env: request.env,
+    ...(request.env === undefined ? {} : { env: request.env }),
     logger,
   });
 
@@ -108,9 +108,9 @@ export async function runFullFinalization(
   const cohortHistory = await runCohortHistory({
     outputRoot: request.outputRoot,
     enrichmentId: request.enrichmentId,
-    youngDomainMaxAgeDays: request.youngDomainMaxAgeDays,
-    recentWebPresenceMaxAgeDays: request.recentWebPresenceMaxAgeDays,
-    repurposeGapMinDays: request.repurposeGapMinDays,
+    ...(request.youngDomainMaxAgeDays === undefined ? {} : { youngDomainMaxAgeDays: request.youngDomainMaxAgeDays }),
+    ...(request.recentWebPresenceMaxAgeDays === undefined ? {} : { recentWebPresenceMaxAgeDays: request.recentWebPresenceMaxAgeDays }),
+    ...(request.repurposeGapMinDays === undefined ? {} : { repurposeGapMinDays: request.repurposeGapMinDays }),
     logger,
   });
 
@@ -123,7 +123,9 @@ export async function runFullFinalization(
       outputRoot: request.outputRoot,
       enrichmentId: request.enrichmentId,
       inputPath: trafficInputPath,
-      lowBaseOrganicTrafficThreshold: request.lowBaseOrganicTrafficThreshold,
+      ...(request.lowBaseOrganicTrafficThreshold === undefined
+        ? {}
+        : { lowBaseOrganicTrafficThreshold: request.lowBaseOrganicTrafficThreshold }),
       logger,
     });
   } else {
