@@ -19,6 +19,7 @@ import {
 } from '../enrichment/configuredRun.js';
 import type { CancellationSignal } from '../enrichment/types.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
+import { acquireResearchExecutionLock } from '../operatorConfig/executionLock.js';
 import { buildExistingResearchPlan, type ExistingResearchExecutionPlan } from '../operatorConfig/planner.js';
 import {
   readOperatorConfigProvenance,
@@ -82,6 +83,7 @@ export type ResearchRunDeps = {
   loadProvenance: typeof readOperatorConfigProvenance;
   buildStatus: typeof buildResearchStatusWithHistoricalPresence;
   buildExistingPlan: typeof buildExistingResearchPlan;
+  acquireExecutionLock: typeof acquireResearchExecutionLock;
   runDiscovery: typeof runDiscovery;
   runConfiguredEnrichment: typeof runConfiguredEnrichment;
   cliDeps: CliDeps;
@@ -94,6 +96,7 @@ export const DEFAULT_RESEARCH_RUN_DEPS: ResearchRunDeps = {
   loadProvenance: readOperatorConfigProvenance,
   buildStatus: buildResearchStatusWithHistoricalPresence,
   buildExistingPlan: buildExistingResearchPlan,
+  acquireExecutionLock: acquireResearchExecutionLock,
   runDiscovery,
   runConfiguredEnrichment,
   cliDeps: DEFAULT_CLI_DEPS,
@@ -171,7 +174,7 @@ export async function runResearchFromConfig(
   }
 
   return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
-    researchId: discovery.runId as string,
+    researchId: discovery.runId,
     outputRoot,
     continuation: null,
     deps,
@@ -242,7 +245,24 @@ type ContinueWorkflowArgs = {
 
 async function continueConfiguredWorkflow(args: ContinueWorkflowArgs): Promise<ResearchRunExecution> {
   const outputRoot = resolveOutputRoot(args.outputRoot, args.env);
-  const status = args.prefetchedStatus ?? await args.deps.buildStatus({ outputRoot, targetRunId: args.researchId });
+  const initialStatus = args.prefetchedStatus ?? await args.deps.buildStatus({ outputRoot, targetRunId: args.researchId });
+  const releaseLock = await args.deps.acquireExecutionLock(outputRoot, initialStatus.researchId);
+  try {
+    // The pre-lock status exists only to validate/locate the stable research. A
+    // competing process may have changed current generation state while we were
+    // acquiring the advisory lock, so all executable planning uses a fresh read.
+    const status = await args.deps.buildStatus({ outputRoot, targetRunId: args.researchId });
+    return continueConfiguredWorkflowUnderLock(args, outputRoot, status);
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function continueConfiguredWorkflowUnderLock(
+  args: ContinueWorkflowArgs,
+  outputRoot: string,
+  status: ResearchStatusWithHistoricalPresence,
+): Promise<ResearchRunExecution> {
   const provenance = await args.deps.loadProvenance(status.researchDirectory);
   if (provenance === null) {
     throw new ResearchError(
