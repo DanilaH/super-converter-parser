@@ -38,23 +38,23 @@ test('same effective config gets stable fingerprints even when defaults are expl
   assert.deepEqual(a.stageFingerprints, b.stageFingerprints);
 });
 
+test('new plan exposes expected external work without invoking providers', () => {
+  const plan = buildNewResearchPlan(finalizationConfig(), resolve('/tmp/project/research.config.json'));
+  assert.deepEqual(plan.externalWork.map((item) => item.stage), ['discovery', 'enrichment', 'finalization']);
+  assert.ok(plan.externalWork.find((item) => item.stage === 'discovery')?.providers.includes('google'));
+  assert.ok(plan.externalWork.find((item) => item.stage === 'finalization')?.providers.includes('common_crawl'));
+});
+
 test('query suggestion defaults are stable and query suggestion changes stay enrichment-local', () => {
   const configPath = resolve('/tmp/project/research.config.json');
   const baseConfig = finalizationConfig();
   const implicit = buildNewResearchPlan(baseConfig, configPath);
   const explicit = buildNewResearchPlan(finalizationConfig({ enrichment: {
-    ...baseConfig.enrichment!,
-    querySuggestions: {
-      sources: ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'],
-      maxSuggestionsPerSource: 20,
-      maxParents: 200,
-    },
+    ...baseConfig.enrichment!, querySuggestions: { sources: ['surfer_related', 'google_autocomplete', 'google_related_search', 'google_paa'], maxSuggestionsPerSource: 20, maxParents: 200 },
   } }), configPath);
   assert.equal(implicit.stageFingerprints.enrichmentSemanticFingerprint, explicit.stageFingerprints.enrichmentSemanticFingerprint);
-
   const changed = buildNewResearchPlan(finalizationConfig({ enrichment: {
-    ...baseConfig.enrichment!,
-    querySuggestions: { sources: ['surfer_related', 'google_autocomplete'], maxSuggestionsPerSource: 10, maxParents: 50 },
+    ...baseConfig.enrichment!, querySuggestions: { sources: ['surfer_related', 'google_autocomplete'], maxSuggestionsPerSource: 10, maxParents: 50 },
   } }), configPath);
   assert.equal(implicit.stageFingerprints.discoverySemanticFingerprint, changed.stageFingerprints.discoverySemanticFingerprint);
   assert.notEqual(implicit.stageFingerprints.enrichmentSemanticFingerprint, changed.stageFingerprints.enrichmentSemanticFingerprint);
@@ -81,7 +81,7 @@ test('discovery semantic changes affect discovery fingerprint without absolute-p
 test('new finalization plan exposes human gates instead of inventing choices', () => {
   const plan = buildNewResearchPlan(finalizationConfig(), resolve('/tmp/project/research.config.json'));
   assert.deepEqual(plan.unresolvedHumanRequirements, ['shortlist', 'finalist_scope', 'human_decisions']);
-  assert.deepEqual(plan.stages.map((stage) => [stage.id, stage.state]), [['discovery', 'ready'], ['enrichment', 'requires_predecessor'], ['finalization', 'requires_predecessor']]);
+  assert.deepEqual(plan.stages.map((stage) => [stage.id, stage.state]), [['discovery', 'ready'], ['enrichment', 'blocked'], ['finalization', 'blocked']]);
   assert.equal(plan.expectedStopPoint, 'discovery');
 });
 

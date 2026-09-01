@@ -9,6 +9,7 @@
     "research": "tsx src/cli/research.ts",
     "discovery:full": "tsx src/cli/research.ts --expand",
     "research:append": "tsx src/cli/appendResearch.ts",
+    "research:plan": "tsx src/cli/researchPlan.ts",
     "research:status": "tsx src/cli/researchStatus.ts",
     "research:diff": "tsx src/cli/researchDiff.ts",
     "enrich": "tsx src/cli/enrich.ts",
@@ -26,9 +27,7 @@
     "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "csv-parse": "^7.0.2",
