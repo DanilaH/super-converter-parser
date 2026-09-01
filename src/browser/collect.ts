@@ -83,7 +83,7 @@ export async function collectKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<CollectionResult> {
   const totalStartedAt = Date.now();
-  const googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
+  let googlePacingMs = 0;
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
   const pageCreateMs = Date.now() - pageCreateStartedAt;
@@ -101,6 +101,7 @@ export async function collectKeyword(
   let debugArtifactPath: string | null = null;
 
   try {
+    googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
     const searchUrl = buildSearchUrl(config, keyword.keyword);
     const navigationStartedAt = Date.now();
     try {
@@ -339,7 +340,7 @@ export async function collectRelatedKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<RelatedCollectionResult> {
   const totalStartedAt = Date.now();
-  const googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
+  let googlePacingMs = 0;
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
   const pageCreateMs = Date.now() - pageCreateStartedAt;
@@ -353,6 +354,7 @@ export async function collectRelatedKeyword(
   let pageUrl = '';
 
   try {
+    googlePacingMs = await waitForGoogleNavigationTurn(context, signal);
     const navigationStartedAt = Date.now();
     try {
       await page.goto(buildSearchUrl(config, keyword.keyword), {
