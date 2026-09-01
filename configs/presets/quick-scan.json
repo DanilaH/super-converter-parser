@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "quick-scan",
+  "revision": 1,
+  "overlay": {
+    "workflow": {
+      "target": "discovery"
+    },
+    "discovery": {
+      "topN": 10,
+      "expand": false,
+      "requireAhrefs": false
+    }
+  }
+}
