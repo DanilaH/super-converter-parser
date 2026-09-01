@@ -170,15 +170,14 @@ export async function runResearchFromConfig(
     return { exitCode: EXIT_OK, result: discoveryOnlyMachineResult(loaded, discovery) };
   }
 
-  return continueConfiguredWorkflow({
-    researchId: discovery.runId,
+  return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
+    researchId: discovery.runId as string,
     outputRoot,
     continuation: null,
     deps,
     env,
     signal,
-    fallbackDiscovery: discovery,
-  });
+  }));
 }
 
 export async function runResearchFromExisting(
@@ -192,7 +191,7 @@ export async function runResearchFromExisting(
   const outputRoot = resolveOutputRoot(outputRootValue, env);
   const status = await deps.buildStatus({ outputRoot, targetRunId: researchId });
   const continuation = continuationPath === null ? null : await deps.loadContinuation(continuationPath);
-  return continueConfiguredWorkflow({
+  return withEnrichmentCancellation(signal, () => continueConfiguredWorkflow({
     researchId,
     outputRoot,
     continuation,
@@ -200,7 +199,7 @@ export async function runResearchFromExisting(
     env,
     signal,
     prefetchedStatus: status,
-  });
+  }));
 }
 
 export async function runResearchRunCli(
@@ -208,18 +207,13 @@ export async function runResearchRunCli(
   deps: ResearchRunDeps = DEFAULT_RESEARCH_RUN_DEPS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  const signal: CancellationSignal = { cancelled: false };
-  const cancel = (): void => {
-    (signal as { cancelled: boolean }).cancelled = true;
-  };
-  process.on('SIGINT', cancel);
-  process.on('SIGTERM', cancel);
   try {
     const parsed = parseResearchRunArgs(argv);
     if (parsed.help) {
       process.stdout.write(usage());
       return EXIT_OK;
     }
+    const signal: CancellationSignal = { cancelled: false };
     const execution = parsed.config !== null
       ? await runResearchFromConfig(parsed.config, parsed.outputRoot, deps, env, signal)
       : await runResearchFromExisting(parsed.research as string, parsed.continuation, parsed.outputRoot, deps, env, signal);
@@ -233,9 +227,6 @@ export async function runResearchRunCli(
     }
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
     return EXIT_INTERNAL;
-  } finally {
-    process.off('SIGINT', cancel);
-    process.off('SIGTERM', cancel);
   }
 }
 
@@ -247,7 +238,6 @@ type ContinueWorkflowArgs = {
   env: NodeJS.ProcessEnv;
   signal: CancellationSignal;
   prefetchedStatus?: ResearchStatusWithHistoricalPresence;
-  fallbackDiscovery?: DiscoveryRunResult;
 };
 
 async function continueConfiguredWorkflow(args: ContinueWorkflowArgs): Promise<ResearchRunExecution> {
@@ -270,6 +260,10 @@ async function continueConfiguredWorkflow(args: ContinueWorkflowArgs): Promise<R
   }
   if (enrichmentStage.state === 'already_satisfied') {
     if (provenance.semantics.workflow.target === 'finalization') {
+      const finalizationStage = plan.stages.find((stage) => stage.id === 'finalization');
+      if (finalizationStage?.state === 'already_satisfied' && plan.expectedStopPoint === 'complete') {
+        return { exitCode: EXIT_OK, result: { ...base, workflowState: 'completed', stopPoint: 'complete' } };
+      }
       return { exitCode: EXIT_OK, result: { ...base, workflowState: 'awaiting_finalization', stopPoint: 'finalization' } };
     }
     return { exitCode: EXIT_OK, result: { ...base, workflowState: 'completed', stopPoint: 'complete' } };
@@ -434,6 +428,35 @@ function existingMachineResult(
     stageFingerprints: provenance.stageFingerprints,
     operatorConfigPath: join(status.researchDirectory, 'operator-config.json'),
   };
+}
+
+async function withEnrichmentCancellation<T>(
+  signal: CancellationSignal,
+  task: () => Promise<T>,
+): Promise<T> {
+  let sigintCount = 0;
+  const onSigint = (): void => {
+    sigintCount += 1;
+    if (sigintCount === 1) {
+      (signal as { cancelled: boolean }).cancelled = true;
+      console.log('');
+      console.log('Stopping enrichment gracefully... (Ctrl+C again to force quit)');
+      return;
+    }
+    process.off('SIGINT', onSigint);
+    process.kill(process.pid, 'SIGINT');
+  };
+  const onSigterm = (): void => {
+    (signal as { cancelled: boolean }).cancelled = true;
+  };
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+  try {
+    return await task();
+  } finally {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
+  }
 }
 
 function nextValue(args: string[], option: string): string {
