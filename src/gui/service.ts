@@ -112,7 +112,12 @@ export class OperatorGuiService {
       ? await mkdtemp(join(tmpdir(), 'utility-research-gui-'))
       : resolve(input.draftRoot);
     await mkdir(draftRoot, { recursive: true });
-    return new OperatorGuiService({ outputRoot, draftRoot, env, deps: input.deps });
+    return new OperatorGuiService({
+      outputRoot,
+      draftRoot,
+      env,
+      ...(input.deps === undefined ? {} : { deps: input.deps }),
+    });
   }
 
   async close(): Promise<void> {
