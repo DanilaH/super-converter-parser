@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "deep-research",
+  "revision": 1,
+  "workflow": {
+    "target": "enrichment"
+  },
+  "discovery": {
+    "topN": 10,
+    "expand": true,
+    "requireAhrefs": false
+  },
+  "enrichment": {
+    "modules": [
+      "clusters",
+      "query_suggestions",
+      "domain_age",
+      "pages",
+      "site_structure"
+    ]
+  }
+}
