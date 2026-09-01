@@ -42,9 +42,8 @@ export type PersistedOperatorConfigV1 = {
 
 export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfig): PersistedOperatorConfigV1 {
   const preset = loaded.preset ?? null;
-  const sourceConfig = loaded.sourceConfig ?? loaded.config;
   const base = {
-    version: OPERATOR_CONFIG_PROVENANCE_VERSION as const,
+    version: 1 as const,
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     stageFingerprints: loaded.plan.stageFingerprints,
     semantics: toPortableSemantics(loaded.plan.semantics),
@@ -55,6 +54,14 @@ export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfi
       ...base,
       authoredConfig: loaded.config,
     };
+  }
+
+  const sourceConfig = loaded.sourceConfig;
+  if (sourceConfig === undefined) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Loaded preset ${preset.id}@${preset.revision} has no authored source config snapshot.`,
+    );
   }
   if (sourceConfig.preset !== preset.id) {
     throw new ResearchError(
