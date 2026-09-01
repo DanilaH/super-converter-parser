@@ -1,7 +1,15 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ResearchError } from '../shared/errors.js';
-import { validateOperatorResearchConfig, type OperatorResearchConfigV1 } from './contracts.js';
+import {
+  validateOperatorResearchConfig,
+  validateOperatorResearchConfigSource,
+  validateOperatorResearchPreset,
+  type OperatorResearchConfigSourceV1,
+  type OperatorResearchConfigV1,
+  type OperatorResearchPresetV1,
+} from './contracts.js';
+import { mergeOperatorResearchConfig } from './presets.js';
 import {
   buildNewResearchPlan,
   canonicalJson,
@@ -24,19 +32,41 @@ export type PortableResolvedResearchSemantics = Omit<ResolvedResearchSemantics, 
 
 export type PersistedOperatorConfigV1 = {
   version: 1;
-  authoredConfig: OperatorResearchConfigV1;
+  authoredConfig: OperatorResearchConfigSourceV1;
+  preset?: OperatorResearchPresetV1;
+  effectiveConfig?: OperatorResearchConfigV1;
   effectiveConfigFingerprint: string;
   stageFingerprints: StageSemanticFingerprints;
   semantics: PortableResolvedResearchSemantics;
 };
 
 export function buildPersistedOperatorConfig(loaded: LoadedOperatorResearchConfig): PersistedOperatorConfigV1 {
-  return {
-    version: OPERATOR_CONFIG_PROVENANCE_VERSION,
-    authoredConfig: loaded.config,
+  const preset = loaded.preset ?? null;
+  const sourceConfig = loaded.sourceConfig ?? loaded.config;
+  const base = {
+    version: OPERATOR_CONFIG_PROVENANCE_VERSION as const,
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     stageFingerprints: loaded.plan.stageFingerprints,
     semantics: toPortableSemantics(loaded.plan.semantics),
+  };
+
+  if (preset === null) {
+    return {
+      ...base,
+      authoredConfig: loaded.config,
+    };
+  }
+  if (sourceConfig.preset !== preset.id) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Loaded preset ${preset.id}@${preset.revision} does not match authored config preset ${sourceConfig.preset ?? 'none'}.`,
+    );
+  }
+  return {
+    ...base,
+    authoredConfig: sourceConfig,
+    preset,
+    effectiveConfig: loaded.config,
   };
 }
 
@@ -87,27 +117,74 @@ export function validatePersistedOperatorConfig(value: unknown, source: string):
   if (!isRecord(value) || value.version !== OPERATOR_CONFIG_PROVENANCE_VERSION) {
     throw corrupt(source);
   }
-  let authoredConfig: OperatorResearchConfigV1;
-  try {
-    authoredConfig = validateOperatorResearchConfig(value.authoredConfig);
-  } catch (error) {
+
+  const hasPresetSnapshot = Object.prototype.hasOwnProperty.call(value, 'preset');
+  const hasEffectiveConfig = Object.prototype.hasOwnProperty.call(value, 'effectiveConfig');
+  if (hasPresetSnapshot !== hasEffectiveConfig) {
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Invalid authored operator config inside provenance: ${source}.`,
-      { cause: error },
+      `${source} must contain both preset and effectiveConfig for preset-backed provenance.`,
     );
   }
 
-  // Rebuild the complete portable projection from the authored config. The
-  // declaring path is synthetic on purpose: resolved absolute input paths are
-  // runtime-only and are removed from persisted semantics/fingerprints.
-  const rebuilt = buildNewResearchPlan(authoredConfig, '/operator-config-provenance/research.config.json');
-  const expected = buildPersistedOperatorConfig({ config: authoredConfig, plan: rebuilt });
-  if (canonicalJson(value) !== canonicalJson(expected)) {
+  if (!hasPresetSnapshot) {
+    let authoredConfig: OperatorResearchConfigV1;
+    try {
+      authoredConfig = validateOperatorResearchConfig(value.authoredConfig);
+    } catch (error) {
+      throw invalidAuthored(source, error);
+    }
+    const rebuilt = buildNewResearchPlan(authoredConfig, '/operator-config-provenance/research.config.json');
+    const expected = buildPersistedOperatorConfig({ config: authoredConfig, plan: rebuilt });
+    if (canonicalJson(value) !== canonicalJson(expected)) {
+      throw mismatch(source);
+    }
+    return expected;
+  }
+
+  let authoredConfig: OperatorResearchConfigSourceV1;
+  let preset: OperatorResearchPresetV1;
+  let effectiveConfig: OperatorResearchConfigV1;
+  try {
+    authoredConfig = validateOperatorResearchConfigSource(value.authoredConfig);
+    preset = validateOperatorResearchPreset(value.preset);
+    effectiveConfig = validateOperatorResearchConfig(value.effectiveConfig);
+  } catch (error) {
+    throw invalidAuthored(source, error);
+  }
+  if (authoredConfig.preset !== preset.id) {
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `${source} does not match the effective semantics/fingerprints derived from its authored config.`,
+      `${source} authored config names preset ${authoredConfig.preset ?? 'none'}, but persisted snapshot is ${preset.id}@${preset.revision}.`,
     );
+  }
+
+  let merged: OperatorResearchConfigV1;
+  try {
+    merged = mergeOperatorResearchConfig(authoredConfig, preset);
+  } catch (error) {
+    throw new ResearchError('OUTPUT_WRITE_ERROR', `${source} contains an invalid preset/config merge.`, { cause: error });
+  }
+  if (canonicalJson(merged) !== canonicalJson(effectiveConfig)) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `${source} effectiveConfig does not match its immutable authored config + preset snapshot.`,
+    );
+  }
+
+  const rebuilt = buildNewResearchPlan(
+    effectiveConfig,
+    '/operator-config-provenance/research.config.json',
+    { sourceConfig: authoredConfig, preset },
+  );
+  const expected = buildPersistedOperatorConfig({
+    config: effectiveConfig,
+    sourceConfig: authoredConfig,
+    preset,
+    plan: rebuilt,
+  });
+  if (canonicalJson(value) !== canonicalJson(expected)) {
+    throw mismatch(source);
   }
   return expected;
 }
@@ -123,6 +200,21 @@ function toPortableSemantics(semantics: ResolvedResearchSemantics): PortableReso
       },
     },
   };
+}
+
+function invalidAuthored(source: string, cause: unknown): ResearchError {
+  return new ResearchError(
+    'OUTPUT_WRITE_ERROR',
+    `Invalid authored/effective operator config inside provenance: ${source}.`,
+    { cause },
+  );
+}
+
+function mismatch(source: string): ResearchError {
+  return new ResearchError(
+    'OUTPUT_WRITE_ERROR',
+    `${source} does not match the effective semantics/fingerprints derived from its immutable operator provenance.`,
+  );
 }
 
 function corrupt(source: string): ResearchError {
