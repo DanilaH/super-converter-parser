@@ -1,7 +1,6 @@
 import process from 'node:process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadConfig } from '../config/config.js';
 import { loadDotEnv } from '../config/env.js';
 import {
   DEFAULT_CLI_DEPS,
@@ -150,7 +149,6 @@ export async function runResearchRunCli(
 
 function discoverySemanticConfig(loaded: LoadedOperatorResearchConfig): DiscoverySemanticConfig {
   const semantics = loaded.plan.semantics;
-  const fixedScoringPolicy = loadConfig({} as NodeJS.ProcessEnv).scoring;
   return {
     research: {
       market: semantics.research.market,
@@ -166,7 +164,7 @@ function discoverySemanticConfig(loaded: LoadedOperatorResearchConfig): Discover
       minVolume: semantics.discovery.expansionPolicy.minVolume,
     },
     requireAhrefs: semantics.discovery.requireAhrefs,
-    scoring: fixedScoringPolicy,
+    scoring: { drThresholds: { ...semantics.discovery.scoringPolicy } },
   };
 }
 
