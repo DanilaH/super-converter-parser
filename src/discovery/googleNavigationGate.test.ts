@@ -4,24 +4,11 @@ import { ResearchError } from '../shared/errors.js';
 import {
   DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS,
   GoogleNavigationGate,
-  resolveGoogleMinNavigationIntervalMs,
 } from './googleNavigationGate.js';
 
-test('resolveGoogleMinNavigationIntervalMs defaults to conservative 2s and accepts zero override', () => {
-  assert.equal(resolveGoogleMinNavigationIntervalMs({}), DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS);
-  assert.equal(resolveGoogleMinNavigationIntervalMs({ GOOGLE_MIN_NAVIGATION_INTERVAL_MS: '0' }), 0);
-  assert.equal(resolveGoogleMinNavigationIntervalMs({ GOOGLE_MIN_NAVIGATION_INTERVAL_MS: '1250' }), 1250);
-});
-
-test('resolveGoogleMinNavigationIntervalMs rejects invalid operational values', () => {
-  assert.throws(
-    () => resolveGoogleMinNavigationIntervalMs({ GOOGLE_MIN_NAVIGATION_INTERVAL_MS: '-1' }),
-    (error: unknown) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
-  );
-  assert.throws(
-    () => resolveGoogleMinNavigationIntervalMs({ GOOGLE_MIN_NAVIGATION_INTERVAL_MS: 'nope' }),
-    (error: unknown) => error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR',
-  );
+test('default gate uses the conservative 2s burst floor', () => {
+  assert.equal(DEFAULT_GOOGLE_MIN_NAVIGATION_INTERVAL_MS, 2_000);
+  assert.doesNotThrow(() => new GoogleNavigationGate());
 });
 
 test('first collection starts immediately and next collection waits only the remaining floor', async () => {
@@ -46,7 +33,7 @@ test('first collection starts immediately and next collection waits only the rem
   assert.equal(await gate.waitForTurn(params), 0);
 });
 
-test('zero interval disables pacing', async () => {
+test('zero interval disables pacing for isolated unit use', async () => {
   let nowMs = 1_000;
   const gate = new GoogleNavigationGate(0);
   const sleep = async () => {
