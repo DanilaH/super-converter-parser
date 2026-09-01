@@ -61,7 +61,6 @@ type MainSurferComponent = {
 type RelatedSurferComponent = {
   related: SurferRelatedOutcome;
   parserError: ComponentError | null;
-  durationMs: number;
 };
 
 export type BrowserCollectionTiming = {
@@ -96,7 +95,10 @@ export async function collectKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<CollectionResult> {
   const pacer = getGoogleCadencePacer(context);
-  const googlePacingMs = await pacer.wait({ now: Date.now, sleep });
+  const googlePacingMs = await pacer.wait({
+    now: Date.now,
+    sleep: (ms) => sleepWithCancellation(ms, signal),
+  });
   const totalStartedAt = Date.now();
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
@@ -149,28 +151,30 @@ export async function collectKeyword(
       captchaMs = Date.now() - captchaStartedAt;
     }
 
-    // Main Surfer and Surfer Related are independent observations from the same
-    // already-loaded Google page. Start them together so a slow related widget
-    // does not add its entire wait after the main widget wait. The context-level
-    // pacer above preserves a conservative pre-PERF-B Google navigation cadence.
+    // Start the main Surfer reader first, then trigger Related lazy mounting while
+    // main Surfer is pending. Only the non-terminal mount trigger moves earlier;
+    // the actual Related reader still begins at the old semantic point: after
+    // main Surfer plus the historical 1000 ms warm-up.
+    const relatedPhaseStartedAt = isRoot ? Date.now() : null;
     const mainSurferTask = collectMainSurferComponent(page, config);
-    const relatedSurferTask = isRoot
-      ? collectRelatedSurferComponent(page, config)
-      : Promise.resolve<RelatedSurferComponent | null>(null);
-    const [mainSurfer, relatedComponent] = await Promise.all([mainSurferTask, relatedSurferTask]);
-
+    const relatedMountTask = isRoot ? triggerRelatedMount(page) : Promise.resolve();
+    const mainSurfer = await mainSurferTask;
+    await relatedMountTask;
     mainSurferMs = mainSurfer.durationMs;
-    relatedSurferMs = relatedComponent?.durationMs ?? null;
+
+    let related: SurferRelatedOutcome = { status: 'not_attempted', error: null, rows: [] };
+    let relatedParserError: ComponentError | null = null;
+    if (isRoot) {
+      await page.waitForTimeout(1000);
+      const relatedComponent = await readRelatedSurferComponent(page, config);
+      related = relatedComponent.related;
+      relatedParserError = relatedComponent.parserError;
+      relatedSurferMs = Date.now() - (relatedPhaseStartedAt as number);
+      relatedOutcomeForTiming = related.status;
+    }
+
     const volume = mainSurfer.volume;
     const cpc = mainSurfer.cpc;
-    const related: SurferRelatedOutcome = relatedComponent?.related ?? {
-      status: 'not_attempted',
-      error: null,
-      rows: [],
-    };
-    relatedOutcomeForTiming = isRoot ? related.status : null;
-    const relatedParserError = relatedComponent?.parserError ?? null;
-
     const errors: ComponentError[] = [];
     if (mainSurfer.error) errors.push(mainSurfer.error);
 
@@ -178,9 +182,7 @@ export async function collectKeyword(
     let serpStatus: SerpObservationStatus = 'not_fetched';
     let serpError: ComponentError | null = null;
 
-    // Keep SERP parsing after the Surfer observations exactly as before. PERF-B
-    // overlaps only Surfer waits; it does not move the Google evidence capture
-    // point earlier in the page lifecycle.
+    // SERP parsing remains after both Surfer observations exactly as before.
     const serpStartedAt = Date.now();
     try {
       try {
@@ -331,7 +333,10 @@ export async function collectRelatedKeyword(
   timingSink?: BrowserCollectionTimingSink,
 ): Promise<RelatedCollectionResult> {
   const pacer = getGoogleCadencePacer(context);
-  const googlePacingMs = await pacer.wait({ now: Date.now, sleep });
+  const googlePacingMs = await pacer.wait({
+    now: Date.now,
+    sleep: (ms) => sleepWithCancellation(ms, signal),
+  });
   const totalStartedAt = Date.now();
   const pageCreateStartedAt = Date.now();
   const page = await context.newPage();
@@ -379,8 +384,12 @@ export async function collectRelatedKeyword(
       captchaMs = Date.now() - captchaStartedAt;
     }
 
-    const relatedComponent = await collectRelatedSurferComponent(page, config);
-    relatedSurferMs = relatedComponent.durationMs;
+    // Related-only cache repair keeps the historical sequence unchanged.
+    const relatedStartedAt = Date.now();
+    await triggerRelatedMount(page);
+    await page.waitForTimeout(1000);
+    const relatedComponent = await readRelatedSurferComponent(page, config);
+    relatedSurferMs = Date.now() - relatedStartedAt;
     const related = relatedComponent.related;
     relatedOutcomeForTiming = related.status;
 
@@ -457,13 +466,12 @@ async function collectMainSurferComponent(page: Page, config: ResearchConfig): P
   }
 }
 
-async function collectRelatedSurferComponent(page: Page, config: ResearchConfig): Promise<RelatedSurferComponent> {
-  const startedAt = Date.now();
+async function triggerRelatedMount(page: Page): Promise<void> {
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+}
+
+async function readRelatedSurferComponent(page: Page, config: ResearchConfig): Promise<RelatedSurferComponent> {
   try {
-    // Scrolling is the lazy-mount trigger. readSurferRelated already polls the
-    // widget every 500 ms, so the previous unconditional 1000 ms sleep only
-    // delayed the first useful observation and is intentionally removed.
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
     const parsed = await readSurferRelated(
       page,
       config.browser.surferRelatedWidgetSelector,
@@ -477,14 +485,12 @@ async function collectRelatedSurferComponent(page: Page, config: ResearchConfig)
           ? { status: 'ok', error: null, rows: parsed }
           : { status: 'empty', error: null, rows: [] },
       parserError: null,
-      durationMs: Date.now() - startedAt,
     };
   } catch (error) {
     const componentError = toComponentError(error, 'SURFER_RELATED_PARSE_ERROR');
     return {
       related: { status: 'error', error: componentError.code, rows: [] },
       parserError: componentError,
-      durationMs: Date.now() - startedAt,
     };
   }
 }
@@ -520,6 +526,16 @@ function toComponentError(error: unknown, fallbackCode: ResearchErrorCode): Comp
   if (error instanceof ResearchError) return { code: error.code, message: error.message };
   const message = error instanceof Error ? error.message : String(error);
   return { code: fallbackCode, message };
+}
+
+async function sleepWithCancellation(ms: number, signal: CancellationSignal): Promise<void> {
+  const deadline = Date.now() + Math.max(0, ms);
+  while (Date.now() < deadline) {
+    if (signal.isCancelled()) {
+      throw new ResearchError('RUN_PAUSED', 'Collection cancelled while waiting for the Google cadence floor.');
+    }
+    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+  }
 }
 
 function sleep(ms: number): Promise<void> {
