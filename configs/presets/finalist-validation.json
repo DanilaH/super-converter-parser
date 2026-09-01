@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "finalist-validation",
+  "revision": 1,
+  "workflow": {
+    "target": "finalization"
+  },
+  "discovery": {
+    "topN": 10,
+    "expand": true,
+    "requireAhrefs": false
+  },
+  "enrichment": {
+    "modules": [
+      "clusters"
+    ]
+  },
+  "finalization": {
+    "representativeCount": 5,
+    "historyPolicy": {
+      "youngDomainMaxAgeDays": 730,
+      "recentWebPresenceMaxAgeDays": 1095,
+      "repurposeGapMinDays": 365
+    },
+    "historicalPresence": {
+      "collectionMode": "annual",
+      "recentMonths": 18,
+      "maxCollections": 24,
+      "domainCap": 30
+    }
+  }
+}
