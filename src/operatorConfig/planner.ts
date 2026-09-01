@@ -69,8 +69,9 @@ export function buildExistingResearchPlan(
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
   const enrichmentSatisfied = currentEnrichment?.state === 'completed';
-  const finalizationSatisfied = status.finalization.state === 'published';
   const action = continuation?.continuation.action.type ?? null;
+  const finalizationMutationRequested = isFinalizationMutationAction(action);
+  const finalizationSatisfied = status.finalization.state === 'published' && !finalizationMutationRequested;
   const readyContinuationReason = finalizationContinuationReadyReason(status, action);
   const semantics = operatorConfig?.semantics ?? null;
   const target = semantics?.workflow.target ?? null;
@@ -80,6 +81,7 @@ export function buildExistingResearchPlan(
     && semantics?.enrichment !== null
     && semantics?.enrichment !== undefined
     && semantics.enrichment.modules.some((module) => module !== 'clusters');
+  assertContinuationMatchesConfiguredIntent(action, operatorConfig, wantsFinalization);
   const hasDurableEnrichmentWork = currentEnrichment !== null;
   const finalizationHasDurableState = status.finalization.state !== 'not_started';
   const finalizationRequested = operatorConfig === null || wantsFinalization || finalizationHasDurableState;
@@ -196,7 +198,7 @@ export function buildExistingResearchPlan(
         ? 'enrichment'
         : operatorConfig !== null && !wantsFinalization && !finalizationHasDurableState
           ? 'complete'
-          : status.finalization.state === 'published'
+          : finalizationSatisfied
             ? 'complete'
             : 'finalization';
 
@@ -348,7 +350,7 @@ function finalizationContinuationReadyReason(
   action: ResolvedOperatorContinuation['continuation']['action']['type'] | null,
 ): string | null {
   if (action === 'finalists' || action === 'finalists_all') {
-    return 'An explicit finalist scope continuation can advance the representative step.';
+    return 'An explicit finalist scope continuation can advance or revise the representative step.';
   }
   if (action === 'representative_overrides' && status.finalization.finalistCount > 0) {
     return 'Representative overrides can be applied to the persisted finalist scope; downstream evidence must then be rebuilt.';
@@ -356,8 +358,8 @@ function finalizationContinuationReadyReason(
   if (action === 'traffic' && hasCurrentEntrantCohort(status)) {
     return 'Traffic evidence can be imported against the current entrant cohort; downstream finalist evidence must then be rebuilt.';
   }
-  if (action === 'decisions' && status.finalization.state === 'awaiting_decisions') {
-    return 'A decisions continuation is supplied for the current finalist scope; current human facts can be applied without rerunning upstream network evidence.';
+  if (action === 'decisions' && status.finalization.finalistMatrixPublished) {
+    return 'A decisions continuation is supplied for the current finalist matrix; current human facts can be replaced without rerunning upstream network evidence.';
   }
   if (action === 'publication_override' && status.finalization.finalistMatrixPublished && !status.library.published) {
     return 'An explicit incomplete-publication override is supplied against the current finalist evidence matrix.';
@@ -425,6 +427,30 @@ function buildExistingExternalWork(
     if (needsHistoricalNetwork) work.push({ stage: 'finalization', providers: ['common_crawl'] });
   }
   return work;
+}
+
+function isFinalizationMutationAction(
+  action: ResolvedOperatorContinuation['continuation']['action']['type'] | null,
+): boolean {
+  return action === 'finalists'
+    || action === 'finalists_all'
+    || action === 'representative_overrides'
+    || action === 'traffic'
+    || action === 'decisions';
+}
+
+function assertContinuationMatchesConfiguredIntent(
+  action: ResolvedOperatorContinuation['continuation']['action']['type'] | null,
+  operatorConfig: PersistedOperatorConfigV1 | null,
+  wantsFinalization: boolean,
+): void {
+  if (action === null || action === 'shortlist' || operatorConfig === null) return;
+  if (!wantsFinalization) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Continuation action "${action}" requires persisted OperatorConfig workflow target "finalization".`,
+    );
+  }
 }
 
 function pushUnique<T>(items: T[], value: T): void {
