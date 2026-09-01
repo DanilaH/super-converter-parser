@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "standard",
+  "revision": 1,
+  "workflow": {
+    "target": "enrichment"
+  },
+  "discovery": {
+    "topN": 10,
+    "expand": true,
+    "requireAhrefs": false
+  },
+  "enrichment": {
+    "modules": [
+      "clusters"
+    ]
+  }
+}

@@ -1,33 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.utility-research-runner/schemas/operator-research-config-v1.schema.json",
-  "title": "Utility Research Runner OperatorResearchConfigV1",
+  "$id": "https://local.utility-research-runner/schemas/operator-research-preset-v1.schema.json",
+  "title": "Utility Research Runner OperatorResearchPresetV1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "research"],
+  "required": ["version", "id", "revision"],
   "properties": {
     "version": { "const": 1 },
-    "preset": {
+    "id": {
       "type": "string",
       "minLength": 1,
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "Built-in preset id using lowercase letters, digits, and hyphens."
     },
+    "revision": { "type": "integer", "minimum": 1 },
     "research": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["label", "input"],
       "properties": {
-        "label": { "type": "string", "minLength": 1 },
-        "market": { "type": "string", "minLength": 1, "default": "US" },
-        "googleHl": { "type": "string", "minLength": 1, "default": "en" },
-        "googleGl": { "type": "string", "minLength": 1, "default": "us" },
-        "input": {
-          "oneOf": [
-            { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "seeds" }, "path": { "type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it." } } },
-            { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "microsoft" }, "path": { "type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it." } } }
-          ]
-        }
+        "market": { "type": "string", "minLength": 1 },
+        "googleHl": { "type": "string", "minLength": 1 },
+        "googleGl": { "type": "string", "minLength": 1 }
       }
     },
     "workflow": { "type": "object", "additionalProperties": false, "properties": { "target": { "type": "string", "enum": ["discovery", "enrichment", "finalization"], "default": "discovery" } } },

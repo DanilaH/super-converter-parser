@@ -5,13 +5,24 @@ import { QUERY_SUGGESTION_SOURCES, type QuerySuggestionSource } from '../enrichm
 import { ResearchError } from '../shared/errors.js';
 import {
   type OperatorContinuationV1,
+  type OperatorResearchConfigSourceV1,
   type OperatorResearchConfigV1,
+  type OperatorResearchPresetV1,
   type WorkflowTargetV1,
   validateOperatorContinuation,
   validateOperatorResearchConfig,
+  validateOperatorResearchConfigSource,
 } from './contracts.js';
+import {
+  buildSemanticOriginHints,
+  loadBuiltInOperatorPreset,
+  mergeOperatorResearchConfig,
+  presetIdentity,
+  type OperatorPresetIdentity,
+  type SemanticOriginHints,
+} from './presets.js';
 
-export type SemanticOrigin = 'default' | 'file';
+export type SemanticOrigin = 'default' | 'preset' | 'file';
 export type DeclaredFilePath = { logicalPath: string; resolvedPath: string };
 export type ResolvedResearchSemantics = {
   research: { label: string; market: string; googleHl: string; googleGl: string; input: { type: 'seeds' | 'microsoft'; logicalPath: string; resolvedPath: string } };
@@ -40,6 +51,7 @@ export type NewResearchExecutionPlan = {
   stateContext: { kind: 'new' };
   configAvailability: 'operator_config';
   configPath: string;
+  preset: OperatorPresetIdentity | null;
   effectiveConfigFingerprint: string;
   stageFingerprints: StageSemanticFingerprints;
   semantics: ResolvedResearchSemantics;
@@ -49,8 +61,18 @@ export type NewResearchExecutionPlan = {
   unresolvedHumanRequirements: Array<'shortlist' | 'finalist_scope' | 'human_decisions'>;
   expectedStopPoint: 'discovery';
 };
-export type LoadedOperatorResearchConfig = { config: OperatorResearchConfigV1; plan: NewResearchExecutionPlan };
+export type LoadedOperatorResearchConfig = {
+  config: OperatorResearchConfigV1;
+  sourceConfig?: OperatorResearchConfigSourceV1;
+  preset?: OperatorResearchPresetV1 | null;
+  plan: NewResearchExecutionPlan;
+};
 export type ResolvedOperatorContinuation = { continuation: OperatorContinuationV1; continuationPath: string; declaredFilePath: DeclaredFilePath | null };
+
+type NewPlanResolutionContext = {
+  sourceConfig: OperatorResearchConfigSourceV1;
+  preset: OperatorResearchPresetV1 | null;
+};
 
 const DEFAULT_MARKET = 'US';
 const DEFAULT_GOOGLE_HL = 'en';
@@ -77,8 +99,13 @@ const DEFAULT_HISTORY_DOMAIN_CAP = 30;
 export async function loadOperatorResearchConfig(configPath: string): Promise<LoadedOperatorResearchConfig> {
   const absoluteConfigPath = resolve(configPath);
   const raw = await readJson(absoluteConfigPath, 'operator research config');
-  const config = validateOperatorResearchConfig(raw);
-  return { config, plan: buildNewResearchPlan(config, absoluteConfigPath) };
+  const sourceConfig = validateOperatorResearchConfigSource(raw);
+  const preset = sourceConfig.preset === undefined
+    ? null
+    : await loadBuiltInOperatorPreset(sourceConfig.preset);
+  const config = mergeOperatorResearchConfig(sourceConfig, preset);
+  const plan = buildNewResearchPlan(config, absoluteConfigPath, { sourceConfig, preset });
+  return { config, sourceConfig, preset, plan };
 }
 
 export async function loadOperatorContinuation(continuationPath: string): Promise<ResolvedOperatorContinuation> {
@@ -90,10 +117,27 @@ export async function loadOperatorContinuation(continuationPath: string): Promis
   return { continuation, continuationPath: absoluteContinuationPath, declaredFilePath };
 }
 
-export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaringConfigPath: string): NewResearchExecutionPlan {
+export function buildNewResearchPlan(
+  config: OperatorResearchConfigV1,
+  declaringConfigPath: string,
+  context?: NewPlanResolutionContext,
+): NewResearchExecutionPlan {
   const validated = validateOperatorResearchConfig(config);
   const configPath = resolve(declaringConfigPath);
-  const semantics = resolveResearchSemantics(validated, configPath);
+  let originHints: SemanticOriginHints | undefined;
+  let preset: OperatorResearchPresetV1 | null = null;
+  if (context !== undefined) {
+    const merged = mergeOperatorResearchConfig(context.sourceConfig, context.preset);
+    if (canonicalJson(merged) !== canonicalJson(validated)) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'Resolved operator config does not match the supplied source config and preset snapshot.',
+      );
+    }
+    originHints = buildSemanticOriginHints(context.sourceConfig, context.preset);
+    preset = context.preset;
+  }
+  const semantics = resolveResearchSemantics(validated, configPath, originHints);
   const stageFingerprints = buildStageSemanticFingerprints(semantics);
   const effectiveConfigFingerprint = fingerprint('operator-config-v1', effectiveConfigProjection(semantics));
   const target = semantics.workflow.target;
@@ -103,6 +147,7 @@ export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaring
     stateContext: { kind: 'new' },
     configAvailability: 'operator_config',
     configPath,
+    preset: presetIdentity(preset),
     effectiveConfigFingerprint,
     stageFingerprints,
     semantics,
@@ -118,16 +163,20 @@ export function buildNewResearchPlan(config: OperatorResearchConfigV1, declaring
   };
 }
 
-export function resolveResearchSemantics(config: OperatorResearchConfigV1, declaringConfigPath: string): ResolvedResearchSemantics {
+export function resolveResearchSemantics(
+  config: OperatorResearchConfigV1,
+  declaringConfigPath: string,
+  originHints?: SemanticOriginHints,
+): ResolvedResearchSemantics {
   const provenance: Record<string, SemanticOrigin> = {};
   const inputPath = resolveDeclaredPath(declaringConfigPath, config.research.input.path);
-  const market = withOrigin(config.research.market, DEFAULT_MARKET, '$.research.market', provenance);
-  const googleHl = withOrigin(config.research.googleHl, DEFAULT_GOOGLE_HL, '$.research.googleHl', provenance);
-  const googleGl = withOrigin(config.research.googleGl, DEFAULT_GOOGLE_GL, '$.research.googleGl', provenance);
-  const target = withOrigin(config.workflow?.target, DEFAULT_WORKFLOW_TARGET, '$.workflow.target', provenance);
-  const topN = withOrigin(config.discovery?.topN, DEFAULT_DISCOVERY_TOP_N, '$.discovery.topN', provenance);
-  const expand = withOrigin(config.discovery?.expand, DEFAULT_EXPAND, '$.discovery.expand', provenance);
-  const requireAhrefs = withOrigin(config.discovery?.requireAhrefs, DEFAULT_REQUIRE_AHREFS, '$.discovery.requireAhrefs', provenance);
+  const market = withOrigin(config.research.market, DEFAULT_MARKET, '$.research.market', provenance, originHints);
+  const googleHl = withOrigin(config.research.googleHl, DEFAULT_GOOGLE_HL, '$.research.googleHl', provenance, originHints);
+  const googleGl = withOrigin(config.research.googleGl, DEFAULT_GOOGLE_GL, '$.research.googleGl', provenance, originHints);
+  const target = withOrigin(config.workflow?.target, DEFAULT_WORKFLOW_TARGET, '$.workflow.target', provenance, originHints);
+  const topN = withOrigin(config.discovery?.topN, DEFAULT_DISCOVERY_TOP_N, '$.discovery.topN', provenance, originHints);
+  const expand = withOrigin(config.discovery?.expand, DEFAULT_EXPAND, '$.discovery.expand', provenance, originHints);
+  const requireAhrefs = withOrigin(config.discovery?.requireAhrefs, DEFAULT_REQUIRE_AHREFS, '$.discovery.requireAhrefs', provenance, originHints);
   provenance['$.research.label'] = 'file';
   provenance['$.research.input.type'] = 'file';
   provenance['$.research.input.path'] = 'file';
@@ -142,37 +191,37 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
     enrichment = {
       modules: [...config.enrichment.modules].sort(),
       clustering: {
-        topN: withOrigin(clustering?.topN, DEFAULT_CLUSTER_TOP_N, '$.enrichment.clustering.topN', provenance),
-        minSharedDomains: withOrigin(clustering?.minSharedDomains, DEFAULT_CLUSTER_MIN_SHARED_DOMAINS, '$.enrichment.clustering.minSharedDomains', provenance),
-        minDomainJaccard: withOrigin(clustering?.minDomainJaccard, DEFAULT_CLUSTER_MIN_DOMAIN_JACCARD, '$.enrichment.clustering.minDomainJaccard', provenance),
-        minSharedUrls: withOrigin(clustering?.minSharedUrls, DEFAULT_CLUSTER_MIN_SHARED_URLS, '$.enrichment.clustering.minSharedUrls', provenance),
-        minUrlJaccard: withOrigin(clustering?.minUrlJaccard, DEFAULT_CLUSTER_MIN_URL_JACCARD, '$.enrichment.clustering.minUrlJaccard', provenance),
+        topN: withOrigin(clustering?.topN, DEFAULT_CLUSTER_TOP_N, '$.enrichment.clustering.topN', provenance, originHints),
+        minSharedDomains: withOrigin(clustering?.minSharedDomains, DEFAULT_CLUSTER_MIN_SHARED_DOMAINS, '$.enrichment.clustering.minSharedDomains', provenance, originHints),
+        minDomainJaccard: withOrigin(clustering?.minDomainJaccard, DEFAULT_CLUSTER_MIN_DOMAIN_JACCARD, '$.enrichment.clustering.minDomainJaccard', provenance, originHints),
+        minSharedUrls: withOrigin(clustering?.minSharedUrls, DEFAULT_CLUSTER_MIN_SHARED_URLS, '$.enrichment.clustering.minSharedUrls', provenance, originHints),
+        minUrlJaccard: withOrigin(clustering?.minUrlJaccard, DEFAULT_CLUSTER_MIN_URL_JACCARD, '$.enrichment.clustering.minUrlJaccard', provenance, originHints),
       },
       querySuggestions: usesQuerySuggestions ? {
-        sources: normalizeQuerySuggestionSources(withOrigin(querySuggestions?.sources, [...QUERY_SUGGESTION_SOURCES], '$.enrichment.querySuggestions.sources', provenance)),
-        maxSuggestionsPerSource: withOrigin(querySuggestions?.maxSuggestionsPerSource, DEFAULT_QUERY_SUGGESTIONS_PER_SOURCE, '$.enrichment.querySuggestions.maxSuggestionsPerSource', provenance),
-        maxParents: withOrigin(querySuggestions?.maxParents, DEFAULT_QUERY_SUGGESTION_MAX_PARENTS, '$.enrichment.querySuggestions.maxParents', provenance),
+        sources: normalizeQuerySuggestionSources(withOrigin(querySuggestions?.sources, [...QUERY_SUGGESTION_SOURCES], '$.enrichment.querySuggestions.sources', provenance, originHints)),
+        maxSuggestionsPerSource: withOrigin(querySuggestions?.maxSuggestionsPerSource, DEFAULT_QUERY_SUGGESTIONS_PER_SOURCE, '$.enrichment.querySuggestions.maxSuggestionsPerSource', provenance, originHints),
+        maxParents: withOrigin(querySuggestions?.maxParents, DEFAULT_QUERY_SUGGESTION_MAX_PARENTS, '$.enrichment.querySuggestions.maxParents', provenance, originHints),
       } : null,
     };
-    provenance['$.enrichment.modules'] = 'file';
+    provenance['$.enrichment.modules'] = explicitOrigin('$.enrichment.modules', originHints);
   }
 
   let finalization: ResolvedResearchSemantics['finalization'] = null;
   if (config.finalization !== undefined) {
     const historical = config.finalization.historicalPresence;
     finalization = {
-      representativeCount: withOrigin(config.finalization.representativeCount, DEFAULT_REPRESENTATIVE_COUNT, '$.finalization.representativeCount', provenance),
+      representativeCount: withOrigin(config.finalization.representativeCount, DEFAULT_REPRESENTATIVE_COUNT, '$.finalization.representativeCount', provenance, originHints),
       historyPolicy: { ...config.finalization.historyPolicy },
       historicalPresence: {
-        collectionMode: withOrigin(historical?.collectionMode, DEFAULT_HISTORY_COLLECTION_MODE, '$.finalization.historicalPresence.collectionMode', provenance),
-        recentMonths: withOrigin(historical?.recentMonths, DEFAULT_HISTORY_RECENT_MONTHS, '$.finalization.historicalPresence.recentMonths', provenance),
-        maxCollections: withOrigin(historical?.maxCollections, DEFAULT_HISTORY_MAX_COLLECTIONS, '$.finalization.historicalPresence.maxCollections', provenance),
-        domainCap: withOrigin(historical?.domainCap, DEFAULT_HISTORY_DOMAIN_CAP, '$.finalization.historicalPresence.domainCap', provenance),
+        collectionMode: withOrigin(historical?.collectionMode, DEFAULT_HISTORY_COLLECTION_MODE, '$.finalization.historicalPresence.collectionMode', provenance, originHints),
+        recentMonths: withOrigin(historical?.recentMonths, DEFAULT_HISTORY_RECENT_MONTHS, '$.finalization.historicalPresence.recentMonths', provenance, originHints),
+        maxCollections: withOrigin(historical?.maxCollections, DEFAULT_HISTORY_MAX_COLLECTIONS, '$.finalization.historicalPresence.maxCollections', provenance, originHints),
+        domainCap: withOrigin(historical?.domainCap, DEFAULT_HISTORY_DOMAIN_CAP, '$.finalization.historicalPresence.domainCap', provenance, originHints),
       },
     };
-    provenance['$.finalization.historyPolicy.youngDomainMaxAgeDays'] = 'file';
-    provenance['$.finalization.historyPolicy.recentWebPresenceMaxAgeDays'] = 'file';
-    provenance['$.finalization.historyPolicy.repurposeGapMinDays'] = 'file';
+    provenance['$.finalization.historyPolicy.youngDomainMaxAgeDays'] = explicitOrigin('$.finalization.historyPolicy.youngDomainMaxAgeDays', originHints);
+    provenance['$.finalization.historyPolicy.recentWebPresenceMaxAgeDays'] = explicitOrigin('$.finalization.historyPolicy.recentWebPresenceMaxAgeDays', originHints);
+    provenance['$.finalization.historyPolicy.repurposeGapMinDays'] = explicitOrigin('$.finalization.historyPolicy.repurposeGapMinDays', originHints);
   }
 
   return {
@@ -268,10 +317,23 @@ function normalizeQuerySuggestionSources(sources: QuerySuggestionSource[]): Quer
   return QUERY_SUGGESTION_SOURCES.filter((source) => selected.has(source));
 }
 
-function withOrigin<T>(value: T | undefined, fallback: T, path: string, provenance: Record<string, SemanticOrigin>): T {
-  if (value === undefined) { provenance[path] = 'default'; return fallback; }
-  provenance[path] = 'file';
+function withOrigin<T>(
+  value: T | undefined,
+  fallback: T,
+  path: string,
+  provenance: Record<string, SemanticOrigin>,
+  hints?: SemanticOriginHints,
+): T {
+  if (value === undefined) {
+    provenance[path] = 'default';
+    return fallback;
+  }
+  provenance[path] = explicitOrigin(path, hints);
   return value;
+}
+
+function explicitOrigin(path: string, hints?: SemanticOriginHints): SemanticOrigin {
+  return hints?.[path] ?? 'file';
 }
 
 async function readJson(path: string, label: string): Promise<unknown> {
