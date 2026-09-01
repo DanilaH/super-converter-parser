@@ -16,7 +16,13 @@ export type DeclaredFilePath = { logicalPath: string; resolvedPath: string };
 export type ResolvedResearchSemantics = {
   research: { label: string; market: string; googleHl: string; googleGl: string; input: { type: 'seeds' | 'microsoft'; logicalPath: string; resolvedPath: string } };
   workflow: { target: WorkflowTargetV1 };
-  discovery: { expand: boolean; requireAhrefs: boolean };
+  discovery: {
+    topN: number;
+    expand: boolean;
+    requireAhrefs: boolean;
+    expansionPolicy: { depth: 1; maxCandidatesPerKeyword: 20; minOverlap: 0; minVolume: 0 };
+    scoringPolicy: { veryWeakMax: 10; weakMax: 30; strongMin: 60; strongMax: 75 };
+  };
   enrichment: null | {
     modules: string[];
     clustering: { topN: number; minSharedDomains: number; minDomainJaccard: number; minSharedUrls: number; minUrlJaccard: number };
@@ -50,8 +56,11 @@ const DEFAULT_MARKET = 'US';
 const DEFAULT_GOOGLE_HL = 'en';
 const DEFAULT_GOOGLE_GL = 'us';
 const DEFAULT_WORKFLOW_TARGET: WorkflowTargetV1 = 'discovery';
+const DEFAULT_DISCOVERY_TOP_N = 10;
 const DEFAULT_EXPAND = false;
 const DEFAULT_REQUIRE_AHREFS = false;
+const CONFIG_V1_EXPANSION_POLICY = { depth: 1, maxCandidatesPerKeyword: 20, minOverlap: 0, minVolume: 0 } as const;
+const CONFIG_V1_SCORING_POLICY = { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 } as const;
 const DEFAULT_CLUSTER_TOP_N = 10;
 const DEFAULT_CLUSTER_MIN_SHARED_DOMAINS = 3;
 const DEFAULT_CLUSTER_MIN_DOMAIN_JACCARD = 0.3;
@@ -116,11 +125,14 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
   const googleHl = withOrigin(config.research.googleHl, DEFAULT_GOOGLE_HL, '$.research.googleHl', provenance);
   const googleGl = withOrigin(config.research.googleGl, DEFAULT_GOOGLE_GL, '$.research.googleGl', provenance);
   const target = withOrigin(config.workflow?.target, DEFAULT_WORKFLOW_TARGET, '$.workflow.target', provenance);
+  const topN = withOrigin(config.discovery?.topN, DEFAULT_DISCOVERY_TOP_N, '$.discovery.topN', provenance);
   const expand = withOrigin(config.discovery?.expand, DEFAULT_EXPAND, '$.discovery.expand', provenance);
   const requireAhrefs = withOrigin(config.discovery?.requireAhrefs, DEFAULT_REQUIRE_AHREFS, '$.discovery.requireAhrefs', provenance);
   provenance['$.research.label'] = 'file';
   provenance['$.research.input.type'] = 'file';
   provenance['$.research.input.path'] = 'file';
+  provenance['$.discovery.expansionPolicy'] = 'default';
+  provenance['$.discovery.scoringPolicy'] = 'default';
 
   let enrichment: ResolvedResearchSemantics['enrichment'] = null;
   if (config.enrichment !== undefined) {
@@ -163,7 +175,20 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
     provenance['$.finalization.historyPolicy.repurposeGapMinDays'] = 'file';
   }
 
-  return { research: { label: config.research.label, market, googleHl, googleGl, input: { type: config.research.input.type, logicalPath: inputPath.logicalPath, resolvedPath: inputPath.resolvedPath } }, workflow: { target }, discovery: { expand, requireAhrefs }, enrichment, finalization, provenance };
+  return {
+    research: { label: config.research.label, market, googleHl, googleGl, input: { type: config.research.input.type, logicalPath: inputPath.logicalPath, resolvedPath: inputPath.resolvedPath } },
+    workflow: { target },
+    discovery: {
+      topN,
+      expand,
+      requireAhrefs,
+      expansionPolicy: { ...CONFIG_V1_EXPANSION_POLICY },
+      scoringPolicy: { ...CONFIG_V1_SCORING_POLICY },
+    },
+    enrichment,
+    finalization,
+    provenance,
+  };
 }
 
 export function buildStageSemanticFingerprints(semantics: ResolvedResearchSemantics): StageSemanticFingerprints {
@@ -172,6 +197,10 @@ export function buildStageSemanticFingerprints(semantics: ResolvedResearchSemant
     enrichmentSemanticFingerprint: fingerprint('operator-config-v1:enrichment', semantics.enrichment ?? { requested: false }),
     finalizationPolicyFingerprint: fingerprint('operator-config-v1:finalization', semantics.finalization ?? { requested: false }),
   };
+}
+
+export function portableEffectiveConfigProjection(semantics: ResolvedResearchSemantics): unknown {
+  return effectiveConfigProjection(semantics);
 }
 
 export function resolveDeclaredPath(declaringJsonPath: string, authoredPath: string): DeclaredFilePath {
@@ -204,11 +233,7 @@ export function fingerprint(namespace: string, value: unknown): string {
 }
 
 function buildNewResearchExternalWork(semantics: ResolvedResearchSemantics): ExternalWorkExpectation[] {
-  const discoveryProviders = [
-    'google',
-    'keyword_surfer',
-    semantics.discovery.requireAhrefs ? 'ahrefs' : 'ahrefs_if_configured',
-  ];
+  const discoveryProviders = ['google', 'keyword_surfer', semantics.discovery.requireAhrefs ? 'ahrefs' : 'ahrefs_if_configured'];
   const work: ExternalWorkExpectation[] = [{ stage: 'discovery', providers: discoveryProviders }];
   if (semantics.workflow.target !== 'discovery' && semantics.enrichment !== null) {
     const providers = new Set<string>();
@@ -228,7 +253,14 @@ function buildNewResearchExternalWork(semantics: ResolvedResearchSemantics): Ext
 }
 
 function effectiveConfigProjection(semantics: ResolvedResearchSemantics): unknown {
-  return { version: 1, research: { label: semantics.research.label, market: semantics.research.market, googleHl: semantics.research.googleHl, googleGl: semantics.research.googleGl, input: { type: semantics.research.input.type, path: semantics.research.input.logicalPath } }, workflow: semantics.workflow, discovery: semantics.discovery, enrichment: semantics.enrichment, finalization: semantics.finalization };
+  return {
+    version: 1,
+    research: { label: semantics.research.label, market: semantics.research.market, googleHl: semantics.research.googleHl, googleGl: semantics.research.googleGl, input: { type: semantics.research.input.type, path: semantics.research.input.logicalPath } },
+    workflow: semantics.workflow,
+    discovery: semantics.discovery,
+    enrichment: semantics.enrichment,
+    finalization: semantics.finalization,
+  };
 }
 
 function normalizeQuerySuggestionSources(sources: QuerySuggestionSource[]): QuerySuggestionSource[] {

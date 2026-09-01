@@ -5,6 +5,7 @@ import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { buildResearchStatusWithHistoricalPresence } from '../research/statusWithHistoricalPresence.js';
 import { ResearchError } from '../shared/errors.js';
 import { buildExistingResearchPlan, renderResearchPlan, type ResearchExecutionPlan } from '../operatorConfig/planner.js';
+import { readOperatorConfigProvenance } from '../operatorConfig/provenance.js';
 import { loadOperatorContinuation, loadOperatorResearchConfig } from '../operatorConfig/resolve.js';
 
 loadDotEnv();
@@ -17,11 +18,13 @@ type ParsedArgs = { help: boolean; config: string | null; research: string | nul
 export type ResearchPlanDeps = {
   loadConfig: typeof loadOperatorResearchConfig;
   loadContinuation: typeof loadOperatorContinuation;
+  loadProvenance: typeof readOperatorConfigProvenance;
   buildStatus: typeof buildResearchStatusWithHistoricalPresence;
 };
 export const DEFAULT_RESEARCH_PLAN_DEPS: ResearchPlanDeps = {
   loadConfig: loadOperatorResearchConfig,
   loadContinuation: loadOperatorContinuation,
+  loadProvenance: readOperatorConfigProvenance,
   buildStatus: buildResearchStatusWithHistoricalPresence,
 };
 
@@ -51,7 +54,8 @@ export async function buildPlanFromArgs(parsed: ParsedArgs, deps: ResearchPlanDe
   const outputRoot = resolveOutputRoot(parsed.outputRoot, env);
   const status = await deps.buildStatus({ outputRoot, targetRunId: parsed.research });
   const continuation = parsed.continuation === null ? null : await deps.loadContinuation(parsed.continuation);
-  return buildExistingResearchPlan(status, continuation);
+  const provenance = await deps.loadProvenance(status.researchDirectory);
+  return buildExistingResearchPlan(status, continuation, provenance);
 }
 
 export async function runResearchPlanCli(argv: string[], deps: ResearchPlanDeps = DEFAULT_RESEARCH_PLAN_DEPS, env: NodeJS.ProcessEnv = process.env): Promise<{ exitCode: number; stdout: string; stderr: string }> {
