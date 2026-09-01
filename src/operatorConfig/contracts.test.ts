@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { operatorContinuationJsonSchema, operatorResearchConfigJsonSchema, validateOperatorContinuation, validateOperatorResearchConfig } from './contracts.js';
+import {
+  operatorContinuationJsonSchema,
+  operatorResearchConfigJsonSchema,
+  operatorResearchPresetJsonSchema,
+  validateOperatorContinuation,
+  validateOperatorResearchConfig,
+  validateOperatorResearchConfigFile,
+  validateOperatorResearchPreset,
+} from './contracts.js';
 import { ResearchError } from '../shared/errors.js';
 
 function baseConfig(): unknown {
@@ -48,6 +56,42 @@ test('query suggestion controls require the query_suggestions module', () => {
   }), '$.enrichment.querySuggestions requires "query_suggestions"');
 });
 
+test('preset-backed authored config may defer required stage fields until merge', () => {
+  const authored = validateOperatorResearchConfigFile({
+    version: 1,
+    preset: 'deep-research',
+    research: { label: 'json-tools', input: { type: 'seeds', path: 'input/seeds.csv' } },
+    finalization: { historyPolicy: { recentWebPresenceMaxAgeDays: 900 } },
+  });
+  assert.equal(authored.preset, 'deep-research');
+  assert.equal(authored.finalization?.historyPolicy?.recentWebPresenceMaxAgeDays, 900);
+});
+
+test('preset contract is a semantic overlay and rejects paths or human actions', () => {
+  const preset = validateOperatorResearchPreset({
+    version: 1,
+    id: 'standard',
+    revision: 1,
+    overlay: {
+      workflow: { target: 'enrichment' },
+      enrichment: { modules: ['clusters', 'query_suggestions'] },
+    },
+  });
+  assert.equal(preset.id, 'standard');
+  expectSchemaError(() => validateOperatorResearchPreset({
+    version: 1,
+    id: 'unsafe',
+    revision: 1,
+    overlay: { research: { input: { type: 'seeds', path: 'secrets.csv' } } },
+  }), '$.overlay.research.input');
+  expectSchemaError(() => validateOperatorResearchPreset({
+    version: 1,
+    id: 'Unsafe Preset',
+    revision: 1,
+    overlay: {},
+  }), '$.id must be a lowercase preset id');
+});
+
 test('operator config rejects whitespace-only semantic strings', () => {
   const blankLabel = baseConfig() as { research: { label: string } };
   blankLabel.research.label = '   ';
@@ -74,7 +118,9 @@ test('continuation requires explicit research id and validates discriminated pay
 
 test('committed JSON schemas stay synchronized with runtime contracts', async () => {
   const researchArtifact = JSON.parse(await readFile(resolve('schemas/operator-research-config-v1.schema.json'), 'utf8')) as unknown;
+  const presetArtifact = JSON.parse(await readFile(resolve('schemas/operator-research-preset-v1.schema.json'), 'utf8')) as unknown;
   const continuationArtifact = JSON.parse(await readFile(resolve('schemas/operator-continuation-v1.schema.json'), 'utf8')) as unknown;
   assert.deepEqual(researchArtifact, operatorResearchConfigJsonSchema());
+  assert.deepEqual(presetArtifact, operatorResearchPresetJsonSchema());
   assert.deepEqual(continuationArtifact, operatorContinuationJsonSchema());
 });
