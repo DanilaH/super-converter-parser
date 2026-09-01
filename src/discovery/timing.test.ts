@@ -17,6 +17,7 @@ const rootSample = {
   outcome: 'completed' as const,
   captchaEncountered: true,
   relatedOutcome: 'ok' as const,
+  googlePacingMs: 750,
   pageCreateMs: 10,
   navigationMs: 100,
   captchaMs: 20,
@@ -37,13 +38,13 @@ test('DiscoveryTimingRecorder aggregates browser, Ahrefs, engine sleep, and Goog
     isRoot: false,
     captchaEncountered: false,
     relatedOutcome: null,
+    googlePacingMs: 0,
     relatedSurferMs: null,
     totalMs: 500,
   });
   recorder.recordAhrefs('example.com', 250, 'ok');
   recorder.recordSleep(1_000);
   recorder.recordSleep(500);
-  recorder.recordGooglePacing(750);
 
   const summary = recorder.snapshot({ runId: 'run-1', mode: 'fresh', state: 'completed', finishedAtMs: 3_000 });
   assert.equal(summary.wallMs, 2_000);
