@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "standard",
+  "revision": 1,
+  "overlay": {
+    "workflow": {
+      "target": "enrichment"
+    },
+    "discovery": {
+      "topN": 10,
+      "expand": true,
+      "requireAhrefs": false
+    },
+    "enrichment": {
+      "modules": [
+        "clusters",
+        "query_suggestions"
+      ],
+      "querySuggestions": {
+        "sources": [
+          "surfer_related",
+          "google_autocomplete"
+        ],
+        "maxSuggestionsPerSource": 20,
+        "maxParents": 50
+      }
+    }
+  }
+}
