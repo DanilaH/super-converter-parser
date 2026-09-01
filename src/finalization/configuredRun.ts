@@ -60,6 +60,13 @@ export async function runConfiguredFinalization(
   const action = request.continuation?.continuation.action ?? null;
   const resolvedPath = request.continuation?.declaredFilePath?.resolvedPath ?? null;
 
+  if (action?.type === 'decisions' && !request.status.finalization.finalistMatrixPublished) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      'A decisions continuation requires a current finalist evidence matrix; finish upstream finalization evidence first.',
+    );
+  }
+
   if (action?.type === 'publication_override') {
     const publication = await deps.runLibraryPublication({
       outputRoot: request.outputRoot,
