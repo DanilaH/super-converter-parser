@@ -21,6 +21,7 @@ export type ResolvedResearchSemantics = {
     expand: boolean;
     requireAhrefs: boolean;
     expansionPolicy: { depth: 1; maxCandidatesPerKeyword: 20; minOverlap: 0; minVolume: 0 };
+    scoringPolicy: { veryWeakMax: 10; weakMax: 30; strongMin: 60; strongMax: 75 };
   };
   enrichment: null | {
     modules: string[];
@@ -59,6 +60,7 @@ const DEFAULT_DISCOVERY_TOP_N = 10;
 const DEFAULT_EXPAND = false;
 const DEFAULT_REQUIRE_AHREFS = false;
 const CONFIG_V1_EXPANSION_POLICY = { depth: 1, maxCandidatesPerKeyword: 20, minOverlap: 0, minVolume: 0 } as const;
+const CONFIG_V1_SCORING_POLICY = { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 } as const;
 const DEFAULT_CLUSTER_TOP_N = 10;
 const DEFAULT_CLUSTER_MIN_SHARED_DOMAINS = 3;
 const DEFAULT_CLUSTER_MIN_DOMAIN_JACCARD = 0.3;
@@ -130,6 +132,7 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
   provenance['$.research.input.type'] = 'file';
   provenance['$.research.input.path'] = 'file';
   provenance['$.discovery.expansionPolicy'] = 'default';
+  provenance['$.discovery.scoringPolicy'] = 'default';
 
   let enrichment: ResolvedResearchSemantics['enrichment'] = null;
   if (config.enrichment !== undefined) {
@@ -175,7 +178,13 @@ export function resolveResearchSemantics(config: OperatorResearchConfigV1, decla
   return {
     research: { label: config.research.label, market, googleHl, googleGl, input: { type: config.research.input.type, logicalPath: inputPath.logicalPath, resolvedPath: inputPath.resolvedPath } },
     workflow: { target },
-    discovery: { topN, expand, requireAhrefs, expansionPolicy: { ...CONFIG_V1_EXPANSION_POLICY } },
+    discovery: {
+      topN,
+      expand,
+      requireAhrefs,
+      expansionPolicy: { ...CONFIG_V1_EXPANSION_POLICY },
+      scoringPolicy: { ...CONFIG_V1_SCORING_POLICY },
+    },
     enrichment,
     finalization,
     provenance,
