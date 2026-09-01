@@ -75,6 +75,10 @@ export class DiscoveryTimingRecorder {
 
   recordBrowser(sample: BrowserCollectionTiming): void {
     this.browserSamples.push({ ...sample });
+    if (Number.isFinite(sample.googlePacingMs) && sample.googlePacingMs > 0) {
+      this.googlePacingWaits += 1;
+      this.googlePacingRequestedMs += sample.googlePacingMs;
+    }
   }
 
   recordAhrefs(domain: string, durationMs: number, status: AhrefsTimingStatus): void {
@@ -85,12 +89,6 @@ export class DiscoveryTimingRecorder {
     if (!Number.isFinite(ms) || ms < 0) return;
     this.engineSleepCalls += 1;
     this.engineSleepRequestedMs += ms;
-  }
-
-  recordGooglePacing(ms: number): void {
-    if (!Number.isFinite(ms) || ms <= 0) return;
-    this.googlePacingWaits += 1;
-    this.googlePacingRequestedMs += ms;
   }
 
   snapshot(params: {
