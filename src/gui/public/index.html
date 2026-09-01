@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Utility Research Runner</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LOCAL OPERATOR</div>
+      <h1>Utility Research Runner</h1>
+    </div>
+    <div class="runtime-pill">
+      <span class="status-dot"></span>
+      <span>Loopback only</span>
+      <code id="output-root">loading…</code>
+    </div>
+  </header>
+
+  <main class="shell">
+    <nav class="tabs" aria-label="Workspace">
+      <button class="tab is-active" type="button" data-tab="new">New research</button>
+      <button class="tab" type="button" data-tab="existing">Existing research</button>
+    </nav>
+
+    <section id="new-panel" class="panel tab-panel">
+      <div class="panel-heading">
+        <div>
+          <div class="eyebrow">CONFIG-FIRST</div>
+          <h2>Create research</h2>
+          <p>Build the same OperatorResearchConfig used by the CLI. Review the resolved plan before anything runs.</p>
+        </div>
+        <div id="new-state" class="state-chip">Not planned</div>
+      </div>
+
+      <form id="new-form" class="form-stack">
+        <section class="card form-card">
+          <div class="card-heading">
+            <h3>Research</h3>
+            <p>Human-authored identity and input. Files stay local.</p>
+          </div>
+          <div class="field-grid field-grid-3">
+            <label class="field">
+              <span>Preset</span>
+              <select id="preset"></select>
+              <small id="preset-hint">Versioned workflow policy.</small>
+            </label>
+            <label class="field field-span-2">
+              <span>Label</span>
+              <input id="research-label" type="text" placeholder="json-tools" autocomplete="off" required>
+            </label>
+            <label class="field">
+              <span>Input type</span>
+              <select id="input-type"></select>
+            </label>
+            <label class="field field-span-2">
+              <span>Input file</span>
+              <input id="input-file" type="file" accept=".csv,.txt,text/csv,text/plain" required>
+              <small>The browser sends file text only to this loopback server.</small>
+            </label>
+            <label class="field">
+              <span>Market</span>
+              <input id="market" type="text" value="US" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Google hl</span>
+              <input id="google-hl" type="text" value="en" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Google gl</span>
+              <input id="google-gl" type="text" value="us" autocomplete="off">
+            </label>
+          </div>
+        </section>
+
+        <section class="card form-card">
+          <div class="card-heading">
+            <h3>Workflow</h3>
+            <p>Only semantic research choices live here. Chrome, cache paths, credentials and provider transport stay outside the GUI.</p>
+          </div>
+          <div class="field-grid field-grid-3">
+            <label class="field">
+              <span>Target</span>
+              <select id="workflow-target"></select>
+            </label>
+            <label class="field">
+              <span>Discovery top N</span>
+              <input id="top-n" type="number" min="1" max="30" value="10">
+            </label>
+            <div class="toggle-stack">
+              <label class="toggle"><input id="expand" type="checkbox"><span>Expand related keywords</span></label>
+              <label class="toggle"><input id="require-ahrefs" type="checkbox"><span>Require Ahrefs DR</span></label>
+            </div>
+          </div>
+
+          <div id="enrichment-section" class="subsection">
+            <div class="subsection-title">Enrichment modules</div>
+            <div id="module-options" class="check-grid"></div>
+          </div>
+
+          <details id="finalization-details" class="advanced">
+            <summary>Finalization policy</summary>
+            <label class="toggle advanced-toggle">
+              <input id="override-finalization" type="checkbox">
+              <span>Override preset finalization policy</span>
+            </label>
+            <div id="finalization-fields" class="field-grid field-grid-3">
+              <label class="field"><span>Representatives</span><input id="representative-count" type="number" min="3" max="10" value="5"></label>
+              <label class="field"><span>Young domain max days</span><input id="young-days" type="number" min="0" value="730"></label>
+              <label class="field"><span>Recent web presence max days</span><input id="recent-days" type="number" min="0" value="1095"></label>
+              <label class="field"><span>Repurpose gap min days</span><input id="repurpose-days" type="number" min="0" value="365"></label>
+              <label class="field"><span>Historical collection</span><select id="collection-mode"><option value="annual">annual</option><option value="latest">latest</option></select></label>
+              <label class="field"><span>Recent months</span><input id="recent-months" type="number" min="1" max="120" value="18"></label>
+              <label class="field"><span>Max collections</span><input id="max-collections" type="number" min="1" max="100" value="24"></label>
+              <label class="field"><span>Domain cap</span><input id="domain-cap" type="number" min="1" max="100" value="30"></label>
+            </div>
+          </details>
+        </section>
+
+        <div class="action-row">
+          <button id="plan-new" class="button button-secondary" type="button">Review plan</button>
+          <button id="run-new" class="button button-primary" type="button" disabled>Start research</button>
+          <div id="new-error" class="error-box" role="alert" hidden></div>
+        </div>
+      </form>
+
+      <div id="new-result" class="result-stack"></div>
+      <div id="new-plan" class="plan-area"></div>
+    </section>
+
+    <section id="existing-panel" class="panel tab-panel" hidden>
+      <div class="panel-heading">
+        <div>
+          <div class="eyebrow">DURABLE STATE</div>
+          <h2>Continue research</h2>
+          <p>Open one explicit stable research ID. Status, next action and continuation plan come from the same read-only projections as the CLI.</p>
+        </div>
+        <button id="refresh-researches" class="button button-ghost" type="button">Refresh list</button>
+      </div>
+
+      <section class="card research-picker">
+        <label class="field grow">
+          <span>Indexed research</span>
+          <select id="research-select"><option value="">Select research…</option></select>
+        </label>
+        <div class="picker-or">or</div>
+        <label class="field grow">
+          <span>Stable research ID</span>
+          <input id="research-id" type="text" placeholder="20260901…" autocomplete="off">
+        </label>
+        <button id="open-research" class="button button-secondary" type="button">Open</button>
+      </section>
+      <div id="research-list-warning" class="warning-box" hidden></div>
+      <div id="existing-error" class="error-box" role="alert" hidden></div>
+
+      <div id="status-area" class="dashboard-grid"></div>
+      <div id="evidence-area" class="evidence-area"></div>
+
+      <section id="continuation-card" class="card form-card" hidden>
+        <div class="card-heading split-heading">
+          <div>
+            <h3>Continuation</h3>
+            <p id="continuation-hint">Choose an explicit action. The planner validates it against current durable state before Continue is enabled.</p>
+          </div>
+          <div id="existing-state" class="state-chip">Not planned</div>
+        </div>
+        <div class="field-grid field-grid-2">
+          <label class="field">
+            <span>Action</span>
+            <select id="continuation-action"></select>
+          </label>
+          <div id="continuation-fields"></div>
+        </div>
+        <div id="cluster-selector" class="selection-area" hidden></div>
+        <div id="decision-editor" class="selection-area" hidden></div>
+        <div class="action-row">
+          <button id="plan-existing" class="button button-secondary" type="button">Review continuation plan</button>
+          <button id="run-existing" class="button button-primary" type="button" disabled>Continue</button>
+        </div>
+      </section>
+
+      <div id="existing-result" class="result-stack"></div>
+      <div id="existing-plan" class="plan-area"></div>
+    </section>
+  </main>
+
+  <template id="field-file-template">
+    <label class="field field-span-2">
+      <span class="dynamic-file-label">Input file</span>
+      <input class="dynamic-file" type="file">
+    </label>
+  </template>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
