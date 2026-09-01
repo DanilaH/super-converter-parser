@@ -117,7 +117,7 @@ test('stable research continuation resolves current discovery and executes enric
     action: { type: 'shortlist', path: 'shortlist.csv' },
   }), 'utf8');
 
-  let observed: Parameters<typeof DEFAULT_RESEARCH_RUN_DEPS.runConfiguredEnrichment>[0] | null = null;
+  const observed: Array<Parameters<typeof DEFAULT_RESEARCH_RUN_DEPS.runConfiguredEnrichment>[0]> = [];
   const execution = await runResearchFromExisting(
     researchId,
     continuationPath,
@@ -126,7 +126,7 @@ test('stable research continuation resolves current discovery and executes enric
       ...DEFAULT_RESEARCH_RUN_DEPS,
       runDiscovery: async () => { throw new Error('existing research must not rerun discovery'); },
       runConfiguredEnrichment: async (request) => {
-        observed = request;
+        observed.push(request);
         return {
           outcome: { kind: 'completed', enrichmentId: 'configured-enrichment', state: 'completed', result: {} },
           enrichmentId: 'configured-enrichment',
@@ -146,9 +146,11 @@ test('stable research continuation resolves current discovery and executes enric
   assert.equal(execution.result.enrichmentState, 'completed');
   assert.equal(execution.result.workflowState, 'completed');
   assert.equal(execution.result.stopPoint, 'complete');
-  assert.ok(observed);
-  assert.equal(observed.researchId, researchId);
-  assert.equal(observed.sourceRunId, researchId);
-  assert.equal(observed.currentEnrichmentId, null);
-  assert.equal(observed.shortlistPath, shortlistPath);
+  assert.equal(observed.length, 1);
+  const request = observed[0];
+  assert.ok(request);
+  assert.equal(request.researchId, researchId);
+  assert.equal(request.sourceRunId, researchId);
+  assert.equal(request.currentEnrichmentId, null);
+  assert.equal(request.shortlistPath, shortlistPath);
 });
