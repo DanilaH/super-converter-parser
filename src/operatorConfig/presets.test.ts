@@ -3,7 +3,11 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import type { OperatorResearchConfigSourceV1, OperatorResearchConfigV1, OperatorResearchPresetV1 } from './contracts.js';
+import {
+  validateOperatorResearchPreset,
+  type OperatorResearchConfigSourceV1,
+  type OperatorResearchConfigV1,
+} from './contracts.js';
 import {
   buildSemanticOriginHints,
   loadBuiltInOperatorPreset,
@@ -119,15 +123,23 @@ test('unknown built-in preset fails closed', async () => {
   );
 });
 
-test('preset overlay cannot smuggle input paths or human decisions through the contract', () => {
-  const illegalInput = {
-    version: 1,
-    id: 'bad',
-    revision: 1,
-    research: { input: { type: 'seeds', path: 'secret.csv' } },
-  } as unknown as OperatorResearchPresetV1;
+test('preset overlay cannot smuggle input paths or human decisions through the schema boundary', () => {
   assert.throws(
-    () => mergeOperatorResearchConfig(source('bad'), illegalInput),
-    /unknown field|invalid/i,
+    () => validateOperatorResearchPreset({
+      version: 1,
+      id: 'bad',
+      revision: 1,
+      research: { input: { type: 'seeds', path: 'secret.csv' } },
+    }),
+    /unknown field/i,
+  );
+  assert.throws(
+    () => validateOperatorResearchPreset({
+      version: 1,
+      id: 'bad',
+      revision: 1,
+      decisions: { cluster: 'BUILD' },
+    }),
+    /unknown field/i,
   );
 });
