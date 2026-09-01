@@ -66,7 +66,7 @@ export function buildExistingResearchPlan(
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
   const enrichmentSatisfied = currentEnrichment?.state === 'completed';
-  const finalizationSatisfied = status.finalization.state === 'ready_to_publish' || status.finalization.state === 'published';
+  const finalizationSatisfied = status.finalization.state === 'published';
   const action = continuation?.continuation.action.type ?? null;
   const readyContinuationReason = finalizationContinuationReadyReason(status, action);
 
@@ -93,9 +93,11 @@ export function buildExistingResearchPlan(
         ? { id: 'finalization', state: 'blocked', reason: 'Requires a completed current enrichment.' }
         : finalizationSatisfied
           ? { id: 'finalization', state: 'already_satisfied', reason: null }
-          : readyContinuationReason !== null
-            ? { id: 'finalization', state: 'ready', reason: readyContinuationReason }
-            : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status) },
+          : status.finalization.state === 'ready_to_publish'
+            ? { id: 'finalization', state: 'ready', reason: 'Finalist evidence and human decisions are current; Library publication is the remaining accepted action.' }
+            : readyContinuationReason !== null
+              ? { id: 'finalization', state: 'ready', reason: readyContinuationReason }
+              : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status) },
   ];
 
   const unresolvedHumanRequirements: ExistingResearchExecutionPlan['unresolvedHumanRequirements'] = [];
