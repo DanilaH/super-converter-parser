@@ -105,7 +105,9 @@ async function main(): Promise<void> {
     outputRoot: resolveOutputRoot(args.outputRoot),
     enrichmentId: args.enrichmentId,
     inputPath: args.inputPath,
-    lowBaseOrganicTrafficThreshold: args.lowBaseOrganicTrafficThreshold,
+    ...(args.lowBaseOrganicTrafficThreshold === undefined
+      ? {}
+      : { lowBaseOrganicTrafficThreshold: args.lowBaseOrganicTrafficThreshold }),
   });
 }
 
