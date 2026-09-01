@@ -109,6 +109,31 @@ test('traffic continuation requires a current entrant cohort and becomes ready w
   assert.ok(withEntrant.unresolvedHumanRequirements.includes('operator_config'));
 });
 
+test('ready-to-publish evidence remains actionable until the Library snapshot is published', () => {
+  const current = status({
+    enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
+    finalization: { state: 'ready_to_publish', enrichmentId: 'enrich-1', finalistCount: 2, currentDecisionCount: 2, allFinalistsHaveCurrentDecisions: true, finalistMatrixPublished: true, artifactWarning: null },
+    library: { published: false, publicationId: null, publishedAt: null, reason: 'not_published', lookupError: null },
+    nextAction: { code: 'publish_library', message: 'Publish Library snapshot.', command: 'npm run library:publish -- --enrichment enrich-1' },
+  });
+  const plan = buildExistingResearchPlan(current, null);
+  assert.equal(plan.stages[2]?.state, 'ready');
+  assert.equal(plan.expectedStopPoint, 'finalization');
+  assert.equal(plan.durableState.nextAction.code, 'publish_library');
+});
+
+test('published research is the only fully satisfied finalization state', () => {
+  const current = status({
+    enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
+    finalization: { state: 'published', enrichmentId: 'enrich-1', finalistCount: 2, currentDecisionCount: 2, allFinalistsHaveCurrentDecisions: true, finalistMatrixPublished: true, artifactWarning: null },
+    library: { published: true, publicationId: 'publication-1', publishedAt: '2026-01-02', reason: null, lookupError: null },
+    nextAction: { code: 'none', message: 'Complete.', command: null },
+  });
+  const plan = buildExistingResearchPlan(current, null);
+  assert.equal(plan.stages[2]?.state, 'already_satisfied');
+  assert.equal(plan.expectedStopPoint, 'complete');
+});
+
 test('publication override deliberately resolves the human-decision gate without fabricating decisions', () => {
   const current = status({
     enrichments: [completedEnrichment()], currentEnrichmentId: 'enrich-1',
