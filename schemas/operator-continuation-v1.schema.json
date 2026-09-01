@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.utility-research-runner/schemas/operator-continuation-v1.schema.json",
+  "title": "Utility Research Runner OperatorContinuationV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "researchId", "action"],
+  "properties": {
+    "version": {"const": 1},
+    "researchId": {"type": "string", "minLength": 1},
+    "action": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "shortlist"}, "path": {"type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it."}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "clusters"], "properties": {"type": {"const": "finalists"}, "clusters": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}}},
+      {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "finalists_all"}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "representative_overrides"}, "path": {"type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it."}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "path", "lowBaseOrganicTrafficThreshold"], "properties": {"type": {"const": "traffic"}, "path": {"type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it."}, "lowBaseOrganicTrafficThreshold": {"type": "number", "minimum": 0}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "decisions"}, "path": {"type": "string", "minLength": 1, "description": "Path relative to the JSON file that declares it."}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "publishWithoutDecisions"], "properties": {"type": {"const": "publication_override"}, "publishWithoutDecisions": {"const": true}}}
+    ]}
+  }
+}
