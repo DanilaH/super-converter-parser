@@ -48,11 +48,13 @@ function deferred(): Deferred {
   };
 }
 
-test('root collection overlaps main Surfer and related polling but keeps SERP parsing after both', async () => {
+test('root collection premounts Related while main Surfer is pending but delays terminal Related read until after main', async () => {
   const mainGate = deferred();
   let mainReadStarted = false;
+  let relatedMountStarted = false;
   let relatedReadStarted = false;
   let serpReadStarted = false;
+  const waits: number[] = [];
 
   const context = fakeContext({
     mainInnerText: async () => {
@@ -60,19 +62,24 @@ test('root collection overlaps main Surfer and related polling but keeps SERP pa
       await mainGate.promise;
       return '$100 $2';
     },
+    onRelatedMount: () => {
+      relatedMountStarted = true;
+    },
     onRelatedRead: () => {
       relatedReadStarted = true;
     },
     onSerpRead: () => {
       serpReadStarted = true;
     },
+    onWait: (ms) => waits.push(ms),
   });
 
   const debugRoot = await mkdtemp(join(tmpdir(), 'collect-overlap-'));
   const collection = collectKeyword(context, config, rootKeyword(), debugRoot);
 
-  const overlapped = await waitFor(() => mainReadStarted && relatedReadStarted, 250);
-  assert.equal(overlapped, true, 'related polling should start while main Surfer is still pending');
+  const premounted = await waitFor(() => mainReadStarted && relatedMountStarted, 250);
+  assert.equal(premounted, true, 'Related lazy mount should be triggered while main Surfer is still pending');
+  assert.equal(relatedReadStarted, false, 'terminal Related reader must not start before main Surfer completes');
   assert.equal(serpReadStarted, false, 'SERP evidence must not be captured before Surfer observations finish');
 
   mainGate.resolve();
@@ -82,25 +89,28 @@ test('root collection overlaps main Surfer and related polling but keeps SERP pa
   assert.equal(result.record.surfer?.volume, 100);
   assert.equal(result.related.status, 'ok');
   assert.equal(result.related.rows[0]?.normalizedKeyword, 'favicon maker');
+  assert.equal(relatedReadStarted, true);
   assert.equal(serpReadStarted, true);
+  assert.ok(waits.includes(1000), 'historical Related warm-up must remain before terminal read');
 });
 
-test('related-only collection relies on parser polling and adds no fixed one-second sleep', async () => {
+test('related-only collection keeps the historical fixed one-second warm-up', async () => {
   const waits: number[] = [];
   const context = fakeContext({
     mainInnerText: async () => '$100 $2',
     onWait: (ms) => waits.push(ms),
   });
-  const debugRoot = await mkdtemp(join(tmpdir(), 'collect-related-no-fixed-wait-'));
+  const debugRoot = await mkdtemp(join(tmpdir(), 'collect-related-fixed-wait-'));
 
   const result = await collectRelatedKeyword(context, config, rootKeyword(), debugRoot);
 
   assert.equal(result.related.status, 'ok');
-  assert.deepEqual(waits, []);
+  assert.deepEqual(waits, [1000]);
 });
 
 function fakeContext(options: {
   mainInnerText: () => Promise<string>;
+  onRelatedMount?: () => void;
   onRelatedRead?: () => void;
   onSerpRead?: () => void;
   onWait?: (ms: number) => void;
@@ -136,6 +146,9 @@ function fakeContext(options: {
           state: 'rows',
           rows: [{ keyword: 'favicon maker', overlapText: '50%', volumeText: '1K' }],
         };
+      }
+      if (typeof script === 'function' && arg === undefined) {
+        options.onRelatedMount?.();
       }
       return undefined;
     },
