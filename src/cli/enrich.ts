@@ -7,7 +7,8 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { CacheStore } from '../cache/store.js';
 import { createRunId } from '../runs/run.js';
-import { runEnrichment, type EnrichmentHttpConfig, type EnrichmentPagesConfig, type EnrichmentSiteStructureConfig } from '../enrichment/engine.js';
+import type { EnrichmentHttpConfig, EnrichmentPagesConfig, EnrichmentSiteStructureConfig } from '../enrichment/engine.js';
+import { runEnrichmentLocked } from '../enrichment/runLocked.js';
 import type { EnrichmentLogger, CancellationSignal } from '../enrichment/types.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from '../enrichment/cache.js';
 import { normalizeKeyword } from '../input/seeds/normalize.js';
@@ -634,7 +635,7 @@ async function main(): Promise<void> {
       enrichmentConfig = buildEnrichmentConfig(modules, clusteringConfig, args.sources, args.maxSuggestions, args.maxParents);
     }
 
-    const outcome = await runEnrichment({
+    const outcome = await runEnrichmentLocked({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
       sourceRunId,

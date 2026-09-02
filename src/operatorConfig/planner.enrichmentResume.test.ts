@@ -75,7 +75,7 @@ function statusWithEnrichment(
   };
 }
 
-for (const state of ['created', 'paused', 'failed'] as const) {
+for (const state of ['created', 'paused', 'failed', 'running'] as const) {
   test(`configured ${state} enrichment is resumable through the stable research plan`, () => {
     const plan = buildExistingResearchPlan(statusWithEnrichment(state), null, configuredEnrichment());
     assert.equal(plan.stages[0]?.state, 'already_satisfied');
@@ -86,13 +86,3 @@ for (const state of ['created', 'paused', 'failed'] as const) {
     assert.deepEqual(plan.unresolvedHumanRequirements, []);
   });
 }
-
-test('configured running enrichment is blocked instead of starting a concurrent generation', () => {
-  const plan = buildExistingResearchPlan(statusWithEnrichment('running'), null, configuredEnrichment());
-  assert.equal(plan.stages[0]?.state, 'already_satisfied');
-  assert.equal(plan.stages[1]?.state, 'blocked');
-  assert.match(plan.stages[1]?.reason ?? '', /running.*concurrent/i);
-  assert.equal(plan.expectedStopPoint, 'enrichment');
-  assert.equal(plan.durableState.enrichmentState, 'running');
-  assert.deepEqual(plan.unresolvedHumanRequirements, []);
-});

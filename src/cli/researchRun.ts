@@ -341,7 +341,7 @@ async function continueConfiguredWorkflowUnderLock(
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
   const resumableCurrent = currentEnrichment !== null
     && currentEnrichment.isForCurrentDiscovery
-    && ['created', 'paused', 'failed'].includes(currentEnrichment.state);
+    && ['created', 'paused', 'failed', 'running'].includes(currentEnrichment.state);
   const shortlistRequired = plan.unresolvedHumanRequirements.includes('shortlist');
 
   if (shortlistRequired && !resumableCurrent) {

@@ -29,13 +29,13 @@ import {
   type ClusteringConfig,
 } from './clustering.js';
 import { DEFAULT_CACHE_TTL, type CacheTtlConfig } from './cache.js';
-import {
-  runEnrichment,
-  type EnrichmentHttpConfig,
-  type EnrichmentOutcome,
-  type EnrichmentPagesConfig,
-  type EnrichmentSiteStructureConfig,
+import type {
+  EnrichmentHttpConfig,
+  EnrichmentOutcome,
+  EnrichmentPagesConfig,
+  EnrichmentSiteStructureConfig,
 } from './engine.js';
+import { runEnrichmentLocked } from './runLocked.js';
 import {
   IMPLEMENTED_ENRICHMENT_MODULES,
   QUERY_SUGGESTION_PARSER_VERSION,
@@ -234,7 +234,7 @@ export async function runConfiguredEnrichment(
       await mkdir(dirname(resolve(activeCacheConfig.dbPath)), { recursive: true });
     }
 
-    const outcome = await runEnrichment({
+    const outcome = await runEnrichmentLocked({
       enrichmentId,
       sourceStoreOrPath: sourceStorePath,
       sourceRunId: request.sourceRunId,
