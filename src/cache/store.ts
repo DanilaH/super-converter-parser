@@ -209,7 +209,7 @@ export type CachedRelatedStatus = 'ok' | 'empty' | 'error';
 export type CachedRelatedEntry = {
   cacheKey: string;
   // The parent keyword this list belongs to, and the identity that scopes it;
-  // both are persisted so the entry is verifiable against the key that produced them.
+  // both are persisted so the entry is verifiable against its cache key.
   normalizedKeyword: string;
   identity: CacheIdentity;
   // 'ok' carries the rows; 'empty' means the expansion genuinely found no
@@ -242,7 +242,7 @@ export type CachedDomainAgeEntry = {
   registrationError: string | null;
   registrationRequestCount: number;
   registrationHttpStatus: number | null;
-  // First-seen fact (first-seen provider). Independent TTL/provenance from first-seen.
+  // First-seen fact (first-seen provider). Independent TTL/provenance.
   firstSeenDate: string | null;
   firstSeenStatus: FirstSeenStatus | 'not_attempted';
   firstSeenSource: string;
