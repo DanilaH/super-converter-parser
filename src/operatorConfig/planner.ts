@@ -88,6 +88,10 @@ export function buildExistingResearchPlan(
   const hasDurableEnrichmentWork = currentEnrichment !== null;
   const finalizationHasDurableState = status.finalization.state !== 'not_started';
   const finalizationRequested = operatorConfig === null || wantsFinalization || finalizationHasDurableState;
+  const configuredDiscoveryResumable = operatorConfig !== null
+    && discoveryOpen
+    && status.discovery.keywordCounts.repairable === 0
+    && ['created', 'running', 'paused'].includes(status.discovery.state);
   const configuredEnrichmentResumable = currentEnrichment !== null
     && operatorConfig !== null
     && wantsEnrichment
@@ -151,19 +155,22 @@ export function buildExistingResearchPlan(
                 ? { id: 'finalization', state: 'ready', reason: 'Persisted finalist scope exists; resume config-driven finalization from current durable parent state.' }
                 : { id: 'finalization', state: 'blocked', reason: finalizationBlockReason(status, operatorConfig !== null) };
 
-  const stages: PlanStage[] = [
-    discoverySatisfied
-      ? { id: 'discovery', state: 'already_satisfied', reason: null }
+  const discoveryStage: PlanStage = discoverySatisfied
+    ? { id: 'discovery', state: 'already_satisfied', reason: null }
+    : configuredDiscoveryResumable
+      ? {
+          id: 'discovery',
+          state: 'ready',
+          reason: `Current configured discovery is ${status.discovery.state}; resume its persisted keyword checkpoints using the stable research identity.`,
+        }
       : {
           id: 'discovery',
           state: 'blocked',
           reason: status.discovery.keywordCounts.repairable > 0
             ? `${status.discovery.keywordCounts.repairable} discovery checkpoint(s) are repairable before downstream work.`
             : `Discovery is ${status.discovery.state}; finish or resume it before downstream work.`,
-        },
-    enrichmentStage,
-    finalizationStage,
-  ];
+        };
+  const stages: PlanStage[] = [discoveryStage, enrichmentStage, finalizationStage];
 
   const unresolvedHumanRequirements: ExistingResearchExecutionPlan['unresolvedHumanRequirements'] = [];
   if (operatorConfig === null) {
@@ -228,7 +235,14 @@ export function buildExistingResearchPlan(
     stageFingerprints: operatorConfig?.stageFingerprints ?? null,
     semantics,
     stages,
-    externalWork: buildExistingExternalWork(semantics, enrichmentStage, finalizationStage, status, action),
+    externalWork: buildExistingExternalWork(
+      semantics,
+      discoveryStage,
+      enrichmentStage,
+      finalizationStage,
+      status,
+      action,
+    ),
     filesystemInputs: continuation?.declaredFilePath
       ? [{ purpose: 'continuation_input', ...continuation.declaredFilePath }]
       : [],
@@ -321,11 +335,26 @@ function validateContinuationAgainstDurableState(
   if (!discoveryTerminal || discoveryOpen) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" cannot be planned while discovery is ${status.discovery.state}.`);
   }
-  if (action === 'shortlist') return;
 
   const currentEnrichment = status.currentEnrichmentId === null
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
+  if (action === 'shortlist') {
+    if (currentEnrichment?.state === 'completed') {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'A shortlist continuation is stale because the current enrichment is already completed.',
+      );
+    }
+    if (currentEnrichment?.state === 'running') {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'A shortlist continuation cannot replace scope while the current enrichment is running.',
+      );
+    }
+    return;
+  }
+
   if (currentEnrichment?.state !== 'completed') {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" requires a completed current enrichment.`);
   }
@@ -410,6 +439,7 @@ function finalizationBlockReason(status: ResearchStatusWithHistoricalPresence, h
 
 function buildExistingExternalWork(
   semantics: PortableResolvedResearchSemantics | null,
+  discoveryStage: PlanStage,
   enrichmentStage: PlanStage,
   finalizationStage: PlanStage,
   status: ResearchStatusWithHistoricalPresence,
@@ -417,6 +447,16 @@ function buildExistingExternalWork(
 ): ExternalWorkExpectation[] {
   if (semantics === null) return [];
   const work: ExternalWorkExpectation[] = [];
+  if (discoveryStage.state === 'ready') {
+    work.push({
+      stage: 'discovery',
+      providers: [
+        'google',
+        'keyword_surfer',
+        semantics.discovery.requireAhrefs ? 'ahrefs' : 'ahrefs_if_configured',
+      ],
+    });
+  }
   if (enrichmentStage.state === 'ready' && semantics.enrichment !== null) {
     const providers = new Set<string>();
     if (semantics.enrichment.querySuggestions !== null) {
