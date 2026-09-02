@@ -115,4 +115,4 @@ test('completed enrichment honors a late cancellation before finalization starts
   assert.equal(execution.result.enrichmentState, 'completed');
   assert.equal(execution.result.workflowState, 'awaiting_finalization');
   assert.equal(execution.result.stopPoint, 'finalization');
-}
+});
