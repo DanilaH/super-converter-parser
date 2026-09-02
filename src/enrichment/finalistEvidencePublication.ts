@@ -1,8 +1,11 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadCohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
+import { RunStore } from '../db/store.js';
 import { writeTextAtomic } from '../runs/run.js';
+import { evidenceSnapshotFingerprint } from './evidenceSnapshotFingerprint.js';
 
 export const FINALIST_EVIDENCE_ARTIFACTS = [
   'finalist-evidence-matrix.csv',
@@ -13,8 +16,6 @@ export type FinalistEvidencePublicationSummary = {
   version: string;
   representativeRevision: number;
   entrantFingerprint: string;
-  cohortHistoryFingerprint: string | null;
-  historicalPresenceFingerprint: string | null;
   finalistCount: number;
   cohortHistoryAvailableCount: number;
   importedTrafficSnapshotCount: number;
@@ -34,6 +35,8 @@ type PublicationContext = {
   originalStatus: string;
   manifest: Record<string, unknown>;
   status: Record<string, unknown>;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
 };
 
 export async function assertFinalistEvidencePublicationParent(input: {
@@ -42,8 +45,6 @@ export async function assertFinalistEvidencePublicationParent(input: {
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
-  cohortHistoryFingerprint: string | null;
-  historicalPresenceFingerprint: string | null;
 }): Promise<void> {
   await loadPublicationContext(input);
 }
@@ -60,9 +61,12 @@ export async function publishFinalistEvidenceMetadata(input: {
     sourceRunId: input.sourceRunId,
     representativeRevision: input.summary.representativeRevision,
     entrantFingerprint: input.summary.entrantFingerprint,
-    cohortHistoryFingerprint: input.summary.cohortHistoryFingerprint,
-    historicalPresenceFingerprint: input.summary.historicalPresenceFingerprint,
   });
+  const publishedSummary = {
+    ...input.summary,
+    cohortHistoryFingerprint: context.cohortHistoryFingerprint,
+    historicalPresenceFingerprint: context.historicalPresenceFingerprint,
+  };
 
   const nextManifest: Record<string, unknown> = {
     ...context.manifest,
@@ -70,7 +74,7 @@ export async function publishFinalistEvidenceMetadata(input: {
       ...readStringArray(context.manifest.artifacts, 'manifest.json artifacts'),
       ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    finalistEvidence: input.summary,
+    finalistEvidence: publishedSummary,
   };
   const nextStatus: Record<string, unknown> = {
     ...context.status,
@@ -78,7 +82,7 @@ export async function publishFinalistEvidenceMetadata(input: {
       ...readStringArray(context.status.artifacts, 'status.json artifacts'),
       ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    finalistEvidence: input.summary,
+    finalistEvidence: publishedSummary,
   };
 
   await writeTextAtomic(
@@ -155,8 +159,6 @@ async function loadPublicationContext(input: {
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
-  cohortHistoryFingerprint: string | null;
-  historicalPresenceFingerprint: string | null;
 }): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
@@ -185,30 +187,31 @@ async function loadPublicationContext(input: {
     );
   }
 
+  const deepParents = loadCurrentDeepEvidenceFingerprints(input.enrichmentDirectory, input.enrichmentId);
   assertOptionalPublishedSnapshot(
     manifest,
-    input.cohortHistoryFingerprint,
+    deepParents.cohortHistoryFingerprint,
     'cohortHistory',
     'cohort-history.json',
     'manifest.json',
   );
   assertOptionalPublishedSnapshot(
     status,
-    input.cohortHistoryFingerprint,
+    deepParents.cohortHistoryFingerprint,
     'cohortHistory',
     'cohort-history.json',
     'status.json',
   );
   assertOptionalPublishedSnapshot(
     manifest,
-    input.historicalPresenceFingerprint,
+    deepParents.historicalPresenceFingerprint,
     'historicalPresence',
     'cohort-historical-presence.json',
     'manifest.json',
   );
   assertOptionalPublishedSnapshot(
     status,
-    input.historicalPresenceFingerprint,
+    deepParents.historicalPresenceFingerprint,
     'historicalPresence',
     'cohort-historical-presence.json',
     'status.json',
@@ -221,7 +224,25 @@ async function loadPublicationContext(input: {
     originalStatus,
     manifest,
     status,
+    ...deepParents,
   };
+}
+
+function loadCurrentDeepEvidenceFingerprints(
+  enrichmentDirectory: string,
+  enrichmentId: string,
+): { cohortHistoryFingerprint: string | null; historicalPresenceFingerprint: string | null } {
+  const store = RunStore.openReadOnly(join(enrichmentDirectory, 'enrichment.sqlite'));
+  try {
+    const cohortHistory = loadCohortHistoryState(store, enrichmentId);
+    const historicalPresence = loadCohortHistoricalPresenceState(store, enrichmentId);
+    return {
+      cohortHistoryFingerprint: cohortHistory === null ? null : evidenceSnapshotFingerprint(cohortHistory),
+      historicalPresenceFingerprint: historicalPresence === null ? null : evidenceSnapshotFingerprint(historicalPresence),
+    };
+  } finally {
+    store.close();
+  }
 }
 
 function fingerprintPublishedEntrant(value: Record<string, unknown>): string {
