@@ -182,10 +182,6 @@ function compareClusterIds(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// Collects the bounded, deduplicated set of registrable domains from a source run's
-// organic SERP rows, restricted to the shortlist (TASK-014 is shortlist-only deep
-// enrichment). Every keyword a domain was observed in is recorded in
-// the returned provenance map so outputs stay traceable back to the ranking rows.
 const DOMAIN_AGE_MIN_SHORTLIST = 5;
 const DOMAIN_AGE_MAX_DOMAINS = 30;
 
@@ -343,6 +339,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         throw new Error(`Modules ${networkModules.join(', ')} allow at most 200 shortlist keywords. Got ${shortlist.length}.`);
       }
     }
+
     if (modules.includes('clusters')) {
       const existingItem = enrichmentStore.loadEnrichmentItems(enrichmentId).find(
         (item) => item.itemId === 'clusters' && item.module === 'clusters',
@@ -392,10 +389,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         );
       }
       checkCancellation(signal);
-      // Shortlist-only: domains are bounded to the enrolled shortlist and carry
-      // provenance (which shortlisted keywords observed each domain). On resume the
-      // completion is derived from per-domain checkpoints in enrichment_items, not
-      // from the mutable TTL cache.
       const { domains, provenance, ranks, omitted } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
       domainAgeRecords = await runDomainAgeModule({
         domains,
@@ -415,7 +408,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         now: Date.now,
         onProgress: (p) => logger(`  domain_age: ${p.cacheHits} cached / ${p.completed} done / ${p.errors} error(s) of ${p.total}`),
       });
-      // Omitted domains are logged inside runDomainAgeModule; no duplicate here.
     }
 
     if (modules.includes('query_suggestions')) {
@@ -427,10 +419,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       const cacheStore = CacheStore.open(researchConfig.cache.path);
       let collector: SuggestionCollector | undefined;
       try {
-        // The authoritative checkpoints are per-(parent, source). The collector
-        // is lazy and opens Chrome only when runQuerySuggestionsModule finds a
-        // missing/expired source, so a fully completed resume performs no
-        // browser work and rebuilds its result from SQLite.
         collector = await createBrowserSuggestionCollector(
           researchConfig,
           join(enrichmentDirectory, 'debug'),
@@ -562,7 +550,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                   const parsed = JSON.parse(t.data) as PageRecord;
                   rebuiltPages.push({ ...parsed, cacheStatus: 'hit' });
                 } catch {
-                  // skip corrupted target
                 }
               } else if (t.status === 'error' && t.error) {
                 rebuiltPages.push({
@@ -677,7 +664,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                 const parsed = JSON.parse(t.data) as SiteStructureRecord;
                 rebuiltRecords.push({ ...parsed, cacheStatus: 'hit' });
               } catch {
-                // skip corrupted target
               }
             }
           }
@@ -801,8 +787,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       summary.domainCacheHitCount = result.siteStructure.filter((r) => r.cacheStatus === 'hit').length;
       summary.siteStructureOmittedCount = omitted.length;
       summary.siteStructureDiscoveredDomainCount = siteStructureDomainCount + omitted.length;
-      // Keep the historical generic key for single-module consumers, but never
-      // let combined domain modules overwrite one another in status/manifest.
       if (!domainAgeRecords) summary.domainCount = siteStructureDomainCount;
 
       artifacts.push('site-structure.csv', 'site-structure.json');
@@ -880,6 +864,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       }
       artifacts.push('domain-age.csv', 'domain-age.json');
     }
+
     const manifestContent = JSON.stringify({
       enrichmentId,
       sourceRunId,
@@ -913,9 +898,6 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
       },
     }, null, 2) + '\n';
 
-    // `manifest.json` is the final publication marker, matching discovery runs.
-    // If that final write fails, remove the already-published status so callers
-    // never observe a terminal status without its matching manifest.
     await writeTextAtomic(statusPath, statusContent, 'enrichment status');
     try {
       await writeTextAtomic(manifestPath, manifestContent, 'enrichment manifest');
@@ -1227,7 +1209,6 @@ async function runPagesModule(
         pages.push({ ...parsed, cacheStatus: 'none' });
         continue;
       } catch {
-        // fall through to re-fetch
       }
     }
 
@@ -1247,7 +1228,6 @@ async function runPagesModule(
           if (page.fetchStatus === 'ok') cachedSuccesses += 1;
           else cachedErrors += 1;
         } catch {
-          // fall through to fetch
         }
       }
     }
@@ -1582,6 +1562,11 @@ async function runSiteStructureModule(
   if (ssrfChecker) fetcherCfg.ssrfChecker = ssrfChecker;
 
   const SITE_STRUCTURE_VERSION = '1.0.0';
+  const siteStructureCacheIdentity = JSON.stringify({
+    maxSitemapFiles: siteStructureConfig.maxSitemapFiles,
+    maxUrlsPerSitemap: siteStructureConfig.maxUrlsPerSitemap,
+    maxSampleUrls: siteStructureConfig.maxSampleUrls,
+  });
   const records: SiteStructureRecord[] = [];
   let fetchCount = 0;
   let networkErrors = 0;
@@ -1598,11 +1583,11 @@ async function runSiteStructureModule(
         records.push({ ...parsed, cacheStatus: 'none' });
         continue;
       } catch {
-        // fall through to re-fetch
       }
     }
 
-    const cacheKey = cache ? makeCacheKey(`site://${domain}`, SITE_STRUCTURE_VERSION, String(siteStructureConfig.maxSitemapFiles)) : '';
+    const provenance = domainProvenance.get(domain);
+    const cacheKey = cache ? makeCacheKey(`site://${domain}`, SITE_STRUCTURE_VERSION, siteStructureCacheIdentity) : '';
 
     enrichmentStore.upsertSiteStructureTarget(enrichmentId, { domain, status: 'running' });
 
@@ -1612,18 +1597,21 @@ async function runSiteStructureModule(
       const cached = cache.get(cacheKey);
       if (cached && cache.isFresh(cached)) {
         try {
-          record = JSON.parse(cached.data) as SiteStructureRecord;
-          record.cacheStatus = 'hit';
+          const parsed = JSON.parse(cached.data) as SiteStructureRecord;
+          record = {
+            ...parsed,
+            cacheStatus: 'hit',
+            sourceKeywords: provenance?.keywords ?? [],
+            sourceBestPosition: provenance?.bestPosition ?? null,
+          };
           if (record.homepageStatus === 'error' || record.homepageStatus === 'timeout') cachedErrors += 1;
           else cachedSuccesses += 1;
         } catch {
-          // fall through to fetch
         }
       }
     }
 
     if (!record) {
-      const provenance = domainProvenance.get(domain);
       record = await inspectDomain(
         domain,
         fetcherCfg,
@@ -1720,7 +1708,7 @@ async function inspectDomain(
   const robotsResult = await boundedFetch(robotsUrl, fetcherCfg);
 
   let robotsStatus: SiteStructureRecord['robotsStatus'] = 'not_found';
-  let robotsHttpStatus = robotsResult.status || null;
+  const robotsHttpStatus = robotsResult.status || null;
   let sitemapUrlsFromRobots: string[] = [];
 
   if (robotsResult.error) {
