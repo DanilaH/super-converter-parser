@@ -60,7 +60,7 @@ export function buildExistingResearchPlan(
     );
   }
 
-  validateContinuationAgainstDurableState(status, continuation);
+  validateContinuationAgainstDurableState(status, continuation, operatorConfig);
 
   const discoveryTerminal = status.discovery.state === 'completed' || status.discovery.state === 'completed_with_errors';
   const discoveryOpen = status.discovery.keywordCounts.pending > 0 || status.discovery.keywordCounts.running > 0;
@@ -313,6 +313,7 @@ function isExistingPlan(plan: ResearchExecutionPlan): plan is ExistingResearchEx
 function validateContinuationAgainstDurableState(
   status: ResearchStatusWithHistoricalPresence,
   continuation: ResolvedOperatorContinuation | null,
+  operatorConfig: PersistedOperatorConfigV1 | null,
 ): void {
   if (continuation === null) return;
   const action = continuation.continuation.action.type;
@@ -321,11 +322,29 @@ function validateContinuationAgainstDurableState(
   if (!discoveryTerminal || discoveryOpen) {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" cannot be planned while discovery is ${status.discovery.state}.`);
   }
-  if (action === 'shortlist') return;
 
   const currentEnrichment = status.currentEnrichmentId === null
     ? null
     : status.enrichments.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
+  if (action === 'shortlist') {
+    if (operatorConfig !== null) {
+      const target = operatorConfig.semantics.workflow.target;
+      if (target !== 'enrichment' && target !== 'finalization') {
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          'A shortlist continuation cannot be applied because persisted OperatorConfig does not request enrichment.',
+        );
+      }
+    }
+    if (currentEnrichment !== null && !['created', 'paused', 'failed'].includes(currentEnrichment.state)) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `A shortlist continuation cannot be applied while current enrichment ${currentEnrichment.enrichmentId} is ${currentEnrichment.state}; enrichment evidence scope is immutable after execution advances beyond a resumable state.`,
+      );
+    }
+    return;
+  }
+
   if (currentEnrichment?.state !== 'completed') {
     throw new ResearchError('INPUT_SCHEMA_ERROR', `Continuation action "${action}" requires a completed current enrichment.`);
   }
