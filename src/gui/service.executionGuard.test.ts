@@ -33,27 +33,29 @@ function completedExecution(researchId: string) {
   };
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
 test('new-research GUI draft cannot be double-submitted and is consumed after durable research identity exists', async () => {
   const root = await mkdtemp(join(tmpdir(), 'operator-gui-double-submit-'));
   const draftRoot = join(root, 'drafts');
   await mkdir(draftRoot, { recursive: true });
 
-  let releaseRun: (() => void) | null = null;
-  const runStarted = new Promise<void>((resolveStarted) => {
-    releaseRun = resolveStarted;
-  });
-  let unblock: (() => void) | null = null;
-  const gate = new Promise<void>((resolveGate) => {
-    unblock = resolveGate;
-  });
+  const runStarted = deferred();
+  const gate = deferred();
 
   const service = new OperatorGuiService({
     outputRoot: join(root, 'output'),
     draftRoot,
     deps: {
       runNew: async () => {
-        releaseRun?.();
-        await gate;
+        runStarted.resolve();
+        await gate.promise;
         return completedExecution('research-1');
       },
     },
@@ -70,9 +72,9 @@ test('new-research GUI draft cannot be double-submitted and is consumed after du
   assert.ok(planned.draftId);
 
   const first = service.runNew(planned.draftId);
-  await runStarted;
+  await runStarted.promise;
   await assert.rejects(service.runNew(planned.draftId), /already executing/);
-  unblock?.();
+  gate.resolve();
   const result = await first;
   assert.equal(result.result.researchId, 'research-1');
   await assert.rejects(service.runNew(planned.draftId), /Unknown or incompatible GUI draft/);
