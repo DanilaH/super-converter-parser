@@ -23,6 +23,7 @@ type PublicationContext = {
 export async function publishCohortHistoricalPresenceMetadata(input: {
   enrichmentDirectory: string;
   snapshot: CohortHistoricalPresenceSnapshot;
+  snapshotFingerprint: string;
   changed: boolean;
 }): Promise<void> {
   let context = await loadPublicationContext(input.enrichmentDirectory, input.snapshot);
@@ -38,6 +39,7 @@ export async function publishCohortHistoricalPresenceMetadata(input: {
   const metadata = {
     changed: input.changed,
     version: input.snapshot.collectionVersion,
+    snapshotFingerprint: input.snapshotFingerprint,
     provider: input.snapshot.config.provider,
     queryVersion: input.snapshot.config.queryVersion,
     collectionMode: input.snapshot.config.collectionMode,
