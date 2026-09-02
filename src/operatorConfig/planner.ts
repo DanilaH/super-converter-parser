@@ -391,7 +391,7 @@ function finalizationContinuationReadyReason(
   if (action === 'decisions' && status.finalization.finalistMatrixPublished) {
     return 'A decisions continuation is supplied for the current finalist matrix; current human facts can be replaced without rerunning upstream network evidence.';
   }
-  if (action === 'publication_override' && status.finalization.finalistMatrixPublished && !status.library.published) {
+  if (action === 'publication_override' && status.finalization.finalistMatrixPublished) {
     return 'An explicit incomplete-publication override is supplied against the current finalist evidence matrix.';
   }
   return null;
