@@ -280,6 +280,49 @@ async function continueConfiguredWorkflowUnderLock(
   }
   const plan = args.deps.buildExistingPlan(status, args.continuation, provenance);
   const base = existingMachineResult(status, provenance, plan);
+  const discoveryStage = plan.stages.find((stage) => stage.id === 'discovery');
+  if (!discoveryStage) throw new ResearchError('OUTPUT_WRITE_ERROR', 'Existing research plan omitted the discovery stage.');
+
+  if (discoveryStage.state === 'ready') {
+    if (args.continuation !== null) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'A continuation input cannot be consumed until the current configured discovery is complete.',
+      );
+    }
+    console.log(`  Resuming discovery: ${status.discovery.runId}`);
+    const discovery = await args.deps.runDiscovery(
+      {
+        input: { kind: 'resume', runId: status.discovery.runId },
+        outputRoot,
+      },
+      args.deps.cliDeps,
+      args.env,
+    );
+    if (discovery.exitCode !== EXIT_OK) {
+      return {
+        exitCode: discovery.exitCode,
+        result: {
+          ...base,
+          exitCode: discovery.exitCode,
+          discoveryRunId: discovery.runId ?? status.discovery.runId,
+          discoveryState: discovery.state ?? status.discovery.state,
+          workflowState: 'blocked',
+          stopPoint: 'discovery',
+        },
+      };
+    }
+
+    // Discovery resume changes the durable parent state. Re-read SQLite and
+    // rebuild the canonical plan while the same per-research execution lock is
+    // still held before any downstream stage can run.
+    const refreshedStatus = await args.deps.buildStatus({
+      outputRoot,
+      targetRunId: status.researchId,
+    });
+    return continueConfiguredWorkflowUnderLock(args, outputRoot, refreshedStatus);
+  }
+
   const enrichmentStage = plan.stages.find((stage) => stage.id === 'enrichment');
   if (!enrichmentStage) throw new ResearchError('OUTPUT_WRITE_ERROR', 'Existing research plan omitted the enrichment stage.');
 
@@ -679,8 +722,9 @@ function usage(): string {
     '',
     'New research executes discovery and continues through configured stages until a human gate is reached.',
     'Existing research is always selected by explicit stable research id; generated discovery/enrichment ids are resolved from durable state.',
+    'An unfinished configured discovery resumes from its persisted checkpoints when the same stable research id is run again.',
     'Shortlist, finalist scope, human decisions, traffic imports, representative overrides, and publication overrides use typed continuation files.',
-    'No shortlist, finalist scope, or human decision is invented automatically.',
+    'No shortlist, finalist scope, human decision, or repair decision is invented automatically.',
     '',
   ].join('\n');
 }
