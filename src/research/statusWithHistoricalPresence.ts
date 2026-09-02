@@ -14,8 +14,8 @@ import { buildResearchStatus, type ResearchNextAction, type ResearchStatus } fro
 export type ResearchStatusWithHistoricalPresence = Omit<ResearchStatus, 'version' | 'library'> & {
   version: '1.2.0';
   library: ResearchStatus['library'] & {
-    derivedSnapshotsCurrent: boolean | null;
-    derivedSnapshotWarning: string | null;
+    derivedSnapshotsCurrent?: boolean | null;
+    derivedSnapshotWarning?: string | null;
   };
   sampledHistoricalPresence: SampledHistoricalPresenceCoverage | null;
 };
