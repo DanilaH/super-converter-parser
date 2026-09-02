@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
+import { RunStore } from '../db/store.js';
 import {
   FINALIST_EVIDENCE_ARTIFACTS,
   invalidateFinalistEvidencePublication,
@@ -99,6 +100,8 @@ function summary(parent: EntrantCohortSnapshot): FinalistEvidencePublicationSumm
 }
 
 async function seed(directory: string, parent: EntrantCohortSnapshot): Promise<void> {
+  const store = RunStore.open(join(directory, 'enrichment.sqlite'));
+  store.close();
   await writeFile(join(directory, 'entrant-cohort.json'), JSON.stringify(parent, null, 2) + '\n');
   const common = {
     enrichmentId: parent.enrichmentId,
