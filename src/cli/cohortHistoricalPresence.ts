@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
 import { runCohortHistoricalPresence } from '../finalization/historicalPresenceRun.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import {
   DEFAULT_HISTORICAL_PRESENCE_CONFIG,
@@ -105,14 +106,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  await runCohortHistoricalPresence({
-    outputRoot: resolveOutputRoot(args.outputRoot),
+  const outputRoot = resolveOutputRoot(args.outputRoot);
+  await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runCohortHistoricalPresence({
+    outputRoot,
     enrichmentId: args.enrichmentId,
     collectionMode: args.collectionMode,
     recentMonths: args.recentMonths,
     maxCollections: args.maxCollections,
     domainCap: args.domainCap,
-  });
+  }));
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/cohortHistoricalPresence.ts') || process.argv[1]?.endsWith('\\cohortHistoricalPresence.ts')) {

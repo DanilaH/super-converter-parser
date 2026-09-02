@@ -4,6 +4,7 @@ import {
   MAX_REPRESENTATIVE_QUERY_COUNT,
   MIN_REPRESENTATIVE_QUERY_COUNT,
 } from '../enrichment/representativeQueries.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { runRepresentativeQueries } from '../finalization/representativeRun.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
@@ -131,14 +132,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  await runRepresentativeQueries({
-    outputRoot: resolveOutputRoot(args.outputRoot),
+  const outputRoot = resolveOutputRoot(args.outputRoot);
+  await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runRepresentativeQueries({
+    outputRoot,
     enrichmentId: args.enrichmentId,
     ...(args.targetCount === undefined ? {} : { targetCount: args.targetCount }),
     ...(args.overridesPath === undefined ? {} : { overridesPath: args.overridesPath }),
     ...(args.selectedClusterIds === undefined ? {} : { selectedClusterIds: args.selectedClusterIds }),
     allClusters: args.allClusters,
-  });
+  }));
 }
 
 main()

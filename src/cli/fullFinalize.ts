@@ -5,6 +5,7 @@ import {
   MIN_REPRESENTATIVE_QUERY_COUNT,
 } from '../enrichment/representativeQueries.js';
 import { runFullFinalization } from '../finalization/fullFinalizationRun.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -174,9 +175,10 @@ async function main(): Promise<void> {
     return;
   }
   const selectedClusterIds = parseClusterIds(parsed.clusters);
+  const outputRoot = resolveOutputRoot(parsed.outputRoot, process.env);
 
-  await runFullFinalization({
-    outputRoot: resolveOutputRoot(parsed.outputRoot, process.env),
+  await withFinalizationOperatorExecutionLock(outputRoot, parsed.enrichmentId, () => runFullFinalization({
+    outputRoot,
     enrichmentId: parsed.enrichmentId,
     ...(selectedClusterIds === undefined ? {} : { selectedClusterIds }),
     allClusters: parsed.allClusters,
@@ -192,7 +194,7 @@ async function main(): Promise<void> {
     decisionsPath: parsed.decisions,
     publishWithoutDecisions: parsed.publishWithoutDecisions,
     env: process.env,
-  });
+  }));
 }
 
 main()

@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { runTrafficEvidence } from '../finalization/trafficEvidenceRun.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
@@ -101,14 +102,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  await runTrafficEvidence({
-    outputRoot: resolveOutputRoot(args.outputRoot),
+  const outputRoot = resolveOutputRoot(args.outputRoot);
+  await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runTrafficEvidence({
+    outputRoot,
     enrichmentId: args.enrichmentId,
     inputPath: args.inputPath,
     ...(args.lowBaseOrganicTrafficThreshold === undefined
       ? {}
       : { lowBaseOrganicTrafficThreshold: args.lowBaseOrganicTrafficThreshold }),
-  });
+  }));
 }
 
 main()

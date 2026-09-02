@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
 import { runCohortHistory } from '../finalization/cohortHistoryRun.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -115,13 +116,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  await runCohortHistory({
-    outputRoot: resolveOutputRoot(args.outputRoot),
+  const outputRoot = resolveOutputRoot(args.outputRoot);
+  await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runCohortHistory({
+    outputRoot,
     enrichmentId: args.enrichmentId,
     ...(args.youngDomainMaxAgeDays === undefined ? {} : { youngDomainMaxAgeDays: args.youngDomainMaxAgeDays }),
     ...(args.recentWebPresenceMaxAgeDays === undefined ? {} : { recentWebPresenceMaxAgeDays: args.recentWebPresenceMaxAgeDays }),
     ...(args.repurposeGapMinDays === undefined ? {} : { repurposeGapMinDays: args.repurposeGapMinDays }),
-  });
+  }));
 }
 
 main()
