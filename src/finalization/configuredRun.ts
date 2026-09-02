@@ -76,6 +76,20 @@ export async function runConfiguredFinalization(
     return published(publication);
   }
 
+  if (
+    action === null
+    && request.status.finalization.state === 'published'
+    && request.status.library.published
+    && request.status.library.derivedSnapshotsCurrent === false
+  ) {
+    const publication = await deps.runLibraryPublication({
+      outputRoot: request.outputRoot,
+      enrichmentId: request.enrichmentId,
+      logger,
+    });
+    return published(publication);
+  }
+
   if (request.status.finalization.state === 'ready_to_publish' && action === null) {
     const publication = await deps.runLibraryPublication({
       outputRoot: request.outputRoot,

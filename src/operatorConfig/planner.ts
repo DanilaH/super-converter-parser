@@ -13,7 +13,21 @@ export function buildExistingResearchPlan(
   continuation: ResolvedOperatorContinuation | null,
   operatorConfig: PersistedOperatorConfigV1 | null = null,
 ): ExistingResearchExecutionPlan {
-  const plan = buildCoreExistingResearchPlan(status, continuation, operatorConfig);
+  let plan = buildCoreExistingResearchPlan(status, continuation, operatorConfig);
+  if (isLibraryDerivedRepairReady(status, continuation, operatorConfig)) {
+    plan = {
+      ...plan,
+      stages: plan.stages.map((stage) => stage.id === 'finalization'
+        ? {
+            id: 'finalization',
+            state: 'ready',
+            reason: 'Durable Library publication is current, but derived library.json/library.zip snapshots require idempotent repair.',
+          }
+        : stage),
+      expectedStopPoint: 'finalization',
+    };
+  }
+
   if (!isConfiguredDiscoveryResumable(status, operatorConfig)) return plan;
 
   const discoveryStage = plan.stages.find((stage) => stage.id === 'discovery');
@@ -42,6 +56,18 @@ export function buildExistingResearchPlan(
       ...plan.externalWork.filter((work) => work.stage !== 'discovery'),
     ],
   };
+}
+
+function isLibraryDerivedRepairReady(
+  status: ResearchStatusWithHistoricalPresence,
+  continuation: ResolvedOperatorContinuation | null,
+  operatorConfig: PersistedOperatorConfigV1 | null,
+): boolean {
+  return continuation === null
+    && operatorConfig?.semantics.workflow.target === 'finalization'
+    && status.finalization.state === 'published'
+    && status.library.published
+    && status.library.derivedSnapshotsCurrent === false;
 }
 
 function isConfiguredDiscoveryResumable(
