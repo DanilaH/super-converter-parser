@@ -27,6 +27,15 @@ test('operator GUI client is valid JavaScript and keeps human-decision vocabular
   }
 });
 
+test('operator GUI client does not invent human policy thresholds', async () => {
+  const source = await readFile(APP_PATH, 'utf8');
+  for (const policyValue of ['730', '1095', '365']) {
+    assert.equal(source.includes(policyValue), false, `client must obtain policy value ${policyValue} from preset/user input, not source code`);
+  }
+  assert.equal(source.includes("input.value = '100'"), false, 'traffic threshold must require explicit user input');
+  assert.match(source, /if \(raw === ''\) throw new Error\(`\$\{label\} is required\.`\)/);
+});
+
 test('operator GUI client derives config and continuation options from bootstrap schemas', async () => {
   const source = await readFile(APP_PATH, 'utf8');
   assert.match(source, /schemas\.researchConfig/);
