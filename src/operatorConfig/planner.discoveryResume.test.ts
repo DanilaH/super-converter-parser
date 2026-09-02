@@ -121,6 +121,6 @@ test('shortlist continuation is rejected once the current enrichment is already 
       continuation({ type: 'shortlist', path: 'shortlist.csv' }),
       configured('enrichment'),
     ),
-    /shortlist continuation is stale/i,
+    /enrichment evidence scope is immutable after execution advances beyond a resumable state/i,
   );
 });
