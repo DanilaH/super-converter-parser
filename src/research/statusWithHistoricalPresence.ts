@@ -140,7 +140,7 @@ function configFirstNextAction(plan: ExistingResearchExecutionPlan): ResearchNex
     };
   }
   if (finalization.state === 'ready') {
-    if (plan.durableState.libraryPublished && plan.durableState.libraryDerivedSnapshotsCurrent === false) {
+    if (plan.durableState.finalizationState === 'published' && plan.durableState.libraryPublished) {
       return {
         code: 'publish_library',
         message: 'Durable Library publication exists, but derived library.json/library.zip snapshots need idempotent repair.',
