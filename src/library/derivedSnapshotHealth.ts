@@ -121,11 +121,12 @@ function libraryJsonMatches(data: Buffer, expected: PublicationProjection[]): bo
     return false;
   }
   if (!isRecord(parsed)) return false;
-  if (parsed.publicationCount !== expected.length || !Array.isArray(parsed.publications)) return false;
-  if (parsed.publications.length !== expected.length) return false;
+  const publications = parsed.publications;
+  if (parsed.publicationCount !== expected.length || !Array.isArray(publications)) return false;
+  if (publications.length !== expected.length) return false;
 
   return expected.every((row, index) => {
-    const item = parsed.publications[index];
+    const item = publications[index];
     if (!isRecord(item)) return false;
     return item.publicationId === row.publicationId
       && item.snapshotFingerprint === row.snapshotFingerprint
