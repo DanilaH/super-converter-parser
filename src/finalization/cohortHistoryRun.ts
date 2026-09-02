@@ -3,6 +3,7 @@ import { RunStore } from '../db/store.js';
 import {
   entrantCohortFingerprint,
   loadCohortHistoryPolicy,
+  loadCohortHistoryState,
   saveCohortHistorySnapshot,
   type CohortHistorySnapshot,
 } from '../db/cohortHistory.js';
@@ -27,6 +28,7 @@ import {
 import { publishCohortHistoryMetadata } from '../enrichment/cohortHistoryPublication.js';
 import { loadPersistedCohortHistoryRecords } from '../enrichment/cohortHistorySource.js';
 import { assertCohortHistorySourceFreshness } from '../enrichment/cohortHistorySourceFreshness.js';
+import { evidenceSnapshotFingerprint } from '../enrichment/evidenceSnapshotFingerprint.js';
 import { ResearchError } from '../shared/errors.js';
 
 export type CohortHistoryRunRequest = {
@@ -162,6 +164,11 @@ export async function runCohortHistory(
       projections,
     };
     const saveResult = saveCohortHistorySnapshot(enrichmentStore, snapshot);
+    const persistedSnapshot = loadCohortHistoryState(enrichmentStore, request.enrichmentId);
+    if (!persistedSnapshot) {
+      throw new ResearchError('DB_ERROR', `Cohort history snapshot disappeared after save for ${request.enrichmentId}.`);
+    }
+    const snapshotFingerprint = evidenceSnapshotFingerprint(persistedSnapshot);
 
     const domainsPath = join(enrichmentLocation.enrichmentDirectory, 'cohort-history.csv');
     const summaryPath = join(enrichmentLocation.enrichmentDirectory, 'cohort-history-summary.csv');
@@ -204,6 +211,7 @@ export async function runCohortHistory(
       summary: {
         changed: saveResult.changed,
         version: COHORT_HISTORY_PROJECTION_VERSION,
+        snapshotFingerprint,
         entrantRepresentativeRevision: entrant.representativeRevision,
         entrantFingerprint: snapshot.entrantFingerprint,
         finalistClusterCount: projections.length,

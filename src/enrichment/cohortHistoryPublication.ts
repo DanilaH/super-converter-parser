@@ -15,6 +15,7 @@ export const COHORT_HISTORY_ARTIFACTS = [
 export type CohortHistoryPublicationSummary = {
   changed: boolean;
   version: string;
+  snapshotFingerprint: string;
   entrantRepresentativeRevision: number;
   entrantFingerprint: string;
   finalistClusterCount: number;
@@ -203,7 +204,7 @@ function readArray(value: unknown, label: string): unknown[] {
 
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  return value;
+  return value as Record<string, unknown>;
 }
 
 function readString(value: unknown, label: string): string {

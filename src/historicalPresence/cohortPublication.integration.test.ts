@@ -87,6 +87,7 @@ test('changed sampled historical presence removes stale finalist publication bef
     await publishCohortHistoricalPresenceMetadata({
       enrichmentDirectory: directory,
       snapshot,
+      snapshotFingerprint: 'sampled-history-current',
       changed: true,
     });
 
@@ -94,7 +95,7 @@ test('changed sampled historical presence removes stale finalist publication bef
       const published = JSON.parse(await readFile(join(directory, filename), 'utf8')) as {
         artifacts: string[];
         finalistEvidence?: unknown;
-        historicalPresence?: { semantics?: string };
+        historicalPresence?: { semantics?: string; snapshotFingerprint?: string };
       };
       assert.equal('finalistEvidence' in published, false);
       assert.equal(published.artifacts.includes('finalist-evidence-matrix.csv'), false);
@@ -103,6 +104,7 @@ test('changed sampled historical presence removes stale finalist publication bef
         published.historicalPresence?.semantics,
         'bounded_sampled_web_presence_not_exact_first_seen',
       );
+      assert.equal(published.historicalPresence?.snapshotFingerprint, 'sampled-history-current');
     }
     assert.equal(await exists(join(directory, 'finalist-evidence-matrix.csv')), false);
     assert.equal(await exists(join(directory, 'finalist-evidence-matrix.json')), false);

@@ -5,6 +5,7 @@ import { RunStore, type StoredKeyword } from '../db/store.js';
 import { loadRepresentativeQueryState } from '../db/representativeSets.js';
 import { loadEntrantCohortState } from '../db/entrantCohorts.js';
 import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadCohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import { loadTrafficEvidencePolicy, loadTrafficImportRecords } from '../db/trafficEvidence.js';
 import { loadFinalistDecisions } from '../db/finalistDecisions.js';
 import { resolveRunLocation } from '../outputs/researchLayout.js';
@@ -14,6 +15,8 @@ import { isPrimaryRepairEligible } from '../runs/retryFailed.js';
 import { ResearchError } from '../shared/errors.js';
 import { buildResearchLibrarySnapshot } from '../library/researchLibrary.js';
 import { projectCurrentTrafficEvidence } from '../enrichment/trafficEvidenceCurrent.js';
+import { evidenceSnapshotFingerprint } from '../enrichment/evidenceSnapshotFingerprint.js';
+import { isCurrentFinalizationPublication } from '../finalization/finalizationPublicationFreshness.js';
 import { projectDeepEvidenceCoverage, type DeepEvidenceCoverage } from './evidenceCoverage.js';
 
 export type KeywordStatusCounts = {
@@ -310,19 +313,35 @@ async function inspectFinalization(
   try {
     const representatives = loadRepresentativeQueryState(store, enrichment.enrichmentId);
     const entrant = loadEntrantCohortState(store, enrichment.enrichmentId);
+    const cohortHistory = loadCohortHistoryState(store, enrichment.enrichmentId);
+    const historicalPresence = loadCohortHistoricalPresenceState(store, enrichment.enrichmentId);
     const decisions = loadFinalistDecisions(store, enrichment.enrichmentId);
     const manifest = await readManifestArtifacts(enrichmentDirectory);
-    const matrixPublished = manifest.artifacts.has('finalist-evidence-matrix.json');
+    const matrixArtifactPublished = manifest.artifacts.has('finalist-evidence-matrix.json');
+    const entrantFingerprint = entrant === null ? null : entrantCohortFingerprint(entrant);
+    const matrixPublished = matrixArtifactPublished
+      && manifest.manifest !== null
+      && representatives !== null
+      && entrant !== null
+      && isCurrentFinalizationPublication({
+        manifest: manifest.manifest,
+        lineage: {
+          representativeRevision: representatives.revision,
+          entrantRepresentativeRevision: entrant.representativeRevision,
+          entrantFingerprint,
+          cohortHistoryFingerprint: cohortHistory === null ? null : evidenceSnapshotFingerprint(cohortHistory),
+          historicalPresenceFingerprint: historicalPresence === null ? null : evidenceSnapshotFingerprint(historicalPresence),
+        },
+      });
     const finalistIds = representatives?.sets.map((set) => set.clusterId) ?? [];
 
     let currentDecisionCount = 0;
-    if (representatives && entrant) {
-      const fingerprint = entrantCohortFingerprint(entrant);
+    if (representatives && entrant && entrantFingerprint !== null) {
       const currentDecisionIds = new Set(
         decisions
           .filter(
             (decision) => decision.representativeRevision === representatives.revision
-              && decision.entrantFingerprint === fingerprint,
+              && decision.entrantFingerprint === entrantFingerprint,
           )
           .map((decision) => decision.clusterId),
       );
@@ -343,7 +362,11 @@ async function inspectFinalization(
       currentDecisionCount,
       allFinalistsHaveCurrentDecisions: allDecisions,
       finalistMatrixPublished: matrixPublished,
-      artifactWarning: manifest.warning,
+      artifactWarning: manifest.warning ?? (
+        matrixArtifactPublished && !matrixPublished
+          ? 'finalist evidence matrix is stale relative to current durable parent snapshots'
+          : null
+      ),
     };
   } finally {
     store.close();

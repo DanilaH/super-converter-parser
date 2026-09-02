@@ -3,7 +3,11 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { loadEntrantCohortState } from '../db/entrantCohorts.js';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
-import { saveCohortHistoricalPresenceSnapshot } from '../db/cohortHistoricalPresence.js';
+import {
+  loadCohortHistoricalPresenceState,
+  saveCohortHistoricalPresenceSnapshot,
+} from '../db/cohortHistoricalPresence.js';
+import { evidenceSnapshotFingerprint } from '../enrichment/evidenceSnapshotFingerprint.js';
 import {
   archiveResearchDirectory,
   resolveEnrichmentLocation,
@@ -101,6 +105,11 @@ export async function runCohortHistoricalPresence(
       collection,
     };
     const saved = saveCohortHistoricalPresenceSnapshot(store, snapshot);
+    const persistedSnapshot = loadCohortHistoricalPresenceState(store, request.enrichmentId);
+    if (!persistedSnapshot) {
+      throw new ResearchError('DB_ERROR', `Sampled historical-presence snapshot disappeared after save for ${request.enrichmentId}.`);
+    }
+    const snapshotFingerprint = evidenceSnapshotFingerprint(persistedSnapshot);
 
     const csvPath = join(location.enrichmentDirectory, 'cohort-historical-presence.csv');
     const jsonPath = join(location.enrichmentDirectory, 'cohort-historical-presence.json');
@@ -109,6 +118,7 @@ export async function runCohortHistoricalPresence(
     await publishCohortHistoricalPresenceMetadata({
       enrichmentDirectory: location.enrichmentDirectory,
       snapshot,
+      snapshotFingerprint,
       changed: saved.changed,
     });
     await archiveResearchDirectory(location.researchDirectory);

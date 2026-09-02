@@ -1,8 +1,11 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadCohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
+import { RunStore } from '../db/store.js';
 import { writeTextAtomic } from '../runs/run.js';
+import { evidenceSnapshotFingerprint } from './evidenceSnapshotFingerprint.js';
 
 export const FINALIST_EVIDENCE_ARTIFACTS = [
   'finalist-evidence-matrix.csv',
@@ -13,6 +16,8 @@ export type FinalistEvidencePublicationSummary = {
   version: string;
   representativeRevision: number;
   entrantFingerprint: string;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
   finalistCount: number;
   cohortHistoryAvailableCount: number;
   importedTrafficSnapshotCount: number;
@@ -34,13 +39,17 @@ type PublicationContext = {
   status: Record<string, unknown>;
 };
 
-export async function assertFinalistEvidencePublicationParent(input: {
+type FinalistEvidenceParent = {
   enrichmentDirectory: string;
   enrichmentId: string;
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
-}): Promise<void> {
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
+};
+
+export async function assertFinalistEvidencePublicationParent(input: FinalistEvidenceParent): Promise<void> {
   await loadPublicationContext(input);
 }
 
@@ -56,6 +65,8 @@ export async function publishFinalistEvidenceMetadata(input: {
     sourceRunId: input.sourceRunId,
     representativeRevision: input.summary.representativeRevision,
     entrantFingerprint: input.summary.entrantFingerprint,
+    cohortHistoryFingerprint: input.summary.cohortHistoryFingerprint,
+    historicalPresenceFingerprint: input.summary.historicalPresenceFingerprint,
   });
 
   const nextManifest: Record<string, unknown> = {
@@ -143,13 +154,7 @@ export async function invalidateFinalistEvidencePublication(input: {
     rm(join(input.enrichmentDirectory, artifact), { force: true })));
 }
 
-async function loadPublicationContext(input: {
-  enrichmentDirectory: string;
-  enrichmentId: string;
-  sourceRunId: string;
-  representativeRevision: number;
-  entrantFingerprint: string;
-}): Promise<PublicationContext> {
+async function loadPublicationContext(input: FinalistEvidenceParent): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
   const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
@@ -177,6 +182,46 @@ async function loadPublicationContext(input: {
     );
   }
 
+  const deepParents = loadCurrentDeepEvidenceFingerprints(input.enrichmentDirectory, input.enrichmentId);
+  assertExpectedDeepParent(
+    deepParents.cohortHistoryFingerprint,
+    input.cohortHistoryFingerprint,
+    'cohort history',
+  );
+  assertExpectedDeepParent(
+    deepParents.historicalPresenceFingerprint,
+    input.historicalPresenceFingerprint,
+    'sampled historical presence',
+  );
+  assertOptionalPublishedSnapshot(
+    manifest,
+    input.cohortHistoryFingerprint,
+    'cohortHistory',
+    'cohort-history.json',
+    'manifest.json',
+  );
+  assertOptionalPublishedSnapshot(
+    status,
+    input.cohortHistoryFingerprint,
+    'cohortHistory',
+    'cohort-history.json',
+    'status.json',
+  );
+  assertOptionalPublishedSnapshot(
+    manifest,
+    input.historicalPresenceFingerprint,
+    'historicalPresence',
+    'cohort-historical-presence.json',
+    'manifest.json',
+  );
+  assertOptionalPublishedSnapshot(
+    status,
+    input.historicalPresenceFingerprint,
+    'historicalPresence',
+    'cohort-historical-presence.json',
+    'status.json',
+  );
+
   return {
     manifestPath,
     statusPath,
@@ -185,6 +230,35 @@ async function loadPublicationContext(input: {
     manifest,
     status,
   };
+}
+
+function loadCurrentDeepEvidenceFingerprints(
+  enrichmentDirectory: string,
+  enrichmentId: string,
+): { cohortHistoryFingerprint: string | null; historicalPresenceFingerprint: string | null } {
+  const store = RunStore.openReadOnly(join(enrichmentDirectory, 'enrichment.sqlite'));
+  try {
+    const cohortHistory = loadCohortHistoryState(store, enrichmentId);
+    const historicalPresence = loadCohortHistoricalPresenceState(store, enrichmentId);
+    return {
+      cohortHistoryFingerprint: cohortHistory === null ? null : evidenceSnapshotFingerprint(cohortHistory),
+      historicalPresenceFingerprint: historicalPresence === null ? null : evidenceSnapshotFingerprint(historicalPresence),
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function assertExpectedDeepParent(
+  currentFingerprint: string | null,
+  expectedFingerprint: string | null,
+  label: string,
+): void {
+  if (currentFingerprint !== expectedFingerprint) {
+    throw new Error(
+      `Current durable ${label} fingerprint ${currentFingerprint ?? 'missing'} does not match finalist matrix parent ${expectedFingerprint ?? 'missing'}. Rebuild finalist evidence from the current parent generation.`,
+    );
+  }
 }
 
 function fingerprintPublishedEntrant(value: Record<string, unknown>): string {
@@ -223,6 +297,28 @@ function assertEntrantRevision(
   const revision = readInteger(entrant.representativeRevision, `${label} entrantCohort.representativeRevision`);
   if (revision !== expectedRevision) {
     throw new Error(`${label} entrant revision ${revision} does not match current finalist parent ${expectedRevision}`);
+  }
+}
+
+function assertOptionalPublishedSnapshot(
+  value: Record<string, unknown>,
+  expectedFingerprint: string | null,
+  metadataKey: 'cohortHistory' | 'historicalPresence',
+  artifactName: string,
+  label: string,
+): void {
+  const artifacts = readStringArray(value.artifacts, `${label} artifacts`);
+  const metadata = value[metadataKey];
+  if (expectedFingerprint === null) {
+    if (metadata !== undefined || artifacts.includes(artifactName)) {
+      throw new Error(`${label} has stale ${metadataKey} publication state but no current durable parent exists.`);
+    }
+    return;
+  }
+  const published = readRecord(metadata, `${label} ${metadataKey}`);
+  const fingerprint = readString(published.snapshotFingerprint, `${label} ${metadataKey}.snapshotFingerprint`);
+  if (fingerprint !== expectedFingerprint || !artifacts.includes(artifactName)) {
+    throw new Error(`${label} ${metadataKey} snapshot does not match current durable parent ${expectedFingerprint}.`);
   }
 }
 
@@ -271,7 +367,7 @@ function readArray(value: unknown, label: string): unknown[] {
 
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  return value;
+  return value as Record<string, unknown>;
 }
 
 function readString(value: unknown, label: string): string {

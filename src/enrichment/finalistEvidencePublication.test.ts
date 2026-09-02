@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { entrantCohortFingerprint } from '../db/cohortHistory.js';
 import type { EntrantCohortSnapshot } from '../db/entrantCohorts.js';
+import { RunStore } from '../db/store.js';
 import {
   FINALIST_EVIDENCE_ARTIFACTS,
   invalidateFinalistEvidencePublication,
@@ -85,6 +86,8 @@ function summary(parent: EntrantCohortSnapshot): FinalistEvidencePublicationSumm
     version: '1.0.0',
     representativeRevision: parent.representativeRevision,
     entrantFingerprint: entrantCohortFingerprint(parent),
+    cohortHistoryFingerprint: null,
+    historicalPresenceFingerprint: null,
     finalistCount: 1,
     cohortHistoryAvailableCount: 0,
     importedTrafficSnapshotCount: 0,
@@ -99,6 +102,8 @@ function summary(parent: EntrantCohortSnapshot): FinalistEvidencePublicationSumm
 }
 
 async function seed(directory: string, parent: EntrantCohortSnapshot): Promise<void> {
+  const store = RunStore.open(join(directory, 'enrichment.sqlite'));
+  store.close();
   await writeFile(join(directory, 'entrant-cohort.json'), JSON.stringify(parent, null, 2) + '\n');
   const common = {
     enrichmentId: parent.enrichmentId,
@@ -128,6 +133,8 @@ test('finalist publication advertises matrix artifacts only against the matching
       finalistEvidence: FinalistEvidencePublicationSummary;
     };
     assert.equal(manifest.finalistEvidence.entrantFingerprint, entrantCohortFingerprint(parent));
+    assert.equal(manifest.finalistEvidence.cohortHistoryFingerprint, null);
+    assert.equal(manifest.finalistEvidence.historicalPresenceFingerprint, null);
     for (const artifact of FINALIST_EVIDENCE_ARTIFACTS) {
       assert.equal(manifest.artifacts.includes(artifact), true);
     }
@@ -154,6 +161,32 @@ test('stale finalist parent fails before manifest or status mutation', async () 
         summary: { ...summary(parent), entrantFingerprint: '0'.repeat(64) },
       }),
       /does not match current finalist parent/,
+    );
+    assert.equal(await readFile(manifestPath, 'utf8'), originalManifest);
+    assert.equal(await readFile(statusPath, 'utf8'), originalStatus);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('finalist publication refuses to relabel a matrix built from older deep evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finalist-publication-deep-race-'));
+  try {
+    const parent = entrant();
+    await seed(directory, parent);
+    const manifestPath = join(directory, 'manifest.json');
+    const statusPath = join(directory, 'status.json');
+    const originalManifest = await readFile(manifestPath, 'utf8');
+    const originalStatus = await readFile(statusPath, 'utf8');
+
+    await assert.rejects(
+      () => publishFinalistEvidenceMetadata({
+        enrichmentDirectory: directory,
+        enrichmentId: parent.enrichmentId,
+        sourceRunId: parent.sourceRunId,
+        summary: { ...summary(parent), cohortHistoryFingerprint: 'matrix-history-parent' },
+      }),
+      /does not match finalist matrix parent matrix-history-parent/,
     );
     assert.equal(await readFile(manifestPath, 'utf8'), originalManifest);
     assert.equal(await readFile(statusPath, 'utf8'), originalStatus);
