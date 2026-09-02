@@ -1,5 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { loadEntrantCohortState } from '../db/entrantCohorts.js';
+import { loadRepresentativeQueryState } from '../db/representativeSets.js';
+import { RunStore } from '../db/store.js';
 import { resolveEnrichmentLocation } from '../outputs/researchLayout.js';
 import {
   publishResearchToLibrary,
@@ -9,6 +13,7 @@ import { acquirePublishLock } from '../library/publishLock.js';
 import { relinkResearchPublicationHistory } from '../library/researchLineage.js';
 import { acquireResearchBatchLock, readResearchContainer } from '../research/batches.js';
 import { ResearchError } from '../shared/errors.js';
+import { assertCurrentFinalizationPublication } from './finalizationPublicationFreshness.js';
 
 export type LibraryPublicationRunRequest = {
   outputRoot: string;
@@ -47,6 +52,7 @@ export async function runLibraryPublication(
     }
 
     await assertCurrentResearchEnrichment(request.outputRoot, request.enrichmentId);
+    await assertCurrentFinalizationLineage(request.outputRoot, request.enrichmentId);
     releaseLibraryLock = await acquirePublishLock(join(request.outputRoot, RESEARCH_LIBRARY_DIRECTORY));
 
     const first = await publishResearchToLibrary({
@@ -145,5 +151,44 @@ async function assertCurrentResearchEnrichment(
       'INPUT_SCHEMA_ERROR',
       `Enrichment ${enrichmentId} belongs to historical run ${target.sourceRunId}; research ${container.researchId} currently points to ${container.currentRunId}. Run enrichment for the current discovery snapshot before publishing to the library.`,
     );
+  }
+}
+
+async function assertCurrentFinalizationLineage(
+  outputRoot: string,
+  enrichmentId: string,
+): Promise<void> {
+  const location = await resolveEnrichmentLocation(outputRoot, enrichmentId);
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(
+      await readFile(join(location.enrichmentDirectory, 'manifest.json'), 'utf8'),
+    ) as unknown;
+  } catch (error) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Cannot read enrichment manifest for ${enrichmentId}.`,
+      { cause: error },
+    );
+  }
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    throw new ResearchError('OUTPUT_WRITE_ERROR', `Invalid enrichment manifest for ${enrichmentId}.`);
+  }
+
+  const store = RunStore.openReadOnly(join(location.enrichmentDirectory, 'enrichment.sqlite'));
+  try {
+    const representatives = loadRepresentativeQueryState(store, enrichmentId);
+    const entrant = loadEntrantCohortState(store, enrichmentId);
+    assertCurrentFinalizationPublication({
+      manifest: manifest as Record<string, unknown>,
+      lineage: {
+        representativeRevision: representatives?.revision ?? null,
+        entrantRepresentativeRevision: entrant?.representativeRevision ?? null,
+        entrantFingerprint: entrant === null ? null : entrantCohortFingerprint(entrant),
+      },
+      enrichmentId,
+    });
+  } finally {
+    store.close();
   }
 }
