@@ -39,6 +39,7 @@ function historySummary(parent: EntrantCohortSnapshot): CohortHistoryPublication
   return {
     changed: true,
     version: COHORT_HISTORY_PROJECTION_VERSION,
+    snapshotFingerprint: 'history-snapshot-current',
     entrantRepresentativeRevision: parent.representativeRevision,
     entrantFingerprint: entrantCohortFingerprint(parent),
     finalistClusterCount: 0,
