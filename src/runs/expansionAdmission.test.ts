@@ -30,10 +30,10 @@ function build(
   });
 }
 
-test('global budget is bounded and scales with original keyword count', () => {
+test('global budget is bounded and scales proportionally with original keyword count', () => {
   assert.equal(expansionAddedBudget(0), 0);
-  assert.equal(expansionAddedBudget(1), 20);
-  assert.equal(expansionAddedBudget(10), 20);
+  assert.equal(expansionAddedBudget(1), 2);
+  assert.equal(expansionAddedBudget(10), 13);
   assert.equal(expansionAddedBudget(280), 350);
   assert.equal(expansionAddedBudget(400), 500);
   assert.equal(expansionAddedBudget(1000), 500);
@@ -55,6 +55,8 @@ test('single-token related heads are rejected even with strong support and volum
   const specific = result.decisions.find((item) => item.normalizedKeyword === 'compare sheet columns');
   assert.equal(sheets?.selected, false);
   assert.equal(sheets?.reason, 'single_token');
+  assert.equal(sheets?.parentSupport, 3);
+  assert.deepEqual(sheets?.supportingParents, ['compare google sheets', 'merge spreadsheet columns', 'sheet diff tool']);
   assert.equal(specific?.selected, true);
   assert.equal(specific?.parentSupport, 2);
 });
