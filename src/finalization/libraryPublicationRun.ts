@@ -1,9 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { entrantCohortFingerprint } from '../db/cohortHistory.js';
+import { entrantCohortFingerprint, loadCohortHistoryState } from '../db/cohortHistory.js';
+import { loadCohortHistoricalPresenceState } from '../db/cohortHistoricalPresence.js';
 import { loadEntrantCohortState } from '../db/entrantCohorts.js';
 import { loadRepresentativeQueryState } from '../db/representativeSets.js';
 import { RunStore } from '../db/store.js';
+import { evidenceSnapshotFingerprint } from '../enrichment/evidenceSnapshotFingerprint.js';
 import { resolveEnrichmentLocation } from '../outputs/researchLayout.js';
 import {
   publishResearchToLibrary,
@@ -179,12 +181,16 @@ async function assertCurrentFinalizationLineage(
   try {
     const representatives = loadRepresentativeQueryState(store, enrichmentId);
     const entrant = loadEntrantCohortState(store, enrichmentId);
+    const cohortHistory = loadCohortHistoryState(store, enrichmentId);
+    const historicalPresence = loadCohortHistoricalPresenceState(store, enrichmentId);
     assertCurrentFinalizationPublication({
       manifest: manifest as Record<string, unknown>,
       lineage: {
         representativeRevision: representatives?.revision ?? null,
         entrantRepresentativeRevision: entrant?.representativeRevision ?? null,
         entrantFingerprint: entrant === null ? null : entrantCohortFingerprint(entrant),
+        cohortHistoryFingerprint: cohortHistory === null ? null : evidenceSnapshotFingerprint(cohortHistory),
+        historicalPresenceFingerprint: historicalPresence === null ? null : evidenceSnapshotFingerprint(historicalPresence),
       },
       enrichmentId,
     });
