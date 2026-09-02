@@ -208,9 +208,15 @@ function applyPreset(id) {
   const finalization = preset?.finalization;
   elements.overrideFinalization.checked = false;
   elements.representativeCount.value = String(finalization?.representativeCount ?? 5);
-  elements.youngDays.value = String(finalization?.historyPolicy?.youngDomainMaxAgeDays ?? 730);
-  elements.recentDays.value = String(finalization?.historyPolicy?.recentWebPresenceMaxAgeDays ?? 1095);
-  elements.repurposeDays.value = String(finalization?.historyPolicy?.repurposeGapMinDays ?? 365);
+  elements.youngDays.value = finalization?.historyPolicy?.youngDomainMaxAgeDays === undefined
+    ? ''
+    : String(finalization.historyPolicy.youngDomainMaxAgeDays);
+  elements.recentDays.value = finalization?.historyPolicy?.recentWebPresenceMaxAgeDays === undefined
+    ? ''
+    : String(finalization.historyPolicy.recentWebPresenceMaxAgeDays);
+  elements.repurposeDays.value = finalization?.historyPolicy?.repurposeGapMinDays === undefined
+    ? ''
+    : String(finalization.historyPolicy.repurposeGapMinDays);
   elements.collectionMode.value = finalization?.historicalPresence?.collectionMode ?? 'annual';
   elements.recentMonths.value = String(finalization?.historicalPresence?.recentMonths ?? 18);
   elements.maxCollections.value = String(finalization?.historicalPresence?.maxCollections ?? 24);
@@ -598,7 +604,7 @@ function renderContinuationFields(action) {
     input.id = 'traffic-threshold';
     input.type = 'number';
     input.min = '0';
-    input.value = '100';
+    input.placeholder = 'Required human policy value';
     threshold.append(title, input);
     elements.continuationFields.append(threshold);
   }
@@ -822,7 +828,7 @@ function renderPlan(container, plan) {
   if ((plan.externalWork ?? []).length > 0) {
     const work = document.createElement('div');
     work.className = 'human-gates';
-    work.textContent = `External work: ${plan.externalWork.map((item) => item.provider ?? item.type ?? JSON.stringify(item)).join(', ')}`;
+    work.textContent = `External work: ${plan.externalWork.map((item) => item.providers?.join(', ') ?? JSON.stringify(item)).join('; ')}`;
     card.append(work);
   }
 
@@ -950,7 +956,9 @@ function sameArray(left, right) {
 }
 
 function readNumber(input, label) {
-  const value = Number(input?.value);
+  const raw = typeof input?.value === 'string' ? input.value.trim() : '';
+  if (raw === '') throw new Error(`${label} is required.`);
+  const value = Number(raw);
   if (!Number.isFinite(value)) throw new Error(`${label} must be a finite number.`);
   return value;
 }
