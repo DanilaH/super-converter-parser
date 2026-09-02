@@ -400,6 +400,25 @@ async function continueConfiguredWorkflowUnderLock(
     : args.continuation;
   const refreshedPlan = args.deps.buildExistingPlan(refreshedStatus, finalizationContinuation, provenance);
   const refreshedBase = existingMachineResult(refreshedStatus, provenance, refreshedPlan);
+
+  // A cancellation may arrive after the enrichment engine's final cancellation
+  // check but before its durable completion/publication finishes. Honor that
+  // request at the stage boundary without lying about the completed enrichment
+  // or entering finalization/Common Crawl in the same process.
+  if (args.signal.cancelled) {
+    return {
+      exitCode: EXIT_PAUSED,
+      result: {
+        ...refreshedBase,
+        exitCode: EXIT_PAUSED,
+        enrichmentId: configured.enrichmentId,
+        enrichmentState: configured.outcome.state,
+        workflowState: 'awaiting_finalization',
+        stopPoint: 'finalization',
+      },
+    };
+  }
+
   return advanceConfiguredFinalization(
     { ...args, continuation: finalizationContinuation },
     outputRoot,
