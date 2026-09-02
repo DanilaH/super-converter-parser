@@ -196,13 +196,24 @@ async function readExactly(
   }
 }
 
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let value = n;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[n] = value >>> 0;
+  }
+  return table;
+})();
+
 function crc32(data: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of data) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc & 1) === 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
-    }
+    const tableValue = CRC_TABLE[(crc ^ byte) & 0xff];
+    if (tableValue === undefined) throw new Error('CRC table lookup failed');
+    crc = tableValue ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
