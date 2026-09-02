@@ -41,43 +41,65 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: resolvePromise };
 }
 
-test('new-research GUI draft cannot be double-submitted and is consumed after durable research identity exists', async () => {
+async function planQuickScan(service: OperatorGuiService, label: string): Promise<string> {
+  const planned = await service.planNew({
+    version: 1,
+    preset: 'quick-scan',
+    research: {
+      label,
+      input: { type: 'seeds', path: 'input/seeds.csv' },
+    },
+  }, { 'input/seeds.csv': `keyword\n${label}\n` });
+  assert.ok(planned.draftId);
+  return planned.draftId;
+}
+
+test('GUI serializes all research execution and consumes a successful new-research draft', async () => {
   const root = await mkdtemp(join(tmpdir(), 'operator-gui-double-submit-'));
   const draftRoot = join(root, 'drafts');
   await mkdir(draftRoot, { recursive: true });
 
   const runStarted = deferred();
   const gate = deferred();
+  let executions = 0;
 
   const service = new OperatorGuiService({
     outputRoot: join(root, 'output'),
     draftRoot,
     deps: {
       runNew: async () => {
+        executions += 1;
         runStarted.resolve();
         await gate.promise;
-        return completedExecution('research-1');
+        return completedExecution(`research-${executions}`);
       },
     },
   });
 
-  const planned = await service.planNew({
-    version: 1,
-    preset: 'quick-scan',
-    research: {
-      label: 'double-submit',
-      input: { type: 'seeds', path: 'input/seeds.csv' },
-    },
-  }, { 'input/seeds.csv': 'keyword\njson formatter\n' });
-  assert.ok(planned.draftId);
+  const firstDraft = await planQuickScan(service, 'first');
+  const secondDraft = await planQuickScan(service, 'second');
 
-  const first = service.runNew(planned.draftId);
+  const first = service.runNew(firstDraft);
   await runStarted.promise;
-  await assert.rejects(service.runNew(planned.draftId), /already executing/);
+
+  await assert.rejects(
+    service.runNew(firstDraft),
+    /Another research execution is already active through this GUI/,
+  );
+  await assert.rejects(
+    service.runNew(secondDraft),
+    /Another research execution is already active through this GUI/,
+  );
+  assert.equal(executions, 1, 'a second research executor must not start while the first is active');
+
   gate.resolve();
   const result = await first;
   assert.equal(result.result.researchId, 'research-1');
-  await assert.rejects(service.runNew(planned.draftId), /Unknown or incompatible GUI draft/);
+  await assert.rejects(service.runNew(firstDraft), /Unknown or incompatible GUI draft/);
+
+  const second = await service.runNew(secondDraft);
+  assert.equal(second.result.researchId, 'research-2');
+  assert.equal(executions, 2);
 
   await service.close();
 });
