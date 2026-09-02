@@ -16,6 +16,8 @@ export type FinalistEvidencePublicationSummary = {
   version: string;
   representativeRevision: number;
   entrantFingerprint: string;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
   finalistCount: number;
   cohortHistoryAvailableCount: number;
   importedTrafficSnapshotCount: number;
@@ -35,17 +37,19 @@ type PublicationContext = {
   originalStatus: string;
   manifest: Record<string, unknown>;
   status: Record<string, unknown>;
-  cohortHistoryFingerprint: string | null;
-  historicalPresenceFingerprint: string | null;
 };
 
-export async function assertFinalistEvidencePublicationParent(input: {
+type FinalistEvidenceParent = {
   enrichmentDirectory: string;
   enrichmentId: string;
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
-}): Promise<void> {
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
+};
+
+export async function assertFinalistEvidencePublicationParent(input: FinalistEvidenceParent): Promise<void> {
   await loadPublicationContext(input);
 }
 
@@ -61,12 +65,9 @@ export async function publishFinalistEvidenceMetadata(input: {
     sourceRunId: input.sourceRunId,
     representativeRevision: input.summary.representativeRevision,
     entrantFingerprint: input.summary.entrantFingerprint,
+    cohortHistoryFingerprint: input.summary.cohortHistoryFingerprint,
+    historicalPresenceFingerprint: input.summary.historicalPresenceFingerprint,
   });
-  const publishedSummary = {
-    ...input.summary,
-    cohortHistoryFingerprint: context.cohortHistoryFingerprint,
-    historicalPresenceFingerprint: context.historicalPresenceFingerprint,
-  };
 
   const nextManifest: Record<string, unknown> = {
     ...context.manifest,
@@ -74,7 +75,7 @@ export async function publishFinalistEvidenceMetadata(input: {
       ...readStringArray(context.manifest.artifacts, 'manifest.json artifacts'),
       ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    finalistEvidence: publishedSummary,
+    finalistEvidence: input.summary,
   };
   const nextStatus: Record<string, unknown> = {
     ...context.status,
@@ -82,7 +83,7 @@ export async function publishFinalistEvidenceMetadata(input: {
       ...readStringArray(context.status.artifacts, 'status.json artifacts'),
       ...FINALIST_EVIDENCE_ARTIFACTS,
     ]),
-    finalistEvidence: publishedSummary,
+    finalistEvidence: input.summary,
   };
 
   await writeTextAtomic(
@@ -153,13 +154,7 @@ export async function invalidateFinalistEvidencePublication(input: {
     rm(join(input.enrichmentDirectory, artifact), { force: true })));
 }
 
-async function loadPublicationContext(input: {
-  enrichmentDirectory: string;
-  enrichmentId: string;
-  sourceRunId: string;
-  representativeRevision: number;
-  entrantFingerprint: string;
-}): Promise<PublicationContext> {
+async function loadPublicationContext(input: FinalistEvidenceParent): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
   const entrantPath = join(input.enrichmentDirectory, 'entrant-cohort.json');
@@ -188,30 +183,40 @@ async function loadPublicationContext(input: {
   }
 
   const deepParents = loadCurrentDeepEvidenceFingerprints(input.enrichmentDirectory, input.enrichmentId);
+  assertExpectedDeepParent(
+    deepParents.cohortHistoryFingerprint,
+    input.cohortHistoryFingerprint,
+    'cohort history',
+  );
+  assertExpectedDeepParent(
+    deepParents.historicalPresenceFingerprint,
+    input.historicalPresenceFingerprint,
+    'sampled historical presence',
+  );
   assertOptionalPublishedSnapshot(
     manifest,
-    deepParents.cohortHistoryFingerprint,
+    input.cohortHistoryFingerprint,
     'cohortHistory',
     'cohort-history.json',
     'manifest.json',
   );
   assertOptionalPublishedSnapshot(
     status,
-    deepParents.cohortHistoryFingerprint,
+    input.cohortHistoryFingerprint,
     'cohortHistory',
     'cohort-history.json',
     'status.json',
   );
   assertOptionalPublishedSnapshot(
     manifest,
-    deepParents.historicalPresenceFingerprint,
+    input.historicalPresenceFingerprint,
     'historicalPresence',
     'cohort-historical-presence.json',
     'manifest.json',
   );
   assertOptionalPublishedSnapshot(
     status,
-    deepParents.historicalPresenceFingerprint,
+    input.historicalPresenceFingerprint,
     'historicalPresence',
     'cohort-historical-presence.json',
     'status.json',
@@ -224,7 +229,6 @@ async function loadPublicationContext(input: {
     originalStatus,
     manifest,
     status,
-    ...deepParents,
   };
 }
 
@@ -242,6 +246,18 @@ function loadCurrentDeepEvidenceFingerprints(
     };
   } finally {
     store.close();
+  }
+}
+
+function assertExpectedDeepParent(
+  currentFingerprint: string | null,
+  expectedFingerprint: string | null,
+  label: string,
+): void {
+  if (currentFingerprint !== expectedFingerprint) {
+    throw new Error(
+      `Current durable ${label} fingerprint ${currentFingerprint ?? 'missing'} does not match finalist matrix parent ${expectedFingerprint ?? 'missing'}. Rebuild finalist evidence from the current parent generation.`,
+    );
   }
 }
 
