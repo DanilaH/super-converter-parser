@@ -27,6 +27,7 @@ import {
   invalidateFinalistEvidencePublication,
   publishFinalistEvidenceMetadata,
 } from '../enrichment/finalistEvidencePublication.js';
+import { evidenceSnapshotFingerprint } from '../enrichment/evidenceSnapshotFingerprint.js';
 import type { SiteStructureRecord } from '../enrichment/site_structure/types.js';
 import { projectCurrentTrafficEvidence } from '../enrichment/trafficEvidenceCurrent.js';
 import {
@@ -146,6 +147,10 @@ export async function runFinalistEvidence(
     const historyState = loadCohortHistoryState(enrichmentStore, request.enrichmentId);
     const history = historyState?.projections ?? null;
     const sampledHistoricalPresence = loadCohortHistoricalPresenceState(enrichmentStore, request.enrichmentId);
+    const cohortHistoryFingerprint = historyState === null ? null : evidenceSnapshotFingerprint(historyState);
+    const historicalPresenceFingerprint = sampledHistoricalPresence === null
+      ? null
+      : evidenceSnapshotFingerprint(sampledHistoricalPresence);
 
     const trafficImports = loadTrafficImportRecords(enrichmentStore, request.enrichmentId);
     const trafficPolicy = loadTrafficEvidencePolicy(enrichmentStore, request.enrichmentId);
@@ -206,6 +211,8 @@ export async function runFinalistEvidence(
           sourceRunId: enrichment.sourceRunId,
           representativeRevision: representatives.revision,
           entrantFingerprint,
+          cohortHistoryFingerprint,
+          historicalPresenceFingerprint,
         });
       } catch (error) {
         throw inputError(error);
@@ -232,6 +239,8 @@ export async function runFinalistEvidence(
         sourceRunId: enrichment.sourceRunId,
         representativeRevision: representatives.revision,
         entrantFingerprint,
+        cohortHistoryFingerprint,
+        historicalPresenceFingerprint,
       });
     } catch (error) {
       throw inputError(error);
@@ -275,6 +284,8 @@ export async function runFinalistEvidence(
         version: FINALIST_EVIDENCE_WITH_SAMPLED_HISTORY_VERSION,
         representativeRevision: representatives.revision,
         entrantFingerprint,
+        cohortHistoryFingerprint,
+        historicalPresenceFingerprint,
         finalistCount: matrix.finalistCount,
         cohortHistoryAvailableCount,
         importedTrafficSnapshotCount: trafficImports.length,
