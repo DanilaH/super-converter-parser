@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { runLibraryPublication } from '../finalization/libraryPublicationRun.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -69,10 +70,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    await runLibraryPublication({
-      outputRoot: resolveOutputRoot(args.outputRoot, process.env),
+    const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
+    await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runLibraryPublication({
+      outputRoot,
       enrichmentId: args.enrichmentId,
-    });
+    }));
   } catch (error) {
     if (error instanceof ResearchError) {
       console.error(`${error.code}: ${error.message}`);
