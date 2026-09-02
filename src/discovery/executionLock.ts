@@ -22,7 +22,9 @@ export async function acquireDiscoveryExecutionLock(
 ): Promise<() => Promise<void>> {
   const lockDirectory = join(tmpdir(), DISCOVERY_LOCK_DIRECTORY);
   await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
-  const rootKey = createHash('sha256').update(resolve(outputRoot)).digest('hex');
+  const absoluteRoot = resolve(outputRoot);
+  const lockIdentity = process.platform === 'win32' ? absoluteRoot.toLowerCase() : absoluteRoot;
+  const rootKey = createHash('sha256').update(lockIdentity).digest('hex');
   const lockPath = join(lockDirectory, `discovery-${rootKey}.sqlite`);
   let db: Database.Database | null = null;
   try {
@@ -53,7 +55,7 @@ export async function acquireDiscoveryExecutionLock(
     }
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Failed to acquire discovery execution lock for output root ${resolve(outputRoot)}.`,
+      `Failed to acquire discovery execution lock for output root ${absoluteRoot}.`,
       { cause: error },
     );
   }
@@ -61,7 +63,7 @@ export async function acquireDiscoveryExecutionLock(
   if (db === null) {
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Failed to initialize discovery execution lock for output root ${resolve(outputRoot)}.`,
+      `Failed to initialize discovery execution lock for output root ${absoluteRoot}.`,
     );
   }
 
