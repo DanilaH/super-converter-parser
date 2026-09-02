@@ -6,12 +6,17 @@ import {
   projectSampledHistoricalPresenceCoverage,
   type SampledHistoricalPresenceCoverage,
 } from '../historicalPresence/evidenceProjection.js';
+import { inspectResearchLibraryDerivedSnapshots } from '../library/derivedSnapshotHealth.js';
 import { buildExistingResearchPlan, type ExistingResearchExecutionPlan } from '../operatorConfig/planner.js';
 import { readOperatorConfigProvenance } from '../operatorConfig/provenance.js';
 import { buildResearchStatus, type ResearchNextAction, type ResearchStatus } from './status.js';
 
-export type ResearchStatusWithHistoricalPresence = Omit<ResearchStatus, 'version'> & {
+export type ResearchStatusWithHistoricalPresence = Omit<ResearchStatus, 'version' | 'library'> & {
   version: '1.2.0';
+  library: ResearchStatus['library'] & {
+    derivedSnapshotsCurrent: boolean | null;
+    derivedSnapshotWarning: string | null;
+  };
   sampledHistoricalPresence: SampledHistoricalPresenceCoverage | null;
 };
 
@@ -45,9 +50,17 @@ export async function buildResearchStatusWithHistoricalPresence(input: {
     }
   }
 
+  const derivedHealth = !base.legacy && base.library.published
+    ? await inspectResearchLibraryDerivedSnapshots(input.outputRoot)
+    : null;
   const projected: ResearchStatusWithHistoricalPresence = {
     ...base,
     version: '1.2.0',
+    library: {
+      ...base.library,
+      derivedSnapshotsCurrent: derivedHealth?.current ?? null,
+      derivedSnapshotWarning: derivedHealth?.warning ?? null,
+    },
     sampledHistoricalPresence,
   };
   if (projected.legacy) return projected;
@@ -127,6 +140,13 @@ function configFirstNextAction(plan: ExistingResearchExecutionPlan): ResearchNex
     };
   }
   if (finalization.state === 'ready') {
+    if (plan.durableState.libraryPublished && plan.durableState.libraryDerivedSnapshotsCurrent === false) {
+      return {
+        code: 'publish_library',
+        message: 'Durable Library publication exists, but derived library.json/library.zip snapshots need idempotent repair.',
+        command: stableRunCommand,
+      };
+    }
     if (plan.durableState.finalizationState === 'ready_to_publish') {
       return {
         code: 'publish_library',
