@@ -91,7 +91,7 @@ export function buildExistingResearchPlan(
   const configuredEnrichmentResumable = currentEnrichment !== null
     && operatorConfig !== null
     && wantsEnrichment
-    && ['created', 'paused', 'failed'].includes(currentEnrichment.state);
+    && ['created', 'paused', 'failed', 'running'].includes(currentEnrichment.state);
   const configuredFinalizationResumable = operatorConfig !== null
     && wantsFinalization
     && status.finalization.state === 'in_progress'
@@ -111,9 +111,7 @@ export function buildExistingResearchPlan(
           : {
               id: 'enrichment',
               state: 'blocked',
-              reason: currentEnrichment.state === 'running'
-                ? 'Current enrichment is running and may still be active; config-driven execution will not start a concurrent enrichment.'
-                : `Current enrichment is ${currentEnrichment.state}; config-driven resume requires persisted OperatorConfig enrichment intent.`,
+              reason: `Current enrichment is ${currentEnrichment.state}; config-driven resume requires persisted OperatorConfig enrichment intent.`,
             }
         : operatorConfig === null
           ? { id: 'enrichment', state: 'blocked', reason: 'This existing research has no persisted OperatorConfig; downstream enrichment intent cannot be reconstructed safely.' }
