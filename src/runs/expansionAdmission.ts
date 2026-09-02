@@ -5,7 +5,6 @@ export const EXPANSION_ADMISSION_VERSION = 'v1' as const;
 export const EXPANSION_ADMISSION_POLICY_V1 = {
   minCandidateTokens: 2,
   maxAddedRatio: 1.25,
-  minAddedBudget: 20,
   maxAddedBudget: 500,
   strongParentSupport: 2,
   highParentSupport: 3,
@@ -75,13 +74,9 @@ export function expansionAddedBudget(originalKeywordCount: number): number {
   if (!Number.isInteger(originalKeywordCount) || originalKeywordCount < 0) {
     throw new Error(`originalKeywordCount must be a non-negative integer, got ${originalKeywordCount}`);
   }
-  if (originalKeywordCount === 0) return 0;
   return Math.min(
     EXPANSION_ADMISSION_POLICY_V1.maxAddedBudget,
-    Math.max(
-      EXPANSION_ADMISSION_POLICY_V1.minAddedBudget,
-      Math.ceil(originalKeywordCount * EXPANSION_ADMISSION_POLICY_V1.maxAddedRatio),
-    ),
+    Math.ceil(originalKeywordCount * EXPANSION_ADMISSION_POLICY_V1.maxAddedRatio),
   );
 }
 
