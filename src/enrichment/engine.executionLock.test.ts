@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { RunStore } from '../db/store.js';
 import { ResearchError } from '../shared/errors.js';
-import { runEnrichment, type EnrichmentOptions } from './engine.js';
+import type { EnrichmentOptions } from './engine.js';
 import { acquireEnrichmentExecutionLock } from './executionLock.js';
+import { runEnrichmentLocked } from './runLocked.js';
 
 function blockedOptions(
   enrichmentStore: RunStore,
@@ -50,7 +51,7 @@ function blockedOptions(
   };
 }
 
-test('runEnrichment rejects a live concurrent generation before mutating durable state', async () => {
+test('runEnrichmentLocked rejects a live concurrent generation before mutating durable state', async () => {
   const root = await mkdtemp(join(tmpdir(), 'enrichment-engine-lock-'));
   const enrichmentDirectory = join(root, 'enrichment');
   const enrichmentStore = RunStore.openInMemory();
@@ -58,7 +59,7 @@ test('runEnrichment rejects a live concurrent generation before mutating durable
 
   try {
     await assert.rejects(
-      runEnrichment(blockedOptions(enrichmentStore, enrichmentDirectory)),
+      runEnrichmentLocked(blockedOptions(enrichmentStore, enrichmentDirectory)),
       (error: unknown) => error instanceof ResearchError
         && error.code === 'OUTPUT_WRITE_ERROR'
         && /already running/i.test(error.message),
