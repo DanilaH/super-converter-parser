@@ -90,7 +90,7 @@ export class OperatorGuiService {
   private readonly deps: GuiServiceDeps;
   private readonly drafts = new Map<string, StoredDraft>();
   private readonly inFlightDrafts = new Set<string>();
-  private readonly inFlightResearches = new Set<string>();
+  private activeExecution: string | null = null;
 
   constructor(input: {
     outputRoot: string;
@@ -127,7 +127,7 @@ export class OperatorGuiService {
   async close(): Promise<void> {
     this.drafts.clear();
     this.inFlightDrafts.clear();
-    this.inFlightResearches.clear();
+    this.activeExecution = null;
     await rm(this.draftRoot, { recursive: true, force: true });
   }
 
@@ -162,15 +162,19 @@ export class OperatorGuiService {
   }
 
   async runNew(draftId: string): Promise<ResearchRunExecution> {
-    const draft = this.beginDraft(draftId, 'new');
+    this.beginExecution(`new research draft ${draftId}`);
+    let draft: Extract<StoredDraft, { kind: 'new' }> | null = null;
     try {
+      draft = this.beginDraft(draftId, 'new');
       const result = await this.deps.runNew(draft.path, this.outputRoot, this.env);
       if (result.result.researchId !== null) await this.consumeDraft(draftId, draft);
       else this.inFlightDrafts.delete(draftId);
       return result;
     } catch (error) {
-      this.inFlightDrafts.delete(draftId);
+      if (draft !== null) this.inFlightDrafts.delete(draftId);
       throw error;
+    } finally {
+      this.endExecution();
     }
   }
 
@@ -242,28 +246,26 @@ export class OperatorGuiService {
   }
 
   async runExisting(researchId: string, draftId: string | null): Promise<ResearchRunExecution> {
-    if (this.inFlightResearches.has(researchId)) {
-      throw new ResearchError('INPUT_SCHEMA_ERROR', `Research ${researchId} is already executing through this GUI.`);
-    }
-    const draft = draftId === null ? null : this.beginDraft(draftId, 'continuation');
-    if (draft !== null && draft.researchId !== researchId) {
-      this.inFlightDrafts.delete(draftId as string);
-      throw new ResearchError(
-        'INPUT_SCHEMA_ERROR',
-        `GUI continuation draft targets research ${draft.researchId}, not ${researchId}.`,
-      );
-    }
-
-    this.inFlightResearches.add(researchId);
+    this.beginExecution(`research ${researchId}`);
+    let draft: Extract<StoredDraft, { kind: 'continuation' }> | null = null;
     try {
+      draft = draftId === null ? null : this.beginDraft(draftId, 'continuation');
+      if (draft !== null && draft.researchId !== researchId) {
+        this.inFlightDrafts.delete(draftId as string);
+        throw new ResearchError(
+          'INPUT_SCHEMA_ERROR',
+          `GUI continuation draft targets research ${draft.researchId}, not ${researchId}.`,
+        );
+      }
+
       const result = await this.deps.runExisting(researchId, draft?.path ?? null, this.outputRoot, this.env);
       if (draft !== null && draftId !== null) await this.consumeDraft(draftId, draft);
       return result;
     } catch (error) {
-      if (draftId !== null) this.inFlightDrafts.delete(draftId);
+      if (draft !== null && draftId !== null) this.inFlightDrafts.delete(draftId);
       throw error;
     } finally {
-      this.inFlightResearches.delete(researchId);
+      this.endExecution();
     }
   }
 
@@ -286,6 +288,20 @@ export class OperatorGuiService {
       b.discovery.updatedAt.localeCompare(a.discovery.updatedAt) || a.researchId.localeCompare(b.researchId),
     );
     return { researches, errors };
+  }
+
+  private beginExecution(label: string): void {
+    if (this.activeExecution !== null) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `Another research execution is already active through this GUI (${this.activeExecution}).`,
+      );
+    }
+    this.activeExecution = label;
+  }
+
+  private endExecution(): void {
+    this.activeExecution = null;
   }
 
   private beginDraft<T extends StoredDraft['kind']>(
