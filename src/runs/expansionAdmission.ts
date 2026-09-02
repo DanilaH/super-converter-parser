@@ -69,7 +69,6 @@ type RankedCandidate = {
   maxVolume: number | null;
   broadeningOnly: boolean;
   supportingParents: string[];
-  occurrences: CandidateOccurrence[];
 };
 
 export function expansionAddedBudget(originalKeywordCount: number): number {
@@ -116,24 +115,25 @@ export function buildExpansionAdmission(input: {
   const fixedDecisions: ExpansionAdmissionDecision[] = [];
 
   for (const [normalizedKeyword, rawRows] of rawByCandidate) {
-    const representative = bestOccurrence(rawRows.map(toCandidateOccurrence));
-    const tokenCount = keywordTokens(normalizedKeyword).length;
+    const rawOccurrences = rawRows.map(toCandidateOccurrence);
+    const rawCandidate = rankCandidate(rawOccurrences);
     if (originals.has(normalizedKeyword)) {
-      fixedDecisions.push(rejected(representative, 'existing_keyword'));
+      fixedDecisions.push(rejected(rawCandidate, 'existing_keyword'));
       continue;
     }
-    if (tokenCount < EXPANSION_ADMISSION_POLICY_V1.minCandidateTokens) {
-      fixedDecisions.push(rejected(representative, 'single_token'));
+    if (rawCandidate.tokenCount < EXPANSION_ADMISSION_POLICY_V1.minCandidateTokens) {
+      fixedDecisions.push(rejected(rawCandidate, 'single_token'));
       continue;
     }
     const thresholdRows = thresholdByCandidate.get(normalizedKeyword) ?? [];
     if (thresholdRows.length === 0) {
-      fixedDecisions.push(rejected(representative, 'below_min_signal'));
+      fixedDecisions.push(rejected(rawCandidate, 'below_min_signal'));
       continue;
     }
+    const thresholdCandidate = rankCandidate(thresholdRows);
     const eligibleRows = eligibleByCandidate.get(normalizedKeyword) ?? [];
     if (eligibleRows.length === 0) {
-      fixedDecisions.push(rejected(representative, 'parent_cap'));
+      fixedDecisions.push(rejected(thresholdCandidate, 'parent_cap'));
       continue;
     }
     ranked.push(rankCandidate(eligibleRows));
@@ -143,15 +143,7 @@ export function buildExpansionAdmission(input: {
   const budget = expansionAddedBudget(originals.size);
   const selected = new Set(ranked.slice(0, budget).map((candidate) => candidate.normalizedKeyword));
   const rankedDecisions = ranked.map((candidate): ExpansionAdmissionDecision => ({
-    keyword: candidate.keyword,
-    normalizedKeyword: candidate.normalizedKeyword,
-    tokenCount: candidate.tokenCount,
-    parentSupport: candidate.parentSupport,
-    parentSupportTier: candidate.parentSupportTier,
-    bestOverlap: candidate.bestOverlap,
-    maxVolume: candidate.maxVolume,
-    broadeningOnly: candidate.broadeningOnly,
-    supportingParents: candidate.supportingParents,
+    ...candidate,
     selected: selected.has(candidate.normalizedKeyword),
     reason: selected.has(candidate.normalizedKeyword) ? 'selected' : 'global_budget',
   }));
@@ -227,7 +219,7 @@ function applyPerParentCap(
 
 function rankCandidate(rows: CandidateOccurrence[]): RankedCandidate {
   const representative = bestOccurrence(rows);
-  const parents = [...new Map(rows.map((row) => [row.parentIdx, row.normalizedParent])).values()].sort();
+  const supportingParents = [...new Map(rows.map((row) => [row.parentIdx, row.normalizedParent])).values()].sort();
   const tokenCount = keywordTokens(representative.normalizedKeyword).length;
   const parentSupport = new Set(rows.map((row) => row.parentIdx)).size;
   const candidateTokenSet = new Set(keywordTokens(representative.normalizedKeyword));
@@ -248,8 +240,7 @@ function rankCandidate(rows: CandidateOccurrence[]): RankedCandidate {
     bestOverlap: maxNullable(rows.map((row) => row.overlap)),
     maxVolume: maxNullable(rows.map((row) => row.volume)),
     broadeningOnly,
-    supportingParents: parents,
-    occurrences: rows,
+    supportingParents,
   };
 }
 
@@ -297,17 +288,12 @@ function passesMinimumSignal(row: CandidateOccurrence, minOverlap: number, minVo
     && (minVolume === 0 || (row.volume ?? 0) >= minVolume);
 }
 
-function rejected(row: CandidateOccurrence, reason: Exclude<ExpansionAdmissionReason, 'selected' | 'global_budget'>): ExpansionAdmissionDecision {
+function rejected(
+  candidate: RankedCandidate,
+  reason: Exclude<ExpansionAdmissionReason, 'selected' | 'global_budget'>,
+): ExpansionAdmissionDecision {
   return {
-    keyword: row.relatedKeyword,
-    normalizedKeyword: row.normalizedKeyword,
-    tokenCount: row.tokenCount,
-    parentSupport: 0,
-    parentSupportTier: 0,
-    bestOverlap: row.overlap,
-    maxVolume: row.volume,
-    broadeningOnly: false,
-    supportingParents: [],
+    ...candidate,
     selected: false,
     reason,
   };
