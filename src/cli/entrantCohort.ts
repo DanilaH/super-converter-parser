@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { loadDotEnv } from '../config/env.js';
 import { runEntrantCohort } from '../finalization/entrantCohortRun.js';
+import { withFinalizationOperatorExecutionLock } from '../finalization/operatorExecutionLock.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -69,10 +70,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  await runEntrantCohort({
-    outputRoot: resolveOutputRoot(args.outputRoot),
+  const outputRoot = resolveOutputRoot(args.outputRoot);
+  await withFinalizationOperatorExecutionLock(outputRoot, args.enrichmentId, () => runEntrantCohort({
+    outputRoot,
     enrichmentId: args.enrichmentId,
-  });
+  }));
 }
 
 main()
