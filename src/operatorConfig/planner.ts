@@ -370,8 +370,16 @@ function validateContinuationAgainstDurableState(
       );
     }
   }
-  if (action === 'publication_override' && !status.finalization.finalistMatrixPublished) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', 'A publication override requires a current finalist evidence matrix.');
+  if (action === 'publication_override') {
+    if (!status.finalization.finalistMatrixPublished) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', 'A publication override requires a current finalist evidence matrix.');
+    }
+    if (!['awaiting_decisions', 'ready_to_publish', 'published'].includes(status.finalization.state)) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        'A publication override requires a current finalist evidence matrix with current entrant lineage; resume finalization first.',
+      );
+    }
   }
 }
 
