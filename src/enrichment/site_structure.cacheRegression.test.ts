@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -128,6 +128,7 @@ async function runSiteStructure(input: {
 }) {
   const source = createSourceStore(input.runId, input.prefix, input.bestPosition);
   const enrichmentDirectory = join(input.root, input.enrichmentId);
+  await mkdir(enrichmentDirectory, { recursive: true });
   const enrichmentStore = RunStore.open(join(enrichmentDirectory, 'enrichment.sqlite'));
   try {
     return await runEnrichment({
