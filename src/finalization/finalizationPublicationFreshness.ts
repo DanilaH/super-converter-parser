@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { ResearchError } from '../shared/errors.js';
 
 const REQUIRED_FINALIZATION_ARTIFACTS = [
@@ -14,11 +13,6 @@ export type FinalizationPublicationLineage = {
   cohortHistoryFingerprint: string | null;
   historicalPresenceFingerprint: string | null;
 };
-
-export function finalizationParentFingerprint<T extends { updatedAt: string }>(state: T): string {
-  const { updatedAt: _updatedAt, ...snapshot } = state;
-  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
-}
 
 export function isCurrentFinalizationPublication(input: {
   manifest: Record<string, unknown>;
