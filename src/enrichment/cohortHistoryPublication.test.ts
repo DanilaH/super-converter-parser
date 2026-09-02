@@ -26,6 +26,7 @@ const entrant: EntrantCohortSnapshot = {
 const summary: CohortHistoryPublicationSummary = {
   changed: true,
   version: COHORT_HISTORY_PROJECTION_VERSION,
+  snapshotFingerprint: 'cohort-history-current',
   entrantRepresentativeRevision: 2,
   entrantFingerprint: entrantCohortFingerprint(entrant),
   finalistClusterCount: 1,
