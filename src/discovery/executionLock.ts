@@ -1,12 +1,15 @@
+import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { ResearchError } from '../shared/errors.js';
 
-const DISCOVERY_LOCK_DB_FILE = 'discovery-execution.sqlite';
+const DISCOVERY_LOCK_DIRECTORY = 'super-converter-parser-locks';
 
 /**
- * Serialize discovery execution for one durable output root.
+ * Serialize discovery execution for one durable output root without mutating
+ * that output root before the discovery core accepts its inputs.
  *
  * Discovery uses shared browser/provider resources and resume recovery resets
  * persisted `running` keyword checkpoints to `pending`. Without one execution
@@ -17,12 +20,13 @@ const DISCOVERY_LOCK_DB_FILE = 'discovery-execution.sqlite';
 export async function acquireDiscoveryExecutionLock(
   outputRoot: string,
 ): Promise<() => Promise<void>> {
-  const lockDirectory = join(outputRoot, 'index', 'locks');
-  await mkdir(lockDirectory, { recursive: true });
-  const lockPath = join(lockDirectory, DISCOVERY_LOCK_DB_FILE);
+  const lockDirectory = join(tmpdir(), DISCOVERY_LOCK_DIRECTORY);
+  await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+  const rootKey = createHash('sha256').update(resolve(outputRoot)).digest('hex');
+  const lockPath = join(lockDirectory, `discovery-${rootKey}.sqlite`);
   let db: Database.Database | null = null;
   try {
-    db = new Database(lockPath);
+    db = new Database(lockPath, { timeout: 250 });
     db.pragma('journal_mode = DELETE');
     db.pragma('busy_timeout = 250');
     db.exec(`
@@ -49,13 +53,16 @@ export async function acquireDiscoveryExecutionLock(
     }
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Failed to acquire discovery execution lock: ${lockPath}`,
+      `Failed to acquire discovery execution lock for output root ${resolve(outputRoot)}.`,
       { cause: error },
     );
   }
 
   if (db === null) {
-    throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to initialize discovery execution lock: ${lockPath}`);
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Failed to initialize discovery execution lock for output root ${resolve(outputRoot)}.`,
+    );
   }
 
   const lockDb = db;
