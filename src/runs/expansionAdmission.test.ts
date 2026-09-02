@@ -127,8 +127,9 @@ test('parent support is bucketed so many near-duplicate parents do not create un
 test('strict lexical broadening is deprioritized instead of hard-rejected', () => {
   const originals = Array.from({ length: 20 }, (_, index) => `specific source query ${index}`);
   const rows: ExpansionRelatedOccurrence[] = [];
-  for (let index = 0; index < originals.length; index += 1) {
-    rows.push(related(index, originals[index]!, `specific utility ${index}`, 50, 1000));
+  for (let index = 0; index < 30; index += 1) {
+    const parentIndex = index % originals.length;
+    rows.push(related(parentIndex, originals[parentIndex]!, `specific utility candidate ${index}`, 50, 1000));
   }
   rows.push(related(0, 'specific source query 0', 'source query', 100, 1_000_000));
 
