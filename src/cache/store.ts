@@ -322,9 +322,9 @@ export function ttlMsForSuggestionStatus(
     case 'ok':
       return ttl.suggestionOkMs;
     case 'empty':
-    case 'unavailable':
       return ttl.suggestionEmptyMs;
     case 'error':
+    case 'unavailable':
       return ttl.suggestionErrorMs;
   }
 }
