@@ -13,6 +13,8 @@ export type FinalistEvidencePublicationSummary = {
   version: string;
   representativeRevision: number;
   entrantFingerprint: string;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
   finalistCount: number;
   cohortHistoryAvailableCount: number;
   importedTrafficSnapshotCount: number;
@@ -40,6 +42,8 @@ export async function assertFinalistEvidencePublicationParent(input: {
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
 }): Promise<void> {
   await loadPublicationContext(input);
 }
@@ -56,6 +60,8 @@ export async function publishFinalistEvidenceMetadata(input: {
     sourceRunId: input.sourceRunId,
     representativeRevision: input.summary.representativeRevision,
     entrantFingerprint: input.summary.entrantFingerprint,
+    cohortHistoryFingerprint: input.summary.cohortHistoryFingerprint,
+    historicalPresenceFingerprint: input.summary.historicalPresenceFingerprint,
   });
 
   const nextManifest: Record<string, unknown> = {
@@ -149,6 +155,8 @@ async function loadPublicationContext(input: {
   sourceRunId: string;
   representativeRevision: number;
   entrantFingerprint: string;
+  cohortHistoryFingerprint: string | null;
+  historicalPresenceFingerprint: string | null;
 }): Promise<PublicationContext> {
   const manifestPath = join(input.enrichmentDirectory, 'manifest.json');
   const statusPath = join(input.enrichmentDirectory, 'status.json');
@@ -176,6 +184,35 @@ async function loadPublicationContext(input: {
       `entrant-cohort.json fingerprint ${publishedEntrantFingerprint} does not match current finalist parent ${input.entrantFingerprint}`,
     );
   }
+
+  assertOptionalPublishedSnapshot(
+    manifest,
+    input.cohortHistoryFingerprint,
+    'cohortHistory',
+    'cohort-history.json',
+    'manifest.json',
+  );
+  assertOptionalPublishedSnapshot(
+    status,
+    input.cohortHistoryFingerprint,
+    'cohortHistory',
+    'cohort-history.json',
+    'status.json',
+  );
+  assertOptionalPublishedSnapshot(
+    manifest,
+    input.historicalPresenceFingerprint,
+    'historicalPresence',
+    'cohort-historical-presence.json',
+    'manifest.json',
+  );
+  assertOptionalPublishedSnapshot(
+    status,
+    input.historicalPresenceFingerprint,
+    'historicalPresence',
+    'cohort-historical-presence.json',
+    'status.json',
+  );
 
   return {
     manifestPath,
@@ -226,6 +263,28 @@ function assertEntrantRevision(
   }
 }
 
+function assertOptionalPublishedSnapshot(
+  value: Record<string, unknown>,
+  expectedFingerprint: string | null,
+  metadataKey: 'cohortHistory' | 'historicalPresence',
+  artifactName: string,
+  label: string,
+): void {
+  const artifacts = readStringArray(value.artifacts, `${label} artifacts`);
+  const metadata = value[metadataKey];
+  if (expectedFingerprint === null) {
+    if (metadata !== undefined || artifacts.includes(artifactName)) {
+      throw new Error(`${label} has stale ${metadataKey} publication state but no current durable parent exists.`);
+    }
+    return;
+  }
+  const published = readRecord(metadata, `${label} ${metadataKey}`);
+  const fingerprint = readString(published.snapshotFingerprint, `${label} ${metadataKey}.snapshotFingerprint`);
+  if (fingerprint !== expectedFingerprint || !artifacts.includes(artifactName)) {
+    throw new Error(`${label} ${metadataKey} snapshot does not match current durable parent ${expectedFingerprint}.`);
+  }
+}
+
 function withoutFinalistEvidence(value: Record<string, unknown>): Record<string, unknown> {
   const { finalistEvidence: _finalistEvidence, ...rest } = value;
   return rest;
@@ -271,7 +330,7 @@ function readArray(value: unknown, label: string): unknown[] {
 
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  return value;
+  return value as Record<string, unknown>;
 }
 
 function readString(value: unknown, label: string): string {
