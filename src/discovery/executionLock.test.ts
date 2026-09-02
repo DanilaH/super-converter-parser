@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -36,5 +36,21 @@ test('discovery execution locks are independent across output roots', async () =
   } finally {
     await rm(firstRoot, { recursive: true, force: true });
     await rm(secondRoot, { recursive: true, force: true });
+  }
+});
+
+test('acquiring the discovery lock does not materialize an otherwise missing output root', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'discovery-lock-pre-durable-'));
+  const outputRoot = join(parent, 'not-created');
+  try {
+    const release = await acquireDiscoveryExecutionLock(outputRoot);
+    try {
+      await assert.rejects(() => access(outputRoot));
+    } finally {
+      await release();
+    }
+    await assert.rejects(() => access(outputRoot));
+  } finally {
+    await rm(parent, { recursive: true, force: true });
   }
 });
