@@ -77,7 +77,18 @@ async function createCompletedDiscovery(input: {
     createdAt: '2026-09-02T10:00:00.000Z',
     updatedAt: '2026-09-02T10:01:00.000Z',
     currentRunId: input.runId,
-    batches: [],
+    batches: [{
+      batchId: 'batch-0001',
+      createdAt: '2026-09-02T10:00:00.000Z',
+      input: { kind: 'seeds', originalPath: 'fixture.csv', storedPath: null },
+      sourceRowCount: 1,
+      inputUniqueKeywordCount: 1,
+      addedKeywordCount: 1,
+      duplicateKeywordCount: 0,
+      normalizedKeywords: ['speaker test'],
+      newNormalizedKeywords: ['speaker test'],
+      resultRunId: input.runId,
+    }],
   }, null, 2)}\n`, 'utf8');
 }
 
