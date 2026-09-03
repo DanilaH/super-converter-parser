@@ -417,6 +417,9 @@ export async function runDiscovery(
           refreshKeywords: [...refreshSet],
         });
         store.setRunState(runId, 'created');
+        if (request.onFreshResearchInitialized) {
+          await request.onFreshResearchInitialized({ runId, researchDirectory, discoveryDirectory: runDirectory });
+        }
         await writeRunIndex(
           outputRoot,
           { version: 1, runId, researchDirectory, discoveryDirectory: runDirectory },
@@ -425,9 +428,6 @@ export async function runDiscovery(
             store = null;
           },
         );
-        if (request.onFreshResearchInitialized) {
-          await request.onFreshResearchInitialized({ runId, researchDirectory, discoveryDirectory: runDirectory });
-        }
       } catch (error) {
         store?.close();
         store = null;
