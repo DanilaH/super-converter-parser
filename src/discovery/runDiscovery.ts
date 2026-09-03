@@ -1,4 +1,6 @@
+import { loadConfig } from '../config/config.js';
 import { resolveOutputRoot } from '../outputs/researchLayout.js';
+import { withCurrentExpansionAdmission } from '../runs/expansionRuntime.js';
 import { ResearchError } from '../shared/errors.js';
 import { acquireDiscoveryExecutionLock } from './executionLock.js';
 import {
@@ -8,6 +10,7 @@ import {
   type CliDeps,
   type DiscoveryRunRequest,
   type DiscoveryRunResult,
+  type DiscoverySemanticConfig,
 } from './runDiscoveryCore.js';
 
 export * from './runDiscoveryCore.js';
@@ -48,7 +51,7 @@ export async function runDiscovery(
   }
 
   try {
-    return await runDiscoveryCore({ ...request, outputRoot }, deps, env);
+    return await runDiscoveryCore(versionFreshRequest(request, env, outputRoot), deps, env);
   } finally {
     if (releaseLock !== null) {
       await releaseLock().catch((error) => {
@@ -56,4 +59,41 @@ export async function runDiscovery(
       });
     }
   }
+}
+
+function versionFreshRequest(
+  request: DiscoveryRunRequest,
+  env: NodeJS.ProcessEnv,
+  outputRoot: string,
+): DiscoveryRunRequest {
+  if (request.input.kind === 'resume') return { ...request, outputRoot };
+
+  if (request.semanticConfig !== null && request.semanticConfig !== undefined) {
+    return {
+      ...request,
+      outputRoot,
+      semanticConfig: {
+        ...request.semanticConfig,
+        expansion: withCurrentExpansionAdmission(request.semanticConfig.expansion),
+      },
+    };
+  }
+
+  let config;
+  try {
+    config = loadConfig(env);
+  } catch {
+    // Let the core runner preserve its existing input-error mapping.
+    return { ...request, outputRoot };
+  }
+  const semanticConfig: DiscoverySemanticConfig = {
+    research: config.research,
+    expansion: withCurrentExpansionAdmission({
+      ...config.expansion,
+      enabled: request.expand === true || config.expansion.enabled,
+    }),
+    requireAhrefs: request.requireAhrefs === true || config.ahrefs.requireAhrefs,
+    scoring: config.scoring,
+  };
+  return { ...request, outputRoot, semanticConfig };
 }
