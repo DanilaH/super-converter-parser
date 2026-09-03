@@ -97,7 +97,9 @@ Completed checkpoints and partial checkpoints without a repairable primary failu
 npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
 ```
 
-Append stores the input batch under the same research, de-duplicates normalized keywords, and forks a new immutable combined discovery snapshot only when genuinely new keywords exist. Existing checkpoints/evidence are copied forward unchanged; only new keywords are collected.
+Append stores the input batch under the same research, de-duplicates normalized keywords, and forks a new immutable combined discovery snapshot when the batch either adds a genuinely new keyword or explicitly promotes a keyword that previously existed only as a `surfer_related` expansion child into a root seed. Unrelated completed checkpoints/evidence are carried forward; genuinely new seeds and promoted roots are the pending collection work.
+
+A promotion-only batch can therefore create a new generation with `addedKeywordCount = 0`. Append is serialized against config-driven continuation and other research mutations; V1 global-expansion forks preserve raw Related evidence but recompute the current generation's selection flags instead of carrying the old frontier decision forward.
 
 Use the **current run ID printed by the command** for downstream enrichment. See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
 
