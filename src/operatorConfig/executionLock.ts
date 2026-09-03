@@ -24,9 +24,9 @@ export async function acquireResearchExecutionLock(
   const lockPath = join(lockDirectory, `research-${researchId}.sqlite`);
   let db: Database.Database | null = null;
   try {
-    db = new Database(lockPath);
-    db.pragma('journal_mode = DELETE');
+    db = new Database(lockPath, { timeout: 250 });
     db.pragma('busy_timeout = 250');
+    db.pragma('journal_mode = DELETE');
     db.exec(`
       CREATE TABLE IF NOT EXISTS research_execution_lock_metadata (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
