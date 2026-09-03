@@ -35,9 +35,13 @@ A research that is already in use can be extended without creating another top-l
 npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
 ```
 
-Append is intentionally not hidden inside `discovery:full`: it is an explicit mutation of one logical research container. The command stores the input batch, de-duplicates normalized keywords, forks a new immutable combined discovery snapshot only when the batch adds new keywords, carries previous checkpoints/evidence forward, and collects only the new pending keywords.
+Append is intentionally not hidden inside `discovery:full`: it is an explicit mutation of one logical research container. The command stores the input batch, de-duplicates normalized keywords, and forks a new immutable combined discovery snapshot when the batch either adds a genuinely new keyword **or explicitly promotes a keyword that previously existed only as a `surfer_related` expansion child into a root seed**. Unrelated completed checkpoints/evidence are carried forward; genuinely new seeds and promoted roots are the pending collection work.
 
-Use the **current run ID printed by `research:append`** for the next enrichment. Previous enrichment directories remain historical snapshots and are not rewritten. See `RESEARCH_BATCHES.md` for the durable lineage and failure contract.
+A promotion-only batch can therefore create a new discovery generation even when its `addedKeywordCount` is zero: the normalized keyword was already known, but its semantic role changed from expansion child to explicit root. V1 global-expansion forks preserve raw Related evidence while recomputing generation-local selection decisions instead of publishing the previous frontier's `selected` flags as current truth.
+
+`research:append` is serialized against config-driven continuation and other research mutations using the canonical `execution -> batch -> discovery` lock order. See `RESEARCH_BATCHES.md` for the full durable lineage, promotion, locking, and failure contract.
+
+Use the **current run ID printed by `research:append`** for the next enrichment. Previous enrichment directories remain historical snapshots and are not rewritten.
 
 ## Full enrichment
 
