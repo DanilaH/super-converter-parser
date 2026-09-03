@@ -4,10 +4,8 @@ import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { resolveOutputRoot, archiveResearchDirectory } from '../outputs/researchLayout.js';
 import { DEFAULT_CLI_DEPS, runCli } from './research.js';
-import {
-  acquireResearchBatchLock,
-  prepareResearchAppend,
-} from '../research/batches.js';
+import { acquireResearchAppendLock } from '../research/appendLock.js';
+import { prepareResearchAppend } from '../research/batches.js';
 import { ResearchError } from '../shared/errors.js';
 
 loadDotEnv();
@@ -64,9 +62,9 @@ function printUsage(): void {
   console.log('Behavior:');
   console.log('  - preserves the existing completed discovery run unchanged;');
   console.log('  - stores the input batch under the same research directory;');
-  console.log('  - de-duplicates by normalized keyword;');
-  console.log('  - forks a new combined discovery run only when new keywords exist;');
-  console.log('  - carries old checkpoints/evidence forward and collects only new pending keywords.');
+  console.log('  - de-duplicates by normalized keyword and promotes explicit seeds that were expansion-only;');
+  console.log('  - forks a new combined discovery run when new keywords or root promotions exist;');
+  console.log('  - carries reusable checkpoints/evidence forward and collects only new/promoted pending keywords.');
   console.log('');
   console.log('Options:');
   console.log('  --to, --append-to <id>  Stable research id (initial run id) or any run id in the research.');
@@ -101,7 +99,7 @@ async function main(): Promise<void> {
     }
 
     const outputRoot = resolveOutputRoot(args.outputRoot, process.env);
-    const lock = await acquireResearchBatchLock(outputRoot, args.targetRunId);
+    const lock = await acquireResearchAppendLock(outputRoot, args.targetRunId);
     releaseLock = lock.release;
 
     const prepared = await prepareResearchAppend({
