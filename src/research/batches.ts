@@ -10,6 +10,7 @@ import {
 } from '../outputs/researchLayout.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
+import { usesGlobalExpansionAdmission } from '../runs/expansionRuntime.js';
 import { createRunId } from '../runs/run.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -170,6 +171,7 @@ export async function prepareResearchAppend(input: {
         `Current research run used parser versions ${sourceRun.parserVersions.surfer}/${sourceRun.parserVersions.google}; this build uses ${SURFER_PARSER_VERSION}/${GOOGLE_PARSER_VERSION}. Start a new research instead of mixing parser generations.`,
       );
     }
+    const globalExpansionAdmission = usesGlobalExpansionAdmission(sourceRun.configSnapshot);
 
     const sourceKeywords = sourceStore.loadKeywords(container.currentRunId);
     if (sourceKeywords.some((keyword) => !isTerminalKeywordStatus(keyword.status))) {
@@ -313,7 +315,16 @@ export async function prepareResearchAppend(input: {
         .filter((keyword) => promotedNormalized.has(keyword.normalizedKeyword))
         .map((keyword) => keyword.idx),
     );
-    copyRelatedEvidence(sourceStore, targetStore, container.currentRunId, newRunId, promotedIdxs);
+    copyRelatedEvidence(
+      sourceStore,
+      targetStore,
+      container.currentRunId,
+      newRunId,
+      {
+        excludedParentIdxs: promotedIdxs,
+        preserveSelectedForExpansion: !globalExpansionAdmission,
+      },
+    );
     copyDomainEvidence(
       sourceStore,
       targetStore,
@@ -495,8 +506,13 @@ function copyRelatedEvidence(
   target: RunStore,
   sourceRunId: string,
   targetRunId: string,
-  excludedParentIdxs: ReadonlySet<number> = new Set(),
+  options: {
+    excludedParentIdxs?: ReadonlySet<number>;
+    preserveSelectedForExpansion?: boolean;
+  } = {},
 ): void {
+  const excludedParentIdxs = options.excludedParentIdxs ?? new Set<number>();
+  const preserveSelectedForExpansion = options.preserveSelectedForExpansion ?? true;
   const groups = new Map<number, ReturnType<RunStore['loadRelatedKeywords']>>();
   for (const row of source.loadRelatedKeywords(sourceRunId)) {
     if (excludedParentIdxs.has(row.parentIdx)) continue;
@@ -522,7 +538,11 @@ function copyRelatedEvidence(
             volume: row.volume,
           })),
         },
-        new Set(okRows.filter((row) => row.selectedForExpansion).map((row) => row.relatedKeyword)),
+        new Set(
+          preserveSelectedForExpansion
+            ? okRows.filter((row) => row.selectedForExpansion).map((row) => row.relatedKeyword)
+            : [],
+        ),
       );
     } else {
       target.recordRelatedKeywords(
