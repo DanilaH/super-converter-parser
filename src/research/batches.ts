@@ -188,7 +188,7 @@ export async function prepareResearchAppend(input: {
       input.seeds
         .filter((seed) => {
           const keyword = sourceByNormalized.get(seed.normalizedKeyword);
-          return keyword !== undefined && isExpansionOnlyKeyword(keyword);
+          return keyword !== undefined && isExpansionChildKeyword(keyword);
         })
         .map((seed) => seed.normalizedKeyword),
     );
@@ -599,9 +599,8 @@ function buildBatchSeedSource(seed: SeedKeyword, batchId: string, inputPath: str
   };
 }
 
-function isExpansionOnlyKeyword(keyword: { sources: ReadonlyArray<{ type: string }> }): boolean {
-  return keyword.sources.length > 0
-    && keyword.sources.every((source) => source.type === 'surfer_related');
+function isExpansionChildKeyword(keyword: { sources: ReadonlyArray<{ type: string }> }): boolean {
+  return keyword.sources.some((source) => source.type === 'surfer_related');
 }
 
 async function copyFileAtomic(source: string, target: string): Promise<void> {
