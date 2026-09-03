@@ -34,6 +34,8 @@ import {
   type BreakerSettings,
   type RetrySettings,
 } from './policies.js';
+import { materializeExpansionFrontier } from './expansionFrontier.js';
+import { usesGlobalExpansionAdmission } from './expansionRuntime.js';
 import { keywordCacheIdentity, buildKeywordCacheKey, buildRelatedCacheKey, type CacheIdentity } from '../cache/keys.js';
 import { mergedCacheRefresh, resolveKeywordAccess, resolveRelatedAccess, type CacheResolution, type RelatedCacheResolution } from '../cache/resolve.js';
 import { ttlMsForKeywordStatus, ttlMsForRelatedStatus, CacheStore, type KeywordCache, type CachedRelatedStatus } from '../cache/store.js';
@@ -191,6 +193,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   });
   const { logger } = hooks;
   const publish = options.publishSnapshots ?? writeSnapshots;
+  const globalExpansionAdmission = usesGlobalExpansionAdmission(config);
 
   const identity = keywordCacheIdentity(config);
   let forceRefresh = options.cache?.forceRefresh ?? false;
@@ -348,6 +351,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
   }
 
   let outcome: RunOutcome | null = null;
+  let frontierMaterialized = false;
 
   // Dynamic queue is process-local but follows durable writes exactly. Newly
   // persisted Surfer expansion rows are appended to liveKeywords immediately,
@@ -363,6 +367,25 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
     if (tripReason !== null) {
       outcome = { kind: 'paused', reason: tripReason, ahrefs: null, scoringCompleteness: null };
       break;
+    }
+
+    if (
+      globalExpansionAdmission &&
+      config.expansion.enabled &&
+      config.expansion.depth >= 1 &&
+      !frontierMaterialized &&
+      liveKeywords.filter(isExpandableKeyword).every((keyword) => isTerminalKeywordStatus(keyword.status))
+    ) {
+      const frontier = await materializeExpansionFrontier({ store, runId, runDirectory, config });
+      for (const addedKeyword of frontier.addedKeywords) {
+        liveKeywords.push(addedKeyword);
+        seenNormalized.add(addedKeyword.normalizedKeyword);
+      }
+      frontierMaterialized = true;
+      const selectedCount = frontier.decisions.filter((decision) => decision.selectedFinal).length;
+      logger(
+        `  ↳ expansion frontier: ${selectedCount}/${frontier.admission.budget} selected; +${frontier.addedKeywords.length} queued`,
+      );
     }
 
     const stored = liveKeywords.find((keyword) => keyword.status === 'pending');
@@ -456,7 +479,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
           relatedOutcome = relatedResult.related;
         }
         let added: string[] = [];
-        if (config.expansion.enabled && relatedOutcome.status === 'ok') {
+        if (!globalExpansionAdmission && config.expansion.enabled && relatedOutcome.status === 'ok') {
           added = applySurferExpansion({
             runId,
             store,
@@ -661,11 +684,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunOutcome
         });
         reportRelatedOutcome(result, record.normalizedKeyword, logger);
 
-        // Expansion queues depth-one related candidates for Google collection.
-        // It triggers only when expansion is enabled and the related outcome is
-        // 'ok' (rows were actually parsed). Related children never expand further.
+        // Legacy expansion queues depth-one related candidates immediately.
+        // Versioned V1 runs defer queueing until every root keyword is terminal,
+        // then materialize one deterministic global frontier from SQLite.
         let added: string[] = [];
         if (
+          !globalExpansionAdmission &&
           config.expansion.enabled &&
           config.expansion.depth >= 1 &&
           result.related.status === 'ok'
