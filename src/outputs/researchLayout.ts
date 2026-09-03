@@ -431,7 +431,6 @@ function buildZip(entries: Array<{ name: string; data: Buffer }>): Buffer {
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0x0800, 8);
     central.writeUInt16LE(8, 10);
-    central.writeUInt16LE(8, 10);
     central.writeUInt16LE(time, 12);
     central.writeUInt16LE(date, 14);
     central.writeUInt32LE(crc, 16);
@@ -464,7 +463,7 @@ function dosDateTime(value: Date): { time: number; date: number } {
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
   let crc = index;
-  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : crc >>> 0;
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
   return crc >>> 0;
 });
 
