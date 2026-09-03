@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { ResearchError } from '../shared/errors.js';
 
@@ -23,7 +23,8 @@ export async function acquireDiscoveryExecutionLock(
   const lockDirectory = join(tmpdir(), DISCOVERY_LOCK_DIRECTORY);
   await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
   const absoluteRoot = resolve(outputRoot);
-  const lockIdentity = process.platform === 'win32' ? absoluteRoot.toLowerCase() : absoluteRoot;
+  const canonicalRoot = await canonicalizeOutputRoot(absoluteRoot);
+  const lockIdentity = process.platform === 'win32' ? canonicalRoot.toLowerCase() : canonicalRoot;
   const rootKey = createHash('sha256').update(lockIdentity).digest('hex');
   const lockPath = join(lockDirectory, `discovery-${rootKey}.sqlite`);
   let db: Database.Database | null = null;
@@ -91,8 +92,39 @@ export async function acquireDiscoveryExecutionLock(
   };
 }
 
+async function canonicalizeOutputRoot(absoluteRoot: string): Promise<string> {
+  let cursor = absoluteRoot;
+  const missingSegments: string[] = [];
+
+  while (true) {
+    try {
+      const canonicalBase = await realpath(cursor);
+      return missingSegments.length === 0
+        ? canonicalBase
+        : resolve(canonicalBase, ...missingSegments);
+    } catch (error) {
+      if (!isEnoent(error)) {
+        throw new ResearchError(
+          'OUTPUT_WRITE_ERROR',
+          `Failed to canonicalize discovery output root ${absoluteRoot}.`,
+          { cause: error },
+        );
+      }
+    }
+
+    const parent = dirname(cursor);
+    if (parent === cursor) return absoluteRoot;
+    missingSegments.unshift(basename(cursor));
+    cursor = parent;
+  }
+}
+
 function isSqliteBusy(error: unknown): boolean {
   return error instanceof Error
     && 'code' in error
     && (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED');
+}
+
+function isEnoent(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
