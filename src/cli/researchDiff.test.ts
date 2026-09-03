@@ -56,7 +56,7 @@ test('research diff help does not require comparison arguments', () => {
 
 test('text rendering remains factual and exposes persisted-cluster matching basis', () => {
   const diff: ResearchGenerationDiff = {
-    version: '1.0.0',
+    version: '1.1.0',
     researchId: 'run-1',
     label: 'fixture',
     researchDirectory: '/tmp/fixture',

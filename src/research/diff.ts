@@ -43,6 +43,20 @@ export type EnrichmentGenerationDescriptor = {
   state: string;
 };
 
+export type DiscoveryKeywordProvenance = {
+  role: 'root' | 'depth_one_child';
+  sourceTypes: Array<'seed' | 'microsoft' | 'surfer_related'>;
+  seedBatchIds: string[];
+  relatedParents: string[];
+};
+
+export type DiscoveryKeywordProvenanceChange = {
+  normalizedKeyword: string;
+  keyword: string;
+  from: DiscoveryKeywordProvenance;
+  to: DiscoveryKeywordProvenance;
+};
+
 export type DiscoveryGenerationDiff = {
   from: DiscoveryGenerationDescriptor;
   to: DiscoveryGenerationDescriptor;
@@ -52,6 +66,7 @@ export type DiscoveryGenerationDiff = {
     added: Array<{ normalizedKeyword: string; keyword: string; status: string }>;
     removed: Array<{ normalizedKeyword: string; keyword: string; status: string }>;
     statusChanges: Array<{ normalizedKeyword: string; keyword: string; from: string; to: string }>;
+    provenanceChanges: DiscoveryKeywordProvenanceChange[];
   };
   googleSerpCoverage: {
     from: GenerationCoverage;
@@ -123,7 +138,7 @@ export type EnrichmentGenerationDiff = {
 };
 
 export type ResearchGenerationDiff = {
-  version: '1.0.0';
+  version: '1.1.0';
   researchId: string;
   label: string;
   researchDirectory: string;
@@ -200,7 +215,7 @@ export async function buildResearchGenerationDiff(input: {
     const left = loadDiscoverySnapshot(fromDirectory);
     const right = loadDiscoverySnapshot(toDirectory);
     return {
-      version: '1.0.0',
+      version: '1.1.0',
       researchId: container?.researchId ?? input.targetRunId,
       label: container?.label ?? basename(target.researchDirectory),
       researchDirectory: target.researchDirectory,
@@ -213,7 +228,7 @@ export async function buildResearchGenerationDiff(input: {
   const left = loadEnrichmentSnapshot(fromDirectory);
   const right = loadEnrichmentSnapshot(toDirectory);
   return {
-    version: '1.0.0',
+    version: '1.1.0',
     researchId: container?.researchId ?? input.targetRunId,
     label: container?.label ?? basename(target.researchDirectory),
     researchDirectory: target.researchDirectory,
@@ -314,20 +329,33 @@ function diffDiscovery(left: DiscoverySnapshot, right: DiscoverySnapshot): Disco
     .filter((key) => !rightByKeyword.has(key))
     .sort()
     .map((key) => keywordFact(leftByKeyword.get(key)!));
-  const statusChanges = [...leftByKeyword.keys()]
+  const commonKeywords = [...leftByKeyword.keys()]
     .filter((key) => rightByKeyword.has(key))
-    .sort()
-    .flatMap((key) => {
-      const fromKeyword = leftByKeyword.get(key)!;
-      const toKeyword = rightByKeyword.get(key)!;
-      if (fromKeyword.status === toKeyword.status) return [];
-      return [{
-        normalizedKeyword: key,
-        keyword: toKeyword.keyword,
-        from: fromKeyword.status,
-        to: toKeyword.status,
-      }];
-    });
+    .sort();
+  const statusChanges = commonKeywords.flatMap((key) => {
+    const fromKeyword = leftByKeyword.get(key)!;
+    const toKeyword = rightByKeyword.get(key)!;
+    if (fromKeyword.status === toKeyword.status) return [];
+    return [{
+      normalizedKeyword: key,
+      keyword: toKeyword.keyword,
+      from: fromKeyword.status,
+      to: toKeyword.status,
+    }];
+  });
+  const provenanceChanges = commonKeywords.flatMap((key) => {
+    const fromKeyword = leftByKeyword.get(key)!;
+    const toKeyword = rightByKeyword.get(key)!;
+    const from = keywordProvenance(fromKeyword);
+    const to = keywordProvenance(toKeyword);
+    if (provenanceEqual(from, to)) return [];
+    return [{
+      normalizedKeyword: key,
+      keyword: toKeyword.keyword,
+      from,
+      to,
+    }];
+  });
 
   return {
     from: left.descriptor,
@@ -338,6 +366,7 @@ function diffDiscovery(left: DiscoverySnapshot, right: DiscoverySnapshot): Disco
       added,
       removed,
       statusChanges,
+      provenanceChanges,
     },
     googleSerpCoverage: {
       from: left.googleSerpCoverage,
@@ -369,6 +398,31 @@ function keywordFact(keyword: ReturnType<RunStore['loadKeywords']>[number]) {
     keyword: keyword.keyword,
     status: keyword.status,
   };
+}
+
+function keywordProvenance(
+  keyword: ReturnType<RunStore['loadKeywords']>[number],
+): DiscoveryKeywordProvenance {
+  const sourceTypes = uniqueSorted(keyword.sources.map((source) => source.type)) as DiscoveryKeywordProvenance['sourceTypes'];
+  const seedBatchIds = uniqueSorted(keyword.sources.flatMap((source) =>
+    source.type === 'seed' && source.batchId ? [source.batchId] : [],
+  ));
+  const relatedParents = uniqueSorted(keyword.sources.flatMap((source) =>
+    source.type === 'surfer_related' ? [source.parentKeyword] : [],
+  ));
+  return {
+    role: sourceTypes.includes('surfer_related') ? 'depth_one_child' : 'root',
+    sourceTypes,
+    seedBatchIds,
+    relatedParents,
+  };
+}
+
+function provenanceEqual(left: DiscoveryKeywordProvenance, right: DiscoveryKeywordProvenance): boolean {
+  return left.role === right.role
+    && arraysEqual(left.sourceTypes, right.sourceTypes)
+    && arraysEqual(left.seedBatchIds, right.seedBatchIds)
+    && arraysEqual(left.relatedParents, right.relatedParents);
 }
 
 function loadEnrichmentSnapshot(generation: GenerationDirectory): EnrichmentSnapshot {
@@ -615,7 +669,7 @@ function uniqueSorted(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
 }
 
-function arraysEqual(left: string[] | null, right: string[] | null): boolean {
+function arraysEqual(left: readonly string[] | null, right: readonly string[] | null): boolean {
   if (left === null || right === null) return left === right;
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
