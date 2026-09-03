@@ -129,7 +129,7 @@ test('research:run executes resolved semantics, publishes provenance before prov
   assert.ok(order.indexOf('connect') > order.indexOf('provenance'));
   const observed = observedConfigs[0] as ResearchConfig;
   assert.deepEqual(observed.research, { market: 'GB', googleHl: 'en', googleGl: 'gb', topN: 7 });
-  assert.deepEqual(observed.expansion, { enabled: true, depth: 1, maxCandidatesPerKeyword: 20, minOverlap: 0, minVolume: 0 });
+  assert.deepEqual(observed.expansion, { enabled: true, depth: 1, maxCandidatesPerKeyword: 20, minOverlap: 0, minVolume: 0, admissionVersion: 'v1' });
   assert.equal(observed.ahrefs.requireAhrefs, false);
   assert.deepEqual(observed.scoring.drThresholds, { veryWeakMax: 10, weakMax: 30, strongMin: 60, strongMax: 75 });
 
