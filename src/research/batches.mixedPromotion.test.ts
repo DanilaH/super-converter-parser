@@ -75,6 +75,17 @@ test('append promotes a historical mixed surfer_related + seed child using curre
     ],
   });
   completeKeyword(store, RESEARCH_ID, mixedChild.idx);
+  const historicalNewRoot = store.addKeyword(RESEARCH_ID, {
+    keyword: 'historical new root',
+    normalizedKeyword: 'historical new root',
+    sources: [{
+      type: 'seed',
+      rowNumbers: [3],
+      batchId: 'batch-0002',
+      inputPath: 'batches/batch-0002.csv',
+    }],
+  });
+  completeKeyword(store, RESEARCH_ID, historicalNewRoot.idx);
   store.recordRelatedKeywords(
     RESEARCH_ID,
     0,
@@ -162,6 +173,10 @@ test('append promotes a historical mixed surfer_related + seed child using curre
       batchId: 'batch-0003',
       inputPath: 'batches/batch-0003.csv',
     }]);
+    const carriedRoot = promotedStore.loadKeywords(result.currentRunId)
+      .find((keyword) => keyword.normalizedKeyword === 'historical new root');
+    assert.ok(carriedRoot);
+    assert.equal(carriedRoot.status, 'completed');
     const related = promotedStore.loadRelatedKeywords(result.currentRunId);
     assert.equal(related.length, 1);
     assert.equal(related[0]?.relatedKeyword, 'alpha checker');
