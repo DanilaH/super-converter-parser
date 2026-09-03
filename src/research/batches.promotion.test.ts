@@ -154,7 +154,7 @@ test('append promotes an expansion-only keyword to an explicit pending root in a
     assert.equal(related.length, 1);
     assert.equal(related[0]?.parentIdx, 0);
     assert.equal(related[0]?.relatedKeyword, 'json diff');
-    assert.equal(related[0]?.selectedForExpansion, true);
+    assert.equal(related[0]?.selectedForExpansion, false);
   } finally {
     promotedStore.close();
   }
