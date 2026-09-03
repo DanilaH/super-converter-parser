@@ -91,7 +91,32 @@ test('append through a generated run id resolves the stable research execution i
     createdAt: '2026-09-03T00:00:00.000Z',
     updatedAt: '2026-09-03T00:01:00.000Z',
     currentRunId: generatedRunId,
-    batches: [],
+    batches: [
+      {
+        batchId: 'batch-0001',
+        createdAt: '2026-09-03T00:00:00.000Z',
+        input: { kind: 'seeds', originalPath: 'initial.csv', storedPath: null },
+        sourceRowCount: 0,
+        inputUniqueKeywordCount: 0,
+        addedKeywordCount: 0,
+        duplicateKeywordCount: 0,
+        normalizedKeywords: [],
+        newNormalizedKeywords: [],
+        resultRunId: RUN_ID,
+      },
+      {
+        batchId: 'batch-0002',
+        createdAt: '2026-09-03T00:01:00.000Z',
+        input: { kind: 'seeds', originalPath: 'append.csv', storedPath: null },
+        sourceRowCount: 0,
+        inputUniqueKeywordCount: 0,
+        addedKeywordCount: 0,
+        duplicateKeywordCount: 0,
+        normalizedKeywords: [],
+        newNormalizedKeywords: [],
+        resultRunId: generatedRunId,
+      },
+    ],
   }, null, 2)}\n`, 'utf8');
 
   const releaseConfig = await acquireResearchExecutionLock(root, RUN_ID);

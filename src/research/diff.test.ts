@@ -214,7 +214,18 @@ test('enrichment diff compares separate immutable re-enrichment generations with
     createdAt: '2026-08-31T00:00:00.000Z',
     updatedAt: '2026-08-31T00:00:00.000Z',
     currentRunId: initial.runId,
-    batches: [],
+    batches: [{
+      batchId: 'batch-0001',
+      createdAt: '2026-08-31T00:00:00.000Z',
+      input: { kind: 'seeds', originalPath: 'initial.csv', storedPath: null },
+      sourceRowCount: 2,
+      inputUniqueKeywordCount: 2,
+      addedKeywordCount: 2,
+      duplicateKeywordCount: 0,
+      normalizedKeywords: ['alpha tool', 'beta tool'],
+      newNormalizedKeywords: ['alpha tool', 'beta tool'],
+      resultRunId: initial.runId,
+    }],
   }, null, 2)}\n`, 'utf8');
 
   const firstDirectory = await allocateEnrichmentDirectory(initial.researchDirectory);
