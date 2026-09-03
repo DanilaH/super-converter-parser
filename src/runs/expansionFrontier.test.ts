@@ -85,10 +85,9 @@ test('frontier rejects generic single-token heads, enforces the global budget, a
   };
   assert.equal(report.budget, 25);
   assert.equal(report.finalSelectedCount, 25);
-  assert.deepEqual(
-    report.decisions.find((decision) => decision.normalizedKeyword === 'sheets'),
-    assert.matching({ selectedFinal: false, reason: 'single_token' }),
-  );
+  const sheets = report.decisions.find((decision) => decision.normalizedKeyword === 'sheets');
+  assert.equal(sheets?.selectedFinal, false);
+  assert.equal(sheets?.reason, 'single_token');
   store.close();
 });
 
