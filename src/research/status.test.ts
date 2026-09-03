@@ -102,6 +102,35 @@ async function writeContainer(
   researchId: string,
   currentRunId: string,
 ): Promise<void> {
+  const initialBatch = {
+    batchId: 'batch-0001',
+    createdAt: '2026-08-30T00:00:00.000Z',
+    input: { kind: 'seeds', originalPath: 'fixture.csv', storedPath: null },
+    sourceRowCount: null,
+    inputUniqueKeywordCount: 1,
+    addedKeywordCount: 1,
+    duplicateKeywordCount: 0,
+    normalizedKeywords: ['status keyword 1'],
+    newNormalizedKeywords: ['status keyword 1'],
+    resultRunId: researchId,
+  };
+  const batches = currentRunId === researchId
+    ? [initialBatch]
+    : [
+        initialBatch,
+        {
+          batchId: 'batch-0002',
+          createdAt: '2026-08-31T00:00:00.000Z',
+          input: { kind: 'seeds', originalPath: 'append.csv', storedPath: null },
+          sourceRowCount: null,
+          inputUniqueKeywordCount: 1,
+          addedKeywordCount: 1,
+          duplicateKeywordCount: 0,
+          normalizedKeywords: ['status keyword 2'],
+          newNormalizedKeywords: ['status keyword 2'],
+          resultRunId: currentRunId,
+        },
+      ];
   await writeFile(join(researchDirectory, 'research.json'), `${JSON.stringify({
     version: 1,
     researchId,
@@ -109,7 +138,7 @@ async function writeContainer(
     createdAt: '2026-08-30T00:00:00.000Z',
     updatedAt: '2026-08-31T00:00:00.000Z',
     currentRunId,
-    batches: [],
+    batches,
   }, null, 2)}\n`, 'utf8');
 }
 
