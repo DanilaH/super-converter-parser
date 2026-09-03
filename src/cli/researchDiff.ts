@@ -4,6 +4,7 @@ import { resolveOutputRoot } from '../outputs/researchLayout.js';
 import {
   buildResearchGenerationDiff,
   parseResearchGenerationRef,
+  type DiscoveryKeywordProvenance,
   type ResearchGenerationDiff,
 } from '../research/diff.js';
 import { ResearchError } from '../shared/errors.js';
@@ -91,6 +92,10 @@ function listLine(values: string[]): string {
   return values.length === 0 ? 'none' : values.join(', ');
 }
 
+function provenanceLine(value: DiscoveryKeywordProvenance): string {
+  return `${value.role}; sources=[${listLine(value.sourceTypes)}]; seed batches=[${listLine(value.seedBatchIds)}]; related parents=[${listLine(value.relatedParents)}]`;
+}
+
 export function renderResearchGenerationDiff(diff: ResearchGenerationDiff): string {
   const lines = [
     'Research generation diff',
@@ -112,6 +117,14 @@ export function renderResearchGenerationDiff(diff: ResearchGenerationDiff): stri
     );
     for (const change of value.keywords.statusChanges) {
       lines.push(`    - ${change.normalizedKeyword}: ${change.from} -> ${change.to}`);
+    }
+    lines.push(`  Provenance changes: ${value.keywords.provenanceChanges.length}`);
+    for (const change of value.keywords.provenanceChanges) {
+      lines.push(
+        `    - ${change.normalizedKeyword}`,
+        `      from: ${provenanceLine(change.from)}`,
+        `      to:   ${provenanceLine(change.to)}`,
+      );
     }
     lines.push(
       '',
