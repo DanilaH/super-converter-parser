@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { ResearchError } from '../shared/errors.js';
 import { resolveEnrichmentLocation, resolveRunLocation } from './researchLayout.js';
@@ -28,7 +28,7 @@ function writeEnrichmentDb(path: string, enrichmentId: string): void {
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
-  await mkdir(join(path, '..'), { recursive: true });
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
