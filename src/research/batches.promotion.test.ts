@@ -123,6 +123,8 @@ test('append promotes an expansion-only keyword to an explicit pending root in a
   assert.equal(result.changed, true);
   assert.equal(result.addedKeywordCount, 0);
   assert.equal(result.duplicateKeywordCount, 1);
+  assert.equal(result.promotedKeywordCount, 1);
+  assert.deepEqual(result.promotedNormalizedKeywords, ['json diff']);
   assert.notEqual(result.currentRunId, INITIAL_RUN_ID);
 
   const currentLocation = await resolveRunLocation(root, result.currentRunId);
@@ -176,5 +178,7 @@ test('append promotes an expansion-only keyword to an explicit pending root in a
   assert.equal(container.batches.length, 2);
   assert.equal(container.batches[1]?.addedKeywordCount, 0);
   assert.equal(container.batches[1]?.duplicateKeywordCount, 1);
+  assert.equal(container.batches[1]?.promotedKeywordCount, 1);
   assert.deepEqual(container.batches[1]?.newNormalizedKeywords, []);
+  assert.deepEqual(container.batches[1]?.promotedNormalizedKeywords, ['json diff']);
 });

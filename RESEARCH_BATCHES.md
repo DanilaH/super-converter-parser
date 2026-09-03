@@ -45,7 +45,7 @@ For every append:
 
 1. The seed CSV is normalized and de-duplicated using the existing keyword normalization rules.
 2. The input file is copied into `batches/` so the research remains self-contained.
-3. The batch is recorded append-only in `research.json`, including all unique normalized inputs and which ones were genuinely new. Expansion-child promotions remain counted as already-known/duplicate inputs because the normalized keyword already existed.
+3. The batch is recorded append-only in `research.json`, including all unique normalized inputs, which ones were genuinely new, and which already-known expansion children were explicitly promoted to roots.
 4. If every input keyword is already present as an explicit root, no new discovery run is created.
 5. If the batch contains a genuinely new keyword or explicitly promotes an expansion-only keyword to a root seed, a new `discovery-NN/run.sqlite` is created.
 6. Existing keyword checkpoints/evidence are copied forward without recollection, except promoted roots are deliberately reopened as `pending` and do not carry their old child SERP/domain checkpoint into the new generation.
@@ -82,12 +82,16 @@ The original seed file for each appended batch is preserved under `batches/`. `r
 - source row count;
 - unique input keyword count;
 - added keyword count for genuinely unseen normalized keywords;
-- duplicate/already-known count, including an explicit seed that promotes an existing expansion-only keyword;
+- duplicate/already-known count, including an explicit seed that promotes an existing expansion child;
+- promoted keyword count for already-known expansion children that became generation-local roots;
 - all normalized batch keywords;
 - the subset that was genuinely new;
+- the subset that was explicitly promoted to root in this batch;
 - the combined run id produced by that batch.
 
-A promotion-only batch can therefore have `addedKeywordCount = 0` and still create a new discovery generation. `addedKeywordCount` is a keyword-novelty fact, not a proxy for whether the append changed the current discovery generation.
+Newly written V1 batches persist `promotedKeywordCount` and `promotedNormalizedKeywords`. They are additive fields: older V1 `research.json` files that predate root-promotion accounting remain readable and are not rewritten merely to backfill data that was never recorded.
+
+A promotion-only batch can therefore have `addedKeywordCount = 0`, `promotedKeywordCount > 0`, and still create a new discovery generation. `addedKeywordCount` is a keyword-novelty fact, while promotion metadata records the separate root-role mutation.
 
 The first historical run is represented as `batch-0001` when an existing research is adopted. Its original input path is retained from the run manifest, but the old source CSV is not retroactively copied because it may no longer exist.
 

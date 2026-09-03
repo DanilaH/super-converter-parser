@@ -114,7 +114,8 @@ async function main(): Promise<void> {
     console.log(`  Batch: ${prepared.batchId}`);
     console.log(`  Input unique: ${prepared.inputUniqueKeywordCount}`);
     console.log(`  New: ${prepared.addedKeywordCount}`);
-    console.log(`  Already known: ${prepared.duplicateKeywordCount}`);
+    console.log(`  Promoted to root: ${prepared.promotedKeywordCount}`);
+    console.log(`  Already known at input time: ${prepared.duplicateKeywordCount}`);
 
     if (!prepared.changed) {
       // Batch metadata is already durable. ZIP is a derived convenience surface,
@@ -129,7 +130,7 @@ async function main(): Promise<void> {
     console.log(`  Previous run: ${prepared.previousRunId}`);
     console.log(`  New combined run: ${prepared.currentRunId}`);
     console.log('');
-    console.log('Collecting only the new pending keyword checkpoints...');
+    console.log('Collecting only the new/promoted pending keyword checkpoints...');
     console.log('');
 
     exitCode = await runCli(

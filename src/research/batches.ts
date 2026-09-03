@@ -29,8 +29,10 @@ export type ResearchBatch = {
   inputUniqueKeywordCount: number;
   addedKeywordCount: number;
   duplicateKeywordCount: number;
+  promotedKeywordCount?: number;
   normalizedKeywords: string[];
   newNormalizedKeywords: string[];
+  promotedNormalizedKeywords?: string[];
   resultRunId: string;
 };
 
@@ -53,6 +55,8 @@ export type PreparedResearchAppend = {
   inputUniqueKeywordCount: number;
   addedKeywordCount: number;
   duplicateKeywordCount: number;
+  promotedKeywordCount: number;
+  promotedNormalizedKeywords: string[];
   changed: boolean;
 };
 
@@ -184,14 +188,13 @@ export async function prepareResearchAppend(input: {
     const sourceByNormalized = new Map(
       sourceKeywords.map((keyword) => [keyword.normalizedKeyword, keyword] as const),
     );
-    const promotedNormalized = new Set(
-      input.seeds
-        .filter((seed) => {
-          const keyword = sourceByNormalized.get(seed.normalizedKeyword);
-          return keyword !== undefined && isExpansionChildKeyword(keyword);
-        })
-        .map((seed) => seed.normalizedKeyword),
-    );
+    const promotedNormalizedKeywords = input.seeds
+      .filter((seed) => {
+        const keyword = sourceByNormalized.get(seed.normalizedKeyword);
+        return keyword !== undefined && isExpansionChildKeyword(keyword);
+      })
+      .map((seed) => seed.normalizedKeyword);
+    const promotedNormalized = new Set(promotedNormalizedKeywords);
     const newSeeds = input.seeds.filter((seed) => !sourceByNormalized.has(seed.normalizedKeyword));
     const batchNumber = container.batches.length + 1;
     const batchId = `batch-${String(batchNumber).padStart(4, '0')}`;
@@ -219,8 +222,10 @@ export async function prepareResearchAppend(input: {
       inputUniqueKeywordCount: input.seeds.length,
       addedKeywordCount: newSeeds.length,
       duplicateKeywordCount: input.seeds.length - newSeeds.length,
+      promotedKeywordCount: promotedNormalizedKeywords.length,
       normalizedKeywords: input.seeds.map((seed) => seed.normalizedKeyword),
       newNormalizedKeywords: newSeeds.map((seed) => seed.normalizedKeyword),
+      promotedNormalizedKeywords,
       resultRunId: container.currentRunId,
     };
 
@@ -241,6 +246,8 @@ export async function prepareResearchAppend(input: {
         inputUniqueKeywordCount: input.seeds.length,
         addedKeywordCount: 0,
         duplicateKeywordCount: input.seeds.length,
+        promotedKeywordCount: 0,
+        promotedNormalizedKeywords: [],
         changed: false,
       };
     }
@@ -380,6 +387,8 @@ export async function prepareResearchAppend(input: {
       inputUniqueKeywordCount: input.seeds.length,
       addedKeywordCount: newSeeds.length,
       duplicateKeywordCount: input.seeds.length - newSeeds.length,
+      promotedKeywordCount: promotedNormalizedKeywords.length,
+      promotedNormalizedKeywords,
       changed: true,
     };
   } catch (error) {
@@ -464,8 +473,10 @@ function buildAdoptedContainer(
         inputUniqueKeywordCount: rootKeywords.length,
         addedKeywordCount: rootKeywords.length,
         duplicateKeywordCount: 0,
+        promotedKeywordCount: 0,
         normalizedKeywords: rootKeywords.map((keyword) => keyword.normalizedKeyword),
         newNormalizedKeywords: rootKeywords.map((keyword) => keyword.normalizedKeyword),
+        promotedNormalizedKeywords: [],
         resultRunId: run.runId,
       },
     ],
