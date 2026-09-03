@@ -69,7 +69,7 @@ test('public fresh discovery stamps V1 admission into the durable config snapsho
   const store = RunStore.open(join(result.discoveryDirectory, 'run.sqlite'));
   const run = store.loadRun(result.runId!);
   assert.equal(
-    (run?.configSnapshot.expansion as typeof run.configSnapshot.expansion & { admissionVersion?: string }).admissionVersion,
+    (run?.configSnapshot.expansion as { admissionVersion?: string } | undefined)?.admissionVersion,
     'v1',
   );
   store.close();
