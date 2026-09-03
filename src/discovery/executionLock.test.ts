@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -50,6 +50,34 @@ test('acquiring the discovery lock does not materialize an otherwise missing out
       await release();
     }
     await assert.rejects(() => access(outputRoot));
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('discovery execution lock canonicalizes symlinked parents for a missing output root', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'discovery-lock-alias-'));
+  const realParent = join(parent, 'real-parent');
+  const aliasParent = join(parent, 'alias-parent');
+  await mkdir(realParent);
+  await symlink(realParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir');
+  const realRoot = join(realParent, 'not-created');
+  const aliasRoot = join(aliasParent, 'not-created');
+
+  try {
+    const release = await acquireDiscoveryExecutionLock(realRoot);
+    try {
+      await assert.rejects(
+        () => acquireDiscoveryExecutionLock(aliasRoot),
+        (error: unknown) => error instanceof ResearchError
+          && error.code === 'OUTPUT_WRITE_ERROR'
+          && /another discovery execution is already running/i.test(error.message),
+      );
+      await assert.rejects(() => access(realRoot));
+      await assert.rejects(() => access(aliasRoot));
+    } finally {
+      await release();
+    }
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
