@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { access, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { ResearchError } from '../shared/errors.js';
 import {
   allocateEnrichmentDirectory,
@@ -13,6 +14,16 @@ import {
   resolveRunLocation,
   writeRunIndex,
 } from './researchLayout.js';
+
+function writeRunIdentityDatabase(path: string, runId: string): void {
+  const db = new Database(path);
+  try {
+    db.exec('CREATE TABLE runs (run_id TEXT NOT NULL)');
+    db.prepare('INSERT INTO runs (run_id) VALUES (?)').run(runId);
+  } finally {
+    db.close();
+  }
+}
 
 test('researchSlug produces short human-readable ASCII names', () => {
   assert.equal(researchSlug('Business Days Between Dates!!!'), 'business-days-between-dates');
@@ -72,7 +83,7 @@ test('failed run-index publication removes the unindexed research directory when
 test('run index resolves independently from cwd', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-index-'));
   const location = await allocateResearchLocation(root, 'Index Test', new Date('2026-08-25T00:00:00Z'));
-  await writeFile(join(location.discoveryDirectory, 'run.sqlite'), 'sqlite');
+  writeRunIdentityDatabase(join(location.discoveryDirectory, 'run.sqlite'), 'run_123');
   await writeRunIndex(root, {
     version: 1,
     runId: 'run_123',

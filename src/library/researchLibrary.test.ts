@@ -15,6 +15,21 @@ import { publishResearchToLibrary } from './researchLibrary.js';
 const RUN_ID = 'run_library_test';
 const ENRICHMENT_ID = 'enrichment_library_test';
 
+function createIdentityDatabase(
+  path: string,
+  table: 'runs' | 'enrichment_runs',
+  column: 'run_id' | 'enrichment_id',
+  id: string,
+): void {
+  const db = new Database(path);
+  try {
+    db.exec(`CREATE TABLE ${table} (${column} TEXT NOT NULL)`);
+    db.prepare(`INSERT INTO ${table} (${column}) VALUES (?)`).run(id);
+  } finally {
+    db.close();
+  }
+}
+
 async function createPublishedResearch(root: string): Promise<{
   researchDirectory: string;
   discoveryDirectory: string;
@@ -25,7 +40,7 @@ async function createPublishedResearch(root: string): Promise<{
     'Favicon Library Test',
     new Date('2026-08-30T00:00:00Z'),
   );
-  await writeFile(join(location.discoveryDirectory, 'run.sqlite'), 'source sqlite');
+  createIdentityDatabase(join(location.discoveryDirectory, 'run.sqlite'), 'runs', 'run_id', RUN_ID);
   await writeRunIndex(root, {
     version: 1,
     runId: RUN_ID,
@@ -57,7 +72,7 @@ async function createPublishedResearch(root: string): Promise<{
   ], null, 2) + '\n');
 
   const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
-  await writeFile(join(enrichmentDirectory, 'enrichment.sqlite'), 'enrichment sqlite');
+  createIdentityDatabase(join(enrichmentDirectory, 'enrichment.sqlite'), 'enrichment_runs', 'enrichment_id', ENRICHMENT_ID);
   await writeEnrichmentIndex(root, {
     version: 1,
     enrichmentId: ENRICHMENT_ID,
