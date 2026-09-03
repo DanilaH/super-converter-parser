@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { deflateRawSync } from 'node:zlib';
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import Database from 'better-sqlite3';
 import { ResearchError } from '../shared/errors.js';
 
 export type ResearchLocation = {
@@ -136,11 +137,15 @@ export async function resolveRunLocation(
   legacyCwd: string = process.cwd(),
 ): Promise<ResearchLocation> {
   assertSafeId(runId, 'run');
-  const indexed = await readIndex<RunIndexRecord>(join(outputRoot, 'index', 'runs', `${runId}.json`));
+  const indexPath = join(outputRoot, 'index', 'runs', `${runId}.json`);
+  const indexed = await readIndex<RunIndexRecord>(indexPath);
   if (indexed) {
+    assertRunIndexRecord(indexed, runId, indexPath);
     assertIndexedPath(outputRoot, indexed.researchDirectory);
     assertIndexedPath(indexed.researchDirectory, indexed.discoveryDirectory);
-    await requireFile(join(indexed.discoveryDirectory, 'run.sqlite'), `Run ${runId}`);
+    const dbPath = join(indexed.discoveryDirectory, 'run.sqlite');
+    await requireFile(dbPath, `Run ${runId}`);
+    assertDatabaseIdentity(dbPath, 'runs', 'run_id', runId, 'run');
     return {
       researchDirectory: indexed.researchDirectory,
       discoveryDirectory: indexed.discoveryDirectory,
@@ -165,11 +170,15 @@ export async function resolveEnrichmentLocation(
   legacyCwd: string = process.cwd(),
 ): Promise<{ researchDirectory: string; enrichmentDirectory: string; archivePath: string; legacy: boolean }> {
   assertSafeId(enrichmentId, 'enrichment');
-  const indexed = await readIndex<EnrichmentIndexRecord>(join(outputRoot, 'index', 'enrichments', `${enrichmentId}.json`));
+  const indexPath = join(outputRoot, 'index', 'enrichments', `${enrichmentId}.json`);
+  const indexed = await readIndex<EnrichmentIndexRecord>(indexPath);
   if (indexed) {
+    assertEnrichmentIndexRecord(indexed, enrichmentId, indexPath);
     assertIndexedPath(outputRoot, indexed.researchDirectory);
     assertIndexedPath(indexed.researchDirectory, indexed.enrichmentDirectory);
-    await requireFile(join(indexed.enrichmentDirectory, 'enrichment.sqlite'), `Enrichment ${enrichmentId}`);
+    const dbPath = join(indexed.enrichmentDirectory, 'enrichment.sqlite');
+    await requireFile(dbPath, `Enrichment ${enrichmentId}`);
+    assertDatabaseIdentity(dbPath, 'enrichment_runs', 'enrichment_id', enrichmentId, 'enrichment');
     return {
       researchDirectory: indexed.researchDirectory,
       enrichmentDirectory: indexed.enrichmentDirectory,
@@ -246,6 +255,77 @@ async function readIndex<T>(path: string): Promise<T | null> {
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
     throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to read output index "${path}".`, { cause: error });
+  }
+}
+
+function assertRunIndexRecord(value: unknown, expectedRunId: string, path: string): asserts value is RunIndexRecord {
+  if (
+    !isRecord(value)
+    || value.version !== 1
+    || typeof value.runId !== 'string'
+    || typeof value.researchDirectory !== 'string'
+    || typeof value.discoveryDirectory !== 'string'
+  ) {
+    throw new ResearchError('OUTPUT_WRITE_ERROR', `Invalid run output index "${path}".`);
+  }
+  if (value.runId !== expectedRunId) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Run output index "${path}" identifies ${value.runId}, not requested run ${expectedRunId}.`,
+    );
+  }
+}
+
+function assertEnrichmentIndexRecord(
+  value: unknown,
+  expectedEnrichmentId: string,
+  path: string,
+): asserts value is EnrichmentIndexRecord {
+  if (
+    !isRecord(value)
+    || value.version !== 1
+    || typeof value.enrichmentId !== 'string'
+    || typeof value.runId !== 'string'
+    || typeof value.researchDirectory !== 'string'
+    || typeof value.enrichmentDirectory !== 'string'
+  ) {
+    throw new ResearchError('OUTPUT_WRITE_ERROR', `Invalid enrichment output index "${path}".`);
+  }
+  if (value.enrichmentId !== expectedEnrichmentId) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Enrichment output index "${path}" identifies ${value.enrichmentId}, not requested enrichment ${expectedEnrichmentId}.`,
+    );
+  }
+}
+
+function assertDatabaseIdentity(
+  dbPath: string,
+  table: 'runs' | 'enrichment_runs',
+  column: 'run_id' | 'enrichment_id',
+  expectedId: string,
+  kind: 'run' | 'enrichment',
+): void {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.prepare(`SELECT ${column} AS id FROM ${table} ORDER BY rowid`).all() as Array<{ id: unknown }>;
+    if (rows.length !== 1 || rows[0]?.id !== expectedId) {
+      const found = rows.length === 1 && typeof rows[0]?.id === 'string' ? rows[0].id : `${rows.length} identities`;
+      throw new ResearchError(
+        'OUTPUT_WRITE_ERROR',
+        `Output index for ${kind} ${expectedId} points to a database containing ${found}.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof ResearchError) throw error;
+    throw new ResearchError(
+      'DB_ERROR',
+      `Failed to verify durable ${kind} identity ${expectedId} at "${dbPath}".`,
+      { cause: error },
+    );
+  } finally {
+    db?.close();
   }
 }
 
@@ -351,6 +431,7 @@ function buildZip(entries: Array<{ name: string; data: Buffer }>): Buffer {
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0x0800, 8);
     central.writeUInt16LE(8, 10);
+    central.writeUInt16LE(8, 10);
     central.writeUInt16LE(time, 12);
     central.writeUInt16LE(date, 14);
     central.writeUInt32LE(crc, 16);
@@ -383,7 +464,7 @@ function dosDateTime(value: Date): { time: number; date: number } {
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
   let crc = index;
-  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : crc >>> 0;
   return crc >>> 0;
 });
 
