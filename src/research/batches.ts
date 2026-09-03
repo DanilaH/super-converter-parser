@@ -8,7 +8,7 @@ export * from './batchesCore.js';
 export async function readResearchContainer(researchDirectory: string): Promise<ResearchContainer | null> {
   const container = await core.readResearchContainer(researchDirectory);
   if (container === null) return null;
-  assertCurrentContainerHead(container, researchDirectory);
+  assertContainerLineage(container, researchDirectory);
   return container;
 }
 
@@ -22,7 +22,7 @@ export async function prepareResearchAppend(
   return core.prepareResearchAppend(input);
 }
 
-function assertCurrentContainerHead(container: ResearchContainer, researchDirectory: string): void {
+function assertContainerLineage(container: ResearchContainer, researchDirectory: string): void {
   const latestBatch = container.batches.at(-1) as unknown;
   if (!isRecord(latestBatch) || typeof latestBatch.resultRunId !== 'string') {
     throw new ResearchError(
@@ -30,6 +30,21 @@ function assertCurrentContainerHead(container: ResearchContainer, researchDirect
       `Research container in ${researchDirectory} has no valid latest batch result.`,
     );
   }
+
+  const initialBatch = container.batches[0] as unknown;
+  if (!isRecord(initialBatch) || typeof initialBatch.resultRunId !== 'string') {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Research container in ${researchDirectory} has no valid initial batch result.`,
+    );
+  }
+  if (container.researchId !== initialBatch.resultRunId) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Research ID ${container.researchId} does not match initial batch result ${initialBatch.resultRunId}.`,
+    );
+  }
+
   if (container.currentRunId !== latestBatch.resultRunId) {
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
