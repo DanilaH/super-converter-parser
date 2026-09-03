@@ -179,8 +179,18 @@ export async function prepareResearchAppend(input: {
       );
     }
 
-    const existing = new Set(sourceKeywords.map((keyword) => keyword.normalizedKeyword));
-    const newSeeds = input.seeds.filter((seed) => !existing.has(seed.normalizedKeyword));
+    const sourceByNormalized = new Map(
+      sourceKeywords.map((keyword) => [keyword.normalizedKeyword, keyword] as const),
+    );
+    const promotedNormalized = new Set(
+      input.seeds
+        .filter((seed) => {
+          const keyword = sourceByNormalized.get(seed.normalizedKeyword);
+          return keyword !== undefined && isExpansionOnlyKeyword(keyword);
+        })
+        .map((seed) => seed.normalizedKeyword),
+    );
+    const newSeeds = input.seeds.filter((seed) => !sourceByNormalized.has(seed.normalizedKeyword));
     const batchNumber = container.batches.length + 1;
     const batchId = `batch-${String(batchNumber).padStart(4, '0')}`;
     const batchesDirectory = join(researchDirectory, 'batches');
@@ -212,7 +222,7 @@ export async function prepareResearchAppend(input: {
       resultRunId: container.currentRunId,
     };
 
-    if (newSeeds.length === 0) {
+    if (newSeeds.length === 0 && promotedNormalized.size === 0) {
       const unchangedContainer: ResearchContainer = {
         ...container,
         updatedAt: now.toISOString(),
@@ -246,12 +256,15 @@ export async function prepareResearchAppend(input: {
 
     for (const sourceKeyword of sourceKeywords) {
       const duplicateSeed = batchSeedByNormalized.get(sourceKeyword.normalizedKeyword);
-      const sources = duplicateSeed
-        ? [
-            ...sourceKeyword.sources,
-            buildBatchSeedSource(duplicateSeed, batchId, storedBatchRelativePath),
-          ]
-        : sourceKeyword.sources;
+      const promoted = promotedNormalized.has(sourceKeyword.normalizedKeyword);
+      const sources = promoted && duplicateSeed
+        ? [buildBatchSeedSource(duplicateSeed, batchId, storedBatchRelativePath)]
+        : duplicateSeed
+          ? [
+              ...sourceKeyword.sources,
+              buildBatchSeedSource(duplicateSeed, batchId, storedBatchRelativePath),
+            ]
+          : sourceKeyword.sources;
       const created = targetStore.addKeyword(newRunId, {
         keyword: sourceKeyword.keyword,
         normalizedKeyword: sourceKeyword.normalizedKeyword,
@@ -274,6 +287,7 @@ export async function prepareResearchAppend(input: {
 
     const serpByKeyword = groupByKeywordIdx(sourceStore.loadSerpRows(container.currentRunId));
     for (const sourceKeyword of sourceKeywords) {
+      if (promotedNormalized.has(sourceKeyword.normalizedKeyword)) continue;
       const targetKeyword = targetStore.loadKeyword(newRunId, sourceKeyword.idx);
       if (!targetKeyword) {
         throw new ResearchError('DB_ERROR', `Forked keyword ${sourceKeyword.idx} was not persisted.`);
@@ -294,13 +308,20 @@ export async function prepareResearchAppend(input: {
       );
     }
 
-    copyRelatedEvidence(sourceStore, targetStore, container.currentRunId, newRunId);
+    const promotedIdxs = new Set(
+      sourceKeywords
+        .filter((keyword) => promotedNormalized.has(keyword.normalizedKeyword))
+        .map((keyword) => keyword.idx),
+    );
+    copyRelatedEvidence(sourceStore, targetStore, container.currentRunId, newRunId, promotedIdxs);
     copyDomainEvidence(
       sourceStore,
       targetStore,
       container.currentRunId,
       newRunId,
-      sourceKeywords.map((keyword) => ({ idx: keyword.idx, keyword: keyword.keyword })),
+      sourceKeywords
+        .filter((keyword) => !promotedNormalized.has(keyword.normalizedKeyword))
+        .map((keyword) => ({ idx: keyword.idx, keyword: keyword.keyword })),
       serpByKeyword,
     );
     for (let index = 0; index < sourceRun.lookups; index += 1) {
@@ -474,9 +495,11 @@ function copyRelatedEvidence(
   target: RunStore,
   sourceRunId: string,
   targetRunId: string,
+  excludedParentIdxs: ReadonlySet<number> = new Set(),
 ): void {
   const groups = new Map<number, ReturnType<RunStore['loadRelatedKeywords']>>();
   for (const row of source.loadRelatedKeywords(sourceRunId)) {
+    if (excludedParentIdxs.has(row.parentIdx)) continue;
     const rows = groups.get(row.parentIdx) ?? [];
     rows.push(row);
     groups.set(row.parentIdx, rows);
@@ -554,6 +577,11 @@ function buildBatchSeedSource(seed: SeedKeyword, batchId: string, inputPath: str
     batchId,
     inputPath,
   };
+}
+
+function isExpansionOnlyKeyword(keyword: { sources: ReadonlyArray<{ type: string }> }): boolean {
+  return keyword.sources.length > 0
+    && keyword.sources.every((source) => source.type === 'surfer_related');
 }
 
 async function copyFileAtomic(source: string, target: string): Promise<void> {
