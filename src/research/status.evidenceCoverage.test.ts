@@ -69,7 +69,18 @@ test('research status projects persisted representative evidence gaps from the c
     createdAt: '2026-08-31T00:00:00.000Z',
     updatedAt: '2026-08-31T00:01:00.000Z',
     currentRunId: runId,
-    batches: [],
+    batches: [{
+      batchId: 'batch-0001',
+      createdAt: '2026-08-31T00:00:00.000Z',
+      input: { kind: 'seeds', originalPath: 'fixture.csv', storedPath: null },
+      sourceRowCount: 1,
+      inputUniqueKeywordCount: 1,
+      addedKeywordCount: 1,
+      duplicateKeywordCount: 0,
+      normalizedKeywords: ['status evidence keyword'],
+      newNormalizedKeywords: ['status evidence keyword'],
+      resultRunId: runId,
+    }],
   }, null, 2)}\n`, 'utf8');
 
   const enrichmentDirectory = await allocateEnrichmentDirectory(location.researchDirectory);
