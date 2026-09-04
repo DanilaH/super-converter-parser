@@ -91,7 +91,9 @@ The current reader fails closed when those invariants are broken.
 
 The output index is a locator only. Durable SQLite identity is validated before an indexed run/enrichment is trusted.
 
-## High-level module shape
+## Selected high-level module boundaries
+
+This is an orientation map, not an exhaustive directory listing. The repository tree/code remains authoritative for exact file placement.
 
 ```text
 src/
@@ -110,9 +112,11 @@ src/
 ├── google/              # organic SERP and suggestion parsing
 ├── historicalPresence/  # bounded Common Crawl sampled-presence evidence
 ├── input/               # seeds, Microsoft, traffic imports
+├── library/             # cumulative immutable publication/index logic
 ├── operatorConfig/      # typed config/preset/continuation + planner semantics
 ├── outputs/             # research layout/index/archive/publication helpers
 ├── rdap/                # registration evidence
+├── research/            # current research status/projection helpers
 ├── runs/                # discovery engine/checkpoints/expansion/aggregation
 ├── scoring/             # broad-discovery Score contract
 ├── shared/              # intentionally small common utilities
