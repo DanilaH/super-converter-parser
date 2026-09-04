@@ -89,6 +89,7 @@ test('collector applies deterministic entrant-aware cross-cluster priority and e
     assert.equal(result.domains.find((row) => row.registrableDomain === 'only-a.test')?.omitReason, 'domain_cap');
     assert.equal(result.domains.find((row) => row.registrableDomain === 'shared.test')?.priority.clusterCount, 2);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'shared.test')?.priority.bestRank, 2);
+    assert.equal(result.selectionPolicyVersion, 'entrant-v1');
   } finally {
     cache.close();
   }
@@ -113,6 +114,30 @@ test('known weak entrant wins bounded history slot over stronger authority', asy
     assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.isWeak, true);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.dr, 4);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'authority.test')?.coverageStatus, 'omitted');
+  } finally {
+    cache.close();
+  }
+});
+
+test('conflicting DR across cohorts is not promoted as weak evidence', async () => {
+  const calls: string[] = [];
+  const cache = HistoricalPresenceCache.openInMemory();
+  try {
+    const result = await collectCohortHistoricalPresence({
+      cohorts: [
+        cohort('cluster-1', [domain('conflict.test', 2, 1, { dr: 5, isWeak: true, queryIds: [1], pages: ['/one'] })]),
+        cohort('cluster-2', [domain('conflict.test', 3, 1, { dr: 15, isWeak: true, queryIds: [2], pages: ['/two'] })]),
+      ],
+      client: client(calls),
+      cache,
+      domainCap: 1,
+      now: () => Date.parse('2026-08-31T00:00:00Z'),
+    });
+
+    const priority = result.domains.find((row) => row.registrableDomain === 'conflict.test')?.priority;
+    assert.equal(priority?.drStatus, 'conflict');
+    assert.equal(priority?.dr, null);
+    assert.equal(priority?.isWeak, null);
   } finally {
     cache.close();
   }
