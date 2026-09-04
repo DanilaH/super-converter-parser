@@ -388,6 +388,20 @@ Build entrant evidence from current representative-query SERPs.
 
 Preserve ranking occurrences while deduplicating cohort entities by registrable domain for domain-level projection.
 
+Aggregate/public summaries must keep their counting units explicit:
+
+```text
+rankingOccurrenceCount                   # included SERP ranking rows
+clusterDomainMembershipCount             # domain rows across finalist cohorts; one domain may appear in several clusters
+globalUniqueDomainCount                  # registrable domains deduplicated across all finalist clusters
+crossClusterDomainCount                  # globally unique domains present in >=2 finalist clusters
+knownDrDomainMembershipCount             # cluster-domain memberships with one unambiguous known DR
+weakDomainMembershipCount                # known-DR memberships satisfying the source run's weak threshold
+withinClusterRepeatedDomainMembershipCount # memberships repeated across representative queries inside the same cluster
+```
+
+A per-cluster `summary.uniqueDomainCount` remains valid because it is unique **within that cohort**. Summing those per-cluster values produces `clusterDomainMembershipCount`, not a globally unique domain count.
+
 Expose transparent repetition/coverage facts; do not convert observed entrant success into a launch-success probability.
 
 ## Stage 14 — Bounded sampled historical presence
