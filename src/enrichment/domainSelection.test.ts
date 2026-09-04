@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectDomainsFairly, type DomainObservation } from './domainSelection.js';
+import {
+  buildDomainSelectionEvidence,
+  selectDomainsEntrantAware,
+  selectDomainsFairly,
+  type DomainObservation,
+} from './domainSelection.js';
 
 test('domain cap gives each keyword a turn before taking deeper results', () => {
   const keywords = ['first', 'second', 'third'];
@@ -45,4 +50,46 @@ test('no cap loss when the limit exceeds the unique domain count', () => {
     selected: ['a.test', 'b.test'],
     omitted: [],
   });
+});
+
+test('entrant-aware selection keeps keyword fairness while preferring weak recurring domains', () => {
+  const result = selectDomainsEntrantAware(
+    ['first', 'second', 'third'],
+    [
+      { keyword: 'first', domain: 'authority.test', position: 1, dr: 80, pageIdentity: '/a' },
+      { keyword: 'first', domain: 'entrant.test', position: 4, dr: 4, pageIdentity: '/first' },
+      { keyword: 'second', domain: 'authority.test', position: 1, dr: 80, pageIdentity: '/b' },
+      { keyword: 'second', domain: 'entrant.test', position: 5, dr: 4, pageIdentity: '/second' },
+      { keyword: 'third', domain: 'third-authority.test', position: 1, dr: 70, pageIdentity: '/third' },
+      { keyword: 'third', domain: 'third-weak.test', position: 6, dr: 20, pageIdentity: '/third-weak' },
+    ],
+    3,
+    30,
+  );
+
+  assert.deepEqual(result.selected, ['entrant.test', 'third-weak.test', 'authority.test']);
+  assert.equal(result.policyVersion, 'entrant-v1');
+  assert.equal(result.evidence.find((row) => row.domain === 'entrant.test')?.keywordCount, 2);
+  assert.equal(result.evidence.find((row) => row.domain === 'entrant.test')?.distinctPageCount, 2);
+});
+
+test('missing or conflicting DR is not silently classified as weak', () => {
+  const evidence = buildDomainSelectionEvidence(
+    [
+      { keyword: 'a', domain: 'missing.test', position: 1, dr: null },
+      { keyword: 'a', domain: 'conflict.test', position: 2, dr: 5 },
+      { keyword: 'b', domain: 'conflict.test', position: 3, dr: 15 },
+      { keyword: 'a', domain: 'weak.test', position: 4, dr: 10 },
+    ],
+    30,
+  );
+
+  assert.deepEqual(
+    evidence.map((row) => [row.domain, row.drStatus, row.dr, row.isWeak]),
+    [
+      ['conflict.test', 'conflict', null, null],
+      ['missing.test', 'missing', null, null],
+      ['weak.test', 'known', 10, true],
+    ],
+  );
 });
