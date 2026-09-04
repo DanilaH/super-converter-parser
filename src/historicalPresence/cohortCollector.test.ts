@@ -127,6 +127,30 @@ test('historical allocation preserves cluster breadth before taking deeper weak 
   }
 });
 
+test('historical cap below cluster count spreads first-pass coverage across finalist order', async () => {
+  const calls: string[] = [];
+  const cache = HistoricalPresenceCache.openInMemory();
+  try {
+    await collectCohortHistoricalPresence({
+      cohorts: [
+        cohort('cluster-1', [domain('a.test', 1)]),
+        cohort('cluster-2', [domain('b.test', 1)]),
+        cohort('cluster-3', [domain('c.test', 1)]),
+        cohort('cluster-4', [domain('d.test', 1)]),
+        cohort('cluster-5', [domain('e.test', 1)]),
+      ],
+      client: client(calls),
+      cache,
+      domainCap: 2,
+      now: () => Date.parse('2026-08-31T00:00:00Z'),
+    });
+
+    assert.deepEqual(calls, ['a.test', 'c.test']);
+  } finally {
+    cache.close();
+  }
+});
+
 test('known weak entrant wins bounded history slot over stronger authority', async () => {
   const calls: string[] = [];
   const cache = HistoricalPresenceCache.openInMemory();
