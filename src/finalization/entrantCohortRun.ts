@@ -145,6 +145,7 @@ export async function runEntrantCohort(
       sourceRunUpdatedAt: sourceRun.updatedAt,
       clusteringUpdatedAt: clusteringItem.updatedAt,
       drThresholds,
+      aggregateSummary,
       cohorts,
     });
 
