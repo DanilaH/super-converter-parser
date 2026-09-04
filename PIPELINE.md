@@ -394,7 +394,7 @@ Expose transparent repetition/coverage facts; do not convert observed entrant su
 
 Current `finalize:full` automatically includes the production Common Crawl sampled-presence step after entrant cohort and before cohort history.
 
-Fresh collections use a separately versioned entrant-aware allocation policy inside the existing Common Crawl domain cap. Selection prefers known weak entrants and then cross-cluster/cross-query recurrence, distinct ranking-page evidence, and rank/occurrence evidence. The collection format remains independently versioned; legacy snapshots without the selection-policy marker remain readable under their historical semantics.
+Fresh collections use a separately versioned entrant-aware allocation policy inside the existing Common Crawl domain cap. The policy preserves finalist-cluster round-robin breadth; within each cluster it prefers known weak entrants and then cross-cluster/cross-query recurrence, distinct ranking-page evidence, and rank/DR/occurrence evidence. A shared domain consumes one bounded slot, so a later cluster advances to its next candidate rather than spending another slot on the same domain. The collection format remains independently versioned; legacy snapshots without the selection-policy marker remain readable under their historical semantics.
 
 The enrichment deep-domain cap and the historical-presence cap are separate bounded allocation contexts. Success of one selector does not imply coverage by the other, and neither may silently increase its configured cap.
 
