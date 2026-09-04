@@ -2,6 +2,7 @@ import { renderCsv } from '../exports/csv.js';
 import { writeTextAtomic } from '../runs/run.js';
 import type { ResearchConfig } from '../config/config.js';
 import type { EntrantCohort } from './entrantCohort.js';
+import type { EntrantCohortAggregateSummary } from './entrantCohortSummary.js';
 
 export type EntrantCohortOutputOptions = {
   enrichmentId: string;
@@ -10,6 +11,7 @@ export type EntrantCohortOutputOptions = {
   sourceRunUpdatedAt: string;
   clusteringUpdatedAt: string;
   drThresholds: ResearchConfig['scoring']['drThresholds'];
+  aggregateSummary: EntrantCohortAggregateSummary;
   cohorts: EntrantCohort[];
 };
 
@@ -143,7 +145,7 @@ export function writeEntrantCohortJson(
     drThresholds: options.drThresholds,
     cohortVersion: options.cohorts[0]?.version ?? null,
     serpTopN: options.cohorts[0]?.serpTopN ?? null,
-    finalistClusterCount: options.cohorts.length,
+    aggregateSummary: options.aggregateSummary,
     cohorts: options.cohorts,
   };
   return writeTextAtomic(
