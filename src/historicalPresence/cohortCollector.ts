@@ -7,7 +7,7 @@ import {
   type HistoricalPresenceStatus,
 } from './types.js';
 
-export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.0.0';
+export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.1.0';
 export const DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP = 30;
 
 export type CohortHistoricalPresenceDomain = {
@@ -18,6 +18,11 @@ export type CohortHistoricalPresenceDomain = {
     bestRank: number;
     occurrenceCount: number;
     clusterCount: number;
+    queryCount: number;
+    distinctPageCount: number;
+    drStatus: 'known' | 'missing' | 'conflict';
+    dr: number | null;
+    isWeak: boolean | null;
   };
   cacheStatus: 'hit' | 'miss' | 'expired' | 'identity_mismatch' | 'omitted';
   result: HistoricalPresenceResult | null;
@@ -47,6 +52,10 @@ type DomainPriority = {
   bestRank: number;
   occurrenceCount: number;
   clusterIds: Set<string>;
+  queryIds: Set<number>;
+  pageIdentities: Set<string>;
+  drValues: Set<number>;
+  weakValues: Set<boolean>;
 };
 
 function isFresh(expiresAt: string, nowMs: number): boolean {
@@ -132,33 +141,65 @@ function buildDomainPriorities(cohorts: EntrantCohort[]): DomainPriority[] {
   const byDomain = new Map<string, DomainPriority>();
   for (const cohort of [...cohorts].sort((a, b) => compareClusterIds(a.clusterId, b.clusterId))) {
     for (const domain of cohort.domains) {
-      const existing = byDomain.get(domain.registrableDomain);
-      if (existing) {
-        existing.bestRank = Math.min(existing.bestRank, domain.bestRank);
-        existing.occurrenceCount += domain.occurrenceCount;
-        existing.clusterIds.add(cohort.clusterId);
-      } else {
-        byDomain.set(domain.registrableDomain, {
-          registrableDomain: domain.registrableDomain,
-          bestRank: domain.bestRank,
-          occurrenceCount: domain.occurrenceCount,
-          clusterIds: new Set([cohort.clusterId]),
-        });
+      const existing = byDomain.get(domain.registrableDomain) ?? {
+        registrableDomain: domain.registrableDomain,
+        bestRank: Number.POSITIVE_INFINITY,
+        occurrenceCount: 0,
+        clusterIds: new Set<string>(),
+        queryIds: new Set<number>(),
+        pageIdentities: new Set<string>(),
+        drValues: new Set<number>(),
+        weakValues: new Set<boolean>(),
+      };
+      existing.bestRank = Math.min(existing.bestRank, domain.bestRank);
+      existing.occurrenceCount += domain.occurrenceCount;
+      existing.clusterIds.add(cohort.clusterId);
+      for (const queryId of domain.queryIdsPresent) existing.queryIds.add(queryId);
+      for (const pageIdentity of domain.normalizedPageIdentities) existing.pageIdentities.add(pageIdentity);
+      for (const dr of domain.drEvidence.observedValues) {
+        if (Number.isFinite(dr)) existing.drValues.add(dr);
       }
+      if (domain.drEvidence.isWeak !== null) existing.weakValues.add(domain.drEvidence.isWeak);
+      byDomain.set(domain.registrableDomain, existing);
     }
   }
-  return [...byDomain.values()].sort((a, b) =>
-    a.bestRank - b.bestRank
-    || b.clusterIds.size - a.clusterIds.size
-    || b.occurrenceCount - a.occurrenceCount
-    || a.registrableDomain.localeCompare(b.registrableDomain));
+  return [...byDomain.values()].sort(compareDomainPriority);
+}
+
+function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
+  const aPublic = publicPriority(a);
+  const bPublic = publicPriority(b);
+  const weakTier = Number(bPublic.isWeak === true) - Number(aPublic.isWeak === true);
+  if (weakTier !== 0) return weakTier;
+  if (bPublic.clusterCount !== aPublic.clusterCount) return bPublic.clusterCount - aPublic.clusterCount;
+  if (bPublic.queryCount !== aPublic.queryCount) return bPublic.queryCount - aPublic.queryCount;
+  if (bPublic.distinctPageCount !== aPublic.distinctPageCount) return bPublic.distinctPageCount - aPublic.distinctPageCount;
+  if (aPublic.bestRank !== bPublic.bestRank) return aPublic.bestRank - bPublic.bestRank;
+  if (bPublic.occurrenceCount !== aPublic.occurrenceCount) return bPublic.occurrenceCount - aPublic.occurrenceCount;
+  const aDr = aPublic.drStatus === 'known' && aPublic.dr !== null ? aPublic.dr : Number.POSITIVE_INFINITY;
+  const bDr = bPublic.drStatus === 'known' && bPublic.dr !== null ? bPublic.dr : Number.POSITIVE_INFINITY;
+  if (aDr !== bDr) return aDr - bDr;
+  return a.registrableDomain.localeCompare(b.registrableDomain);
 }
 
 function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
+  const drValues = [...priority.drValues].sort((a, b) => a - b);
+  const drStatus: CohortHistoricalPresenceDomain['priority']['drStatus'] = drValues.length === 0
+    ? 'missing'
+    : drValues.length === 1
+      ? 'known'
+      : 'conflict';
+  const weakValues = [...priority.weakValues];
+  const isWeak = weakValues.length === 1 ? weakValues[0]! : null;
   return {
     bestRank: priority.bestRank,
     occurrenceCount: priority.occurrenceCount,
     clusterCount: priority.clusterIds.size,
+    queryCount: priority.queryIds.size,
+    distinctPageCount: priority.pageIdentities.size,
+    drStatus,
+    dr: drStatus === 'known' ? drValues[0]! : null,
+    isWeak,
   };
 }
 
