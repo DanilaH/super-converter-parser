@@ -7,7 +7,7 @@
     "googleGl": "us",
     "input": {
       "type": "seeds",
-      "path": "input/automotive-mechanical-megasweep-v1.csv"
+      "path": "../../input/automotive-mechanical-megasweep-v1.csv"
     }
   },
   "workflow": {
