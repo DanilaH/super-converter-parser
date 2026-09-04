@@ -13,6 +13,7 @@ import {
   ENTRANT_SURVIVORSHIP_WARNING,
   buildEntrantCohorts,
 } from '../enrichment/entrantCohort.js';
+import { summarizeEntrantCohorts } from '../enrichment/entrantCohortSummary.js';
 import {
   writeEntrantCohortDomainsCsv,
   writeEntrantCohortJson,
@@ -34,12 +35,14 @@ export type EntrantCohortRunResult = {
   representativeRevision: number;
   changed: boolean;
   finalistClusterCount: number;
-  uniqueDomainCount: number;
-  observedOccurrenceCount: number;
-  excludedOccurrenceCount: number;
-  weakDomainCount: number;
-  knownDrDomainCount: number;
-  repeatedDomainCount: number;
+  rankingOccurrenceCount: number;
+  excludedRankingOccurrenceCount: number;
+  clusterDomainMembershipCount: number;
+  globalUniqueDomainCount: number;
+  crossClusterDomainCount: number;
+  knownDrDomainMembershipCount: number;
+  weakDomainMembershipCount: number;
+  withinClusterRepeatedDomainMembershipCount: number;
   domainsPath: string;
   occurrencesPath: string;
   jsonPath: string;
@@ -115,6 +118,7 @@ export async function runEntrantCohort(
       serpRows: sourceStore.loadSerpRows(enrichment.sourceRunId),
       drThresholds,
     });
+    const aggregateSummary = summarizeEntrantCohorts(cohorts);
 
     const snapshot = {
       enrichmentId: request.enrichmentId,
@@ -141,15 +145,9 @@ export async function runEntrantCohort(
       sourceRunUpdatedAt: sourceRun.updatedAt,
       clusteringUpdatedAt: clusteringItem.updatedAt,
       drThresholds,
+      aggregateSummary,
       cohorts,
     });
-
-    const uniqueDomainCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.uniqueDomainCount, 0);
-    const observedOccurrenceCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.observedOccurrenceCount, 0);
-    const excludedOccurrenceCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.excludedOccurrenceCount, 0);
-    const weakDomainCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.weakDomainCount, 0);
-    const knownDrDomainCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.knownDrDomainCount, 0);
-    const repeatedDomainCount = cohorts.reduce((sum, cohort) => sum + cohort.summary.repeatedDomainCount, 0);
 
     await publishEntrantCohortMetadata({
       enrichmentDirectory: enrichmentLocation.enrichmentDirectory,
@@ -160,13 +158,7 @@ export async function runEntrantCohort(
         version: ENTRANT_COHORT_VERSION,
         representativeRevision: representativeState.revision,
         serpTopN: ENTRANT_COHORT_SERP_TOP_N,
-        finalistClusterCount: cohorts.length,
-        uniqueDomainCount,
-        observedOccurrenceCount,
-        excludedOccurrenceCount,
-        weakDomainCount,
-        knownDrDomainCount,
-        repeatedDomainCount,
+        ...aggregateSummary,
         survivorshipWarning: ENTRANT_SURVIVORSHIP_WARNING,
         drThresholds,
       },
@@ -174,11 +166,18 @@ export async function runEntrantCohort(
     await archiveResearchDirectory(enrichmentLocation.researchDirectory);
 
     logger(
-      `Entrant cohort: ${cohorts.length} finalist cluster(s), ${uniqueDomainCount} domain cohort row(s), `
-      + `${observedOccurrenceCount} ranking occurrence(s), representative revision ${representativeState.revision}`
+      `Entrant cohort: ${aggregateSummary.finalistClusterCount} finalist cluster(s), `
+      + `${aggregateSummary.clusterDomainMembershipCount} cluster-domain membership(s), `
+      + `${aggregateSummary.globalUniqueDomainCount} globally unique domain(s), `
+      + `${aggregateSummary.rankingOccurrenceCount} ranking occurrence(s), `
+      + `representative revision ${representativeState.revision}`
       + `${saveResult.changed ? ' (changed)' : ' (unchanged)'}.`,
     );
-    logger(`Weak domains: ${weakDomainCount}/${knownDrDomainCount} domains with known DR; repeated across representative queries: ${repeatedDomainCount}.`);
+    logger(
+      `Weak domain memberships: ${aggregateSummary.weakDomainMembershipCount}/${aggregateSummary.knownDrDomainMembershipCount} `
+      + `with known DR; within-cluster repeated memberships: ${aggregateSummary.withinClusterRepeatedDomainMembershipCount}; `
+      + `cross-cluster domains: ${aggregateSummary.crossClusterDomainCount}.`,
+    );
     logger(`Warning: ${ENTRANT_SURVIVORSHIP_WARNING}`);
     logger(`Artifacts: ${domainsPath}, ${occurrencesPath}, ${jsonPath}`);
 
@@ -187,13 +186,7 @@ export async function runEntrantCohort(
       sourceRunId: enrichment.sourceRunId,
       representativeRevision: representativeState.revision,
       changed: saveResult.changed,
-      finalistClusterCount: cohorts.length,
-      uniqueDomainCount,
-      observedOccurrenceCount,
-      excludedOccurrenceCount,
-      weakDomainCount,
-      knownDrDomainCount,
-      repeatedDomainCount,
+      ...aggregateSummary,
       domainsPath,
       occurrencesPath,
       jsonPath,
