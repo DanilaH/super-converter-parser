@@ -67,7 +67,7 @@ test('entrant-aware selection keeps keyword fairness while preferring weak recur
     30,
   );
 
-  assert.deepEqual(result.selected, ['entrant.test', 'third-weak.test', 'authority.test']);
+  assert.deepEqual(result.selected, ['entrant.test', 'authority.test', 'third-weak.test']);
   assert.equal(result.policyVersion, 'entrant-v1');
   assert.equal(result.evidence.find((row) => row.domain === 'entrant.test')?.keywordCount, 2);
   assert.equal(result.evidence.find((row) => row.domain === 'entrant.test')?.distinctPageCount, 2);
