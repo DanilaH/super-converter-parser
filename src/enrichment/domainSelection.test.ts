@@ -93,3 +93,16 @@ test('missing or conflicting DR is not silently classified as weak', () => {
     ],
   );
 });
+
+test('weakMax is an exclusive boundary, matching the runner scoring contract', () => {
+  const evidence = buildDomainSelectionEvidence(
+    [
+      { keyword: 'a', domain: 'below.test', position: 1, dr: 29 },
+      { keyword: 'a', domain: 'boundary.test', position: 2, dr: 30 },
+    ],
+    30,
+  );
+
+  assert.equal(evidence.find((row) => row.domain === 'below.test')?.isWeak, true);
+  assert.equal(evidence.find((row) => row.domain === 'boundary.test')?.isWeak, false);
+});
