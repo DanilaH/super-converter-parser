@@ -145,6 +145,7 @@ export function writeEntrantCohortJson(
     drThresholds: options.drThresholds,
     cohortVersion: options.cohorts[0]?.version ?? null,
     serpTopN: options.cohorts[0]?.serpTopN ?? null,
+    finalistClusterCount: options.aggregateSummary.finalistClusterCount,
     aggregateSummary: options.aggregateSummary,
     cohorts: options.cohorts,
   };
