@@ -7,7 +7,8 @@ import {
   type HistoricalPresenceStatus,
 } from './types.js';
 
-export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.1.0';
+export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.0.0';
+export const COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1 = 'entrant-v1';
 export const DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP = 30;
 
 export type CohortHistoricalPresenceDomain = {
@@ -18,11 +19,11 @@ export type CohortHistoricalPresenceDomain = {
     bestRank: number;
     occurrenceCount: number;
     clusterCount: number;
-    queryCount: number;
-    distinctPageCount: number;
-    drStatus: 'known' | 'missing' | 'conflict';
-    dr: number | null;
-    isWeak: boolean | null;
+    queryCount?: number;
+    distinctPageCount?: number;
+    drStatus?: 'known' | 'missing' | 'conflict';
+    dr?: number | null;
+    isWeak?: boolean | null;
   };
   cacheStatus: 'hit' | 'miss' | 'expired' | 'identity_mismatch' | 'omitted';
   result: HistoricalPresenceResult | null;
@@ -30,6 +31,7 @@ export type CohortHistoricalPresenceDomain = {
 
 export type CohortHistoricalPresenceCollection = {
   version: string;
+  selectionPolicyVersion?: typeof COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
   domainCap: number;
   domains: CohortHistoricalPresenceDomain[];
   summary: {
@@ -131,6 +133,7 @@ export async function collectCohortHistoricalPresence(input: {
   domains.sort((a, b) => a.registrableDomain.localeCompare(b.registrableDomain));
   return {
     version: COHORT_HISTORICAL_PRESENCE_VERSION,
+    selectionPolicyVersion: COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1,
     domainCap,
     domains,
     summary: summarize(domains),
@@ -171,20 +174,20 @@ function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
   const bPublic = publicPriority(b);
   const weakTier = Number(bPublic.isWeak === true) - Number(aPublic.isWeak === true);
   if (weakTier !== 0) return weakTier;
-  if (bPublic.clusterCount !== aPublic.clusterCount) return bPublic.clusterCount - aPublic.clusterCount;
-  if (bPublic.queryCount !== aPublic.queryCount) return bPublic.queryCount - aPublic.queryCount;
-  if (bPublic.distinctPageCount !== aPublic.distinctPageCount) return bPublic.distinctPageCount - aPublic.distinctPageCount;
+  if ((bPublic.clusterCount ?? 0) !== (aPublic.clusterCount ?? 0)) return (bPublic.clusterCount ?? 0) - (aPublic.clusterCount ?? 0);
+  if ((bPublic.queryCount ?? 0) !== (aPublic.queryCount ?? 0)) return (bPublic.queryCount ?? 0) - (aPublic.queryCount ?? 0);
+  if ((bPublic.distinctPageCount ?? 0) !== (aPublic.distinctPageCount ?? 0)) return (bPublic.distinctPageCount ?? 0) - (aPublic.distinctPageCount ?? 0);
   if (aPublic.bestRank !== bPublic.bestRank) return aPublic.bestRank - bPublic.bestRank;
   if (bPublic.occurrenceCount !== aPublic.occurrenceCount) return bPublic.occurrenceCount - aPublic.occurrenceCount;
-  const aDr = aPublic.drStatus === 'known' && aPublic.dr !== null ? aPublic.dr : Number.POSITIVE_INFINITY;
-  const bDr = bPublic.drStatus === 'known' && bPublic.dr !== null ? bPublic.dr : Number.POSITIVE_INFINITY;
+  const aDr = aPublic.drStatus === 'known' && aPublic.dr !== null && aPublic.dr !== undefined ? aPublic.dr : Number.POSITIVE_INFINITY;
+  const bDr = bPublic.drStatus === 'known' && bPublic.dr !== null && bPublic.dr !== undefined ? bPublic.dr : Number.POSITIVE_INFINITY;
   if (aDr !== bDr) return aDr - bDr;
   return a.registrableDomain.localeCompare(b.registrableDomain);
 }
 
 function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
   const drValues = [...priority.drValues].sort((a, b) => a - b);
-  const drStatus: CohortHistoricalPresenceDomain['priority']['drStatus'] = drValues.length === 0
+  const drStatus: 'known' | 'missing' | 'conflict' = drValues.length === 0
     ? 'missing'
     : drValues.length === 1
       ? 'known'
