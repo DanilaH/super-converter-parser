@@ -178,8 +178,8 @@ one giant all-phases command
 
 Future commercial-evidence planning remains in:
 
-- [`V3_COMMERCIAL_EVIDENCE_SPEC.md`](./V3_COMMERCIAL_EVIDENCE_SPEC.md)
-- [`COMMERCIAL_DATA_PROVIDER_MATRIX.md`](./COMMERCIAL_DATA_PROVIDER_MATRIX.md)
+- [`V3_COMMERCIAL_EVIDENCE_SPEC.md`](../../plans/v3/V3_COMMERCIAL_EVIDENCE_SPEC.md)
+- [`COMMERCIAL_DATA_PROVIDER_MATRIX.md`](../../plans/v3/COMMERCIAL_DATA_PROVIDER_MATRIX.md)
 
 Neither document is a current V2.2 runtime contract.
 
