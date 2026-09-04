@@ -23,18 +23,20 @@ For **implemented/current behavior**, read in this order:
    - `FULL_RUNS.md`
 6. Code, schemas, tests, and current CLI help are the final implementation evidence when documentation is ambiguous.
 
-`*_ACCEPTANCE.md`, release acceptance files, old implementation plans, versioned roadmaps, methodology reports, and PR-specific design documents are **historical evidence unless a current document explicitly names one as active planning**. They must not override current runtime contracts.
+See `docs/README.md` for the non-current documentation taxonomy.
+
+Files under `docs/history/` are **frozen historical evidence**. Files under `docs/plans/` are **inactive future planning** unless a current root contract explicitly activates them. Neither category overrides current runtime contracts.
 
 In particular:
 
-- `IMPLEMENTATION_PLAN.md` is historical v1 delivery history.
-- `V2_1_IMPLEMENTATION_ROADMAP.md` is not the current backlog.
-- V2.2 and V2.3 acceptance documents record completed release evidence.
-- `CONFIG_FIRST_OPERATOR_UX_PLAN.md` records the now-implemented config-first track through operator acceptance; its old “next PR” language is historical.
+- `docs/history/v1/IMPLEMENTATION_PLAN.md` is historical v1 delivery history.
+- `docs/history/v2.1/V2_1_IMPLEMENTATION_ROADMAP.md` is not the current backlog.
+- V2.2 and V2.3 records under `docs/history/` describe completed release work.
+- `docs/history/config-first/CONFIG_FIRST_OPERATOR_UX_PLAN.md` records the implemented config-first track through operator acceptance; its old “next PR” language is historical.
 - the local GUI track from PR #117 was closed unmerged and is not current work.
-- `V3_COMMERCIAL_EVIDENCE_SPEC.md` and `COMMERCIAL_DATA_PROVIDER_MATRIX.md` are future/inactive planning, not current runtime requirements.
+- `docs/plans/v3/V3_COMMERCIAL_EVIDENCE_SPEC.md` and `docs/plans/v3/COMMERCIAL_DATA_PROVIDER_MATRIX.md` are future/inactive planning, not current runtime requirements.
 
-If an active document conflicts with merged code/tests, first establish actual behavior from the implementation, then fix the active documentation in the same focused change. Do not silently implement the stale prose.
+If an active document conflicts with merged code/tests, first establish actual behavior from the implementation, then fix the active documentation in the same focused change. Do not silently implement stale historical prose.
 
 ## Current accepted baseline
 
