@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "research": {
+    "label": "automotive-mechanical-smoke-30-v1",
+    "market": "US",
+    "googleHl": "en",
+    "googleGl": "us",
+    "input": {
+      "type": "seeds",
+      "path": "../../input/automotive-mechanical-smoke-30-v1.csv"
+    }
+  },
+  "workflow": {
+    "target": "discovery"
+  },
+  "discovery": {
+    "topN": 10,
+    "expand": false,
+    "requireAhrefs": false
+  }
+}
