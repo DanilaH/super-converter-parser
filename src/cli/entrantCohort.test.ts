@@ -252,10 +252,22 @@ test('entrant-cohort CLI persists, publishes and reruns idempotently', async () 
     ) as {
       representativeRevision: number;
       sourceRunUpdatedAt: string;
+      finalistClusterCount: number;
+      aggregateSummary: {
+        rankingOccurrenceCount: number;
+        clusterDomainMembershipCount: number;
+        globalUniqueDomainCount: number;
+        crossClusterDomainCount: number;
+      };
       cohorts: Array<{ warnings: string[] }>;
     };
     assert.equal(json.representativeRevision, 1);
     assert.equal(json.sourceRunUpdatedAt, '2026-08-29T10:00:00.000Z');
+    assert.equal(json.finalistClusterCount, 1);
+    assert.equal(json.aggregateSummary.rankingOccurrenceCount, 4);
+    assert.equal(json.aggregateSummary.clusterDomainMembershipCount, 3);
+    assert.equal(json.aggregateSummary.globalUniqueDomainCount, 3);
+    assert.equal(json.aggregateSummary.crossClusterDomainCount, 0);
     assert.equal(json.cohorts[0]?.warnings.length, 1);
 
     const occurrences = await readFile(
