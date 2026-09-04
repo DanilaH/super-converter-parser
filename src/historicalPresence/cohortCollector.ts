@@ -8,7 +8,13 @@ import {
 } from './types.js';
 
 export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.0.0';
+export const COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1 = 'entrant-v1';
+export const COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY = 'legacy-rank-v1';
 export const DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP = 30;
+
+type CollectorSelectionPolicy =
+  | typeof COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1
+  | typeof COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY;
 
 export type CohortHistoricalPresenceDomain = {
   registrableDomain: string;
@@ -18,6 +24,11 @@ export type CohortHistoricalPresenceDomain = {
     bestRank: number;
     occurrenceCount: number;
     clusterCount: number;
+    queryCount?: number;
+    distinctPageCount?: number;
+    drStatus?: 'known' | 'missing' | 'conflict';
+    dr?: number | null;
+    isWeak?: boolean | null;
   };
   cacheStatus: 'hit' | 'miss' | 'expired' | 'identity_mismatch' | 'omitted';
   result: HistoricalPresenceResult | null;
@@ -25,6 +36,7 @@ export type CohortHistoricalPresenceDomain = {
 
 export type CohortHistoricalPresenceCollection = {
   version: string;
+  selectionPolicyVersion?: typeof COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
   domainCap: number;
   domains: CohortHistoricalPresenceDomain[];
   summary: {
@@ -47,6 +59,10 @@ type DomainPriority = {
   bestRank: number;
   occurrenceCount: number;
   clusterIds: Set<string>;
+  queryIds: Set<number>;
+  pageIdentities: Set<string>;
+  drValues: Set<number>;
+  weakValues: Set<boolean>;
 };
 
 function isFresh(expiresAt: string, nowMs: number): boolean {
@@ -59,25 +75,33 @@ export async function collectCohortHistoricalPresence(input: {
   client: HistoricalPresenceClient;
   cache: HistoricalPresenceCache;
   domainCap?: number;
+  selectionPolicyVersion?: CollectorSelectionPolicy;
   now?: () => number;
 }): Promise<CohortHistoricalPresenceCollection> {
   const domainCap = input.domainCap ?? DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP;
   if (!Number.isInteger(domainCap) || domainCap < 1 || domainCap > 100) {
     throw new Error(`Historical-presence domain cap must be an integer from 1 to 100; got ${domainCap}.`);
   }
+  const selectionPolicyVersion = input.selectionPolicyVersion ?? COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
+  const entrantAware = selectionPolicyVersion === COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
   const now = input.now ?? Date.now;
   const nowMs = now();
-  const priorities = buildDomainPriorities(input.cohorts);
-  const selected = new Set(priorities.slice(0, domainCap).map((item) => item.registrableDomain));
+  const priorities = buildDomainPriorities(input.cohorts).sort(
+    entrantAware ? compareDomainPriority : compareLegacyDomainPriority,
+  );
+  const selected = entrantAware
+    ? selectDomainPrioritiesAcrossClusters(input.cohorts, priorities, domainCap)
+    : new Set(priorities.slice(0, domainCap).map((item) => item.registrableDomain));
   const domains: CohortHistoricalPresenceDomain[] = [];
 
   for (const priority of priorities) {
+    const publishedPriority = entrantAware ? publicPriority(priority) : legacyPublicPriority(priority);
     if (!selected.has(priority.registrableDomain)) {
       domains.push({
         registrableDomain: priority.registrableDomain,
         coverageStatus: 'omitted',
         omitReason: 'domain_cap',
-        priority: publicPriority(priority),
+        priority: publishedPriority,
         cacheStatus: 'omitted',
         result: null,
       });
@@ -95,7 +119,7 @@ export async function collectCohortHistoricalPresence(input: {
         registrableDomain: priority.registrableDomain,
         coverageStatus: 'checked',
         omitReason: null,
-        priority: publicPriority(priority),
+        priority: publishedPriority,
         cacheStatus: 'hit',
         result: cachedResult(cached),
       });
@@ -113,7 +137,7 @@ export async function collectCohortHistoricalPresence(input: {
       registrableDomain: priority.registrableDomain,
       coverageStatus: 'checked',
       omitReason: null,
-      priority: publicPriority(priority),
+      priority: publishedPriority,
       cacheStatus: cached === null ? 'miss' : identityMatches ? 'expired' : 'identity_mismatch',
       result,
     });
@@ -122,6 +146,7 @@ export async function collectCohortHistoricalPresence(input: {
   domains.sort((a, b) => a.registrableDomain.localeCompare(b.registrableDomain));
   return {
     version: COHORT_HISTORICAL_PRESENCE_VERSION,
+    ...(entrantAware ? { selectionPolicyVersion: COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1 } : {}),
     domainCap,
     domains,
     summary: summarize(domains),
@@ -132,33 +157,134 @@ function buildDomainPriorities(cohorts: EntrantCohort[]): DomainPriority[] {
   const byDomain = new Map<string, DomainPriority>();
   for (const cohort of [...cohorts].sort((a, b) => compareClusterIds(a.clusterId, b.clusterId))) {
     for (const domain of cohort.domains) {
-      const existing = byDomain.get(domain.registrableDomain);
-      if (existing) {
-        existing.bestRank = Math.min(existing.bestRank, domain.bestRank);
-        existing.occurrenceCount += domain.occurrenceCount;
-        existing.clusterIds.add(cohort.clusterId);
-      } else {
-        byDomain.set(domain.registrableDomain, {
-          registrableDomain: domain.registrableDomain,
-          bestRank: domain.bestRank,
-          occurrenceCount: domain.occurrenceCount,
-          clusterIds: new Set([cohort.clusterId]),
-        });
+      const existing = byDomain.get(domain.registrableDomain) ?? {
+        registrableDomain: domain.registrableDomain,
+        bestRank: Number.POSITIVE_INFINITY,
+        occurrenceCount: 0,
+        clusterIds: new Set<string>(),
+        queryIds: new Set<number>(),
+        pageIdentities: new Set<string>(),
+        drValues: new Set<number>(),
+        weakValues: new Set<boolean>(),
+      };
+      existing.bestRank = Math.min(existing.bestRank, domain.bestRank);
+      existing.occurrenceCount += domain.occurrenceCount;
+      existing.clusterIds.add(cohort.clusterId);
+      for (const queryId of domain.queryIdsPresent) existing.queryIds.add(queryId);
+      for (const pageIdentity of domain.normalizedPageIdentities) existing.pageIdentities.add(pageIdentity);
+      for (const dr of domain.drEvidence.observedValues) {
+        if (Number.isFinite(dr)) existing.drValues.add(dr);
       }
+      if (domain.drEvidence.isWeak !== null) existing.weakValues.add(domain.drEvidence.isWeak);
+      byDomain.set(domain.registrableDomain, existing);
     }
   }
-  return [...byDomain.values()].sort((a, b) =>
-    a.bestRank - b.bestRank
-    || b.clusterIds.size - a.clusterIds.size
-    || b.occurrenceCount - a.occurrenceCount
-    || a.registrableDomain.localeCompare(b.registrableDomain));
+  return [...byDomain.values()];
 }
 
-function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
+function selectDomainPrioritiesAcrossClusters(
+  cohorts: EntrantCohort[],
+  priorities: DomainPriority[],
+  domainCap: number,
+): Set<string> {
+  const priorityByDomain = new Map(priorities.map((priority) => [priority.registrableDomain, priority]));
+  const orderedCohorts = [...cohorts].sort((a, b) => compareClusterIds(a.clusterId, b.clusterId));
+  const fairCohortOrder = spreadAcrossCohortOrder(orderedCohorts, domainCap);
+  const candidatesByCluster = new Map<string, DomainPriority[]>();
+
+  for (const cohort of fairCohortOrder) {
+    const candidates = cohort.domains
+      .map((domain) => priorityByDomain.get(domain.registrableDomain))
+      .filter((priority): priority is DomainPriority => priority !== undefined)
+      .sort(compareDomainPriority);
+    candidatesByCluster.set(cohort.clusterId, candidates);
+  }
+
+  const selected = new Set<string>();
+  const cursors = new Map(fairCohortOrder.map((cohort) => [cohort.clusterId, 0]));
+
+  while (selected.size < domainCap) {
+    let advanced = false;
+    for (const cohort of fairCohortOrder) {
+      const candidates = candidatesByCluster.get(cohort.clusterId) ?? [];
+      let cursor = cursors.get(cohort.clusterId) ?? 0;
+      while (cursor < candidates.length && selected.has(candidates[cursor]!.registrableDomain)) cursor += 1;
+      cursors.set(cohort.clusterId, cursor + 1);
+      const candidate = candidates[cursor];
+      if (!candidate) continue;
+      selected.add(candidate.registrableDomain);
+      advanced = true;
+      if (selected.size >= domainCap) break;
+    }
+    if (!advanced) break;
+  }
+
+  return selected;
+}
+
+function spreadAcrossCohortOrder(cohorts: EntrantCohort[], domainCap: number): EntrantCohort[] {
+  if (cohorts.length <= domainCap) return cohorts;
+
+  const sampledIndices = new Set<number>();
+  for (let slot = 0; slot < domainCap; slot += 1) {
+    sampledIndices.add(Math.floor((slot * cohorts.length) / domainCap));
+  }
+
+  return [
+    ...[...sampledIndices].map((index) => cohorts[index]!),
+    ...cohorts.filter((_, index) => !sampledIndices.has(index)),
+  ];
+}
+
+function compareLegacyDomainPriority(a: DomainPriority, b: DomainPriority): number {
+  return a.bestRank - b.bestRank
+    || b.clusterIds.size - a.clusterIds.size
+    || b.occurrenceCount - a.occurrenceCount
+    || a.registrableDomain.localeCompare(b.registrableDomain);
+}
+
+function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
+  const aPublic = publicPriority(a);
+  const bPublic = publicPriority(b);
+  const weakTier = Number(bPublic.isWeak === true) - Number(aPublic.isWeak === true);
+  if (weakTier !== 0) return weakTier;
+  if ((bPublic.clusterCount ?? 0) !== (aPublic.clusterCount ?? 0)) return (bPublic.clusterCount ?? 0) - (aPublic.clusterCount ?? 0);
+  if ((bPublic.queryCount ?? 0) !== (aPublic.queryCount ?? 0)) return (bPublic.queryCount ?? 0) - (aPublic.queryCount ?? 0);
+  if ((bPublic.distinctPageCount ?? 0) !== (aPublic.distinctPageCount ?? 0)) return (bPublic.distinctPageCount ?? 0) - (aPublic.distinctPageCount ?? 0);
+  if (aPublic.bestRank !== bPublic.bestRank) return aPublic.bestRank - bPublic.bestRank;
+  if (bPublic.occurrenceCount !== aPublic.occurrenceCount) return bPublic.occurrenceCount - aPublic.occurrenceCount;
+  const aDr = aPublic.drStatus === 'known' && aPublic.dr !== null && aPublic.dr !== undefined ? aPublic.dr : Number.POSITIVE_INFINITY;
+  const bDr = bPublic.drStatus === 'known' && bPublic.dr !== null && bPublic.dr !== undefined ? bPublic.dr : Number.POSITIVE_INFINITY;
+  if (aDr !== bDr) return aDr - bDr;
+  return a.registrableDomain.localeCompare(b.registrableDomain);
+}
+
+function legacyPublicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
   return {
     bestRank: priority.bestRank,
     occurrenceCount: priority.occurrenceCount,
     clusterCount: priority.clusterIds.size,
+  };
+}
+
+function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
+  const drValues = [...priority.drValues].sort((a, b) => a - b);
+  const drStatus: 'known' | 'missing' | 'conflict' = drValues.length === 0
+    ? 'missing'
+    : drValues.length === 1
+      ? 'known'
+      : 'conflict';
+  const weakValues = [...priority.weakValues];
+  const isWeak = drStatus === 'known' && weakValues.length === 1 ? weakValues[0]! : null;
+  return {
+    bestRank: priority.bestRank,
+    occurrenceCount: priority.occurrenceCount,
+    clusterCount: priority.clusterIds.size,
+    queryCount: priority.queryIds.size,
+    distinctPageCount: priority.pageIdentities.size,
+    drStatus,
+    dr: drStatus === 'known' ? drValues[0]! : null,
+    isWeak,
   };
 }
 

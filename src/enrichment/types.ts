@@ -172,6 +172,10 @@ export type QuerySuggestionsConfig = {
   algorithmVersion: string;
 };
 
+export type DomainSelectionConfig = {
+  algorithmVersion: string;
+};
+
 export type EnrichmentModuleConfig = {
   clusters?: ClusteringConfig;
   representative_queries?: RepresentativeQueryRunConfigSnapshot;
@@ -179,6 +183,7 @@ export type EnrichmentModuleConfig = {
   site_structure?: ReservedModuleConfig;
   query_suggestions?: QuerySuggestionsConfig;
   domain_age?: ReservedModuleConfig;
+  domain_selection?: DomainSelectionConfig;
   page_backlinks?: ReservedModuleConfig;
   organic_snapshot?: ReservedModuleConfig;
   http?: ReservedModuleConfig;

@@ -25,6 +25,7 @@ import {
   type HistoricalPresenceCollectionMode,
 } from '../historicalPresence/types.js';
 import { ResearchError } from '../shared/errors.js';
+import { resolveHistoricalPresenceSelectionPolicy } from './historicalPresenceSelectionPolicy.js';
 
 export type HistoricalPresenceRunRequest = {
   outputRoot: string;
@@ -88,12 +89,15 @@ export async function runCohortHistoricalPresence(
       recentMonths: request.recentMonths,
       maxCollections: request.maxCollections,
     };
+    const existingSnapshot = loadCohortHistoricalPresenceState(store, request.enrichmentId);
+    const selectionPolicyVersion = resolveHistoricalPresenceSelectionPolicy(existingSnapshot);
     const client = createCommonCrawlHistoricalPresenceClient(config);
     const collection = await collectCohortHistoricalPresence({
       cohorts: entrant.cohorts,
       client,
       cache,
       domainCap: request.domainCap,
+      selectionPolicyVersion,
     });
     const snapshot = {
       enrichmentId: request.enrichmentId,
@@ -136,6 +140,7 @@ export async function runCohortHistoricalPresence(
       `Complete selected-history observations=${summary.completeSelectedHistoryDomainCount}/${summary.knownPresenceDomainCount}; `
       + `cache hits=${summary.cacheHitCount}; domain lookup requests=${summary.networkRequestCount}.`,
     );
+    logger(`Selection policy: ${selectionPolicyVersion}.`);
     logger('Semantics: earliestSampledCaptureAt is bounded sampled Common Crawl evidence, not exact first-seen.');
     logger(`Artifacts: ${csvPath}, ${jsonPath}`);
 

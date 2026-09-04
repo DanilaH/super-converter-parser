@@ -4,6 +4,7 @@ import type { RunStore } from './store.js';
 import { loadEntrantCohortState, type EntrantCohortState } from './entrantCohorts.js';
 import type { HistoricalPresenceConfigSnapshot } from '../historicalPresence/types.js';
 import {
+  COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1,
   COHORT_HISTORICAL_PRESENCE_VERSION,
   type CohortHistoricalPresenceCollection,
 } from '../historicalPresence/cohortCollector.js';
@@ -234,6 +235,15 @@ function validateSnapshot(snapshot: CohortHistoricalPresenceSnapshot, parent: En
   }
   if (snapshot.collection.version !== snapshot.collectionVersion) {
     throw new ResearchError('DB_ERROR', 'Historical-presence collection version mismatch.');
+  }
+  if (
+    snapshot.collection.selectionPolicyVersion !== undefined
+    && snapshot.collection.selectionPolicyVersion !== COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1
+  ) {
+    throw new ResearchError(
+      'DB_ERROR',
+      `Unsupported historical-presence selection policy ${snapshot.collection.selectionPolicyVersion}.`,
+    );
   }
   if (snapshot.collection.domainCap !== snapshot.config.domainCap) {
     throw new ResearchError('DB_ERROR', 'Historical-presence collection cap does not match persisted config.');
