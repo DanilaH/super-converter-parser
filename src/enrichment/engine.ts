@@ -40,6 +40,7 @@ import type {
   CancellationSignal,
   QuerySuggestionResult,
   QuerySuggestionsConfig,
+  DomainSelectionConfig,
 } from './types.js';
 import { EnrichmentCancelledError, NEVER_CANCELLED } from './types.js';
 import { boundedFetch, type FetcherConfig, type SsrfChecker } from './http/fetcher.js';
@@ -52,7 +53,13 @@ import { parseRobotsTxt, getRobotsUrl } from './site_structure/robots.js';
 import { parseSitemap, sampleUrls } from './site_structure/sitemap.js';
 import type { SiteStructureRecord } from './site_structure/types.js';
 import { EnrichmentCache, makeCacheKey, type CacheTtlConfig } from './cache.js';
-import { selectDomainsFairly, type DomainObservation } from './domainSelection.js';
+import {
+  DOMAIN_SELECTION_POLICY_V1,
+  selectDomainsEntrantAware,
+  selectDomainsFairly,
+  type DomainObservation,
+  type FairDomainSelection,
+} from './domainSelection.js';
 
 export type EnrichmentHttpConfig = {
   enabled: boolean;
@@ -192,10 +199,35 @@ type CollectedDomains = {
   omitted: Array<{ domain: string; sourceKeywords: string[]; sourceRanks: Array<{ keyword: string; position: number }> }>;
 };
 
+function selectBoundedEvidenceDomains(
+  sourceStore: RunStore,
+  sourceRunId: string,
+  keywordOrder: readonly string[],
+  observations: readonly DomainObservation[],
+  maxDomains: number,
+  selectionConfig: DomainSelectionConfig | undefined,
+): FairDomainSelection {
+  if (selectionConfig === undefined) {
+    return selectDomainsFairly(keywordOrder, observations, maxDomains);
+  }
+  if (selectionConfig.algorithmVersion !== DOMAIN_SELECTION_POLICY_V1) {
+    throw new Error(`Unsupported domain-selection policy: ${selectionConfig.algorithmVersion}`);
+  }
+  const sourceRun = sourceStore.loadRun(sourceRunId);
+  if (!sourceRun) throw new Error(`Source run not found for domain selection: ${sourceRunId}`);
+  return selectDomainsEntrantAware(
+    keywordOrder,
+    observations,
+    maxDomains,
+    sourceRun.configSnapshot.scoring.drThresholds.weakMax,
+  );
+}
+
 function collectSourceDomains(
   sourceStore: RunStore,
   sourceRunId: string,
   shortlist: string[] | undefined,
+  selectionConfig: DomainSelectionConfig | undefined,
   logger: EnrichmentLogger,
 ): CollectedDomains {
   const shortlistSet =
@@ -236,18 +268,32 @@ function collectSourceDomains(
     if (domainRanks && !domainRanks.some((r) => r.keyword === keyword && r.position === row.position)) {
       domainRanks.push({ keyword, position: row.position });
     }
-    observations.push({ keyword, domain, position: row.position });
+    observations.push({
+      keyword,
+      domain,
+      position: row.position,
+      dr: row.dr,
+      pageIdentity: row.url,
+    });
   }
 
   const keywordOrder = [...shortlistSet];
-  const selection = selectDomainsFairly(keywordOrder, observations, DOMAIN_AGE_MAX_DOMAINS);
+  const selection = selectBoundedEvidenceDomains(
+    sourceStore,
+    sourceRunId,
+    keywordOrder,
+    observations,
+    DOMAIN_AGE_MAX_DOMAINS,
+    selectionConfig,
+  );
   const omitted = selection.omitted.map((domain) => ({
     domain,
     sourceKeywords: provenance.get(domain) ?? [],
     sourceRanks: ranks.get(domain) ?? [],
   }));
+  const policy = selectionConfig?.algorithmVersion ?? 'legacy-fair';
 
-  logger(`Domain-age: ${selection.selected.length} fairly distributed domains across ${shortlistSet.size} selected keywords${omitted.length > 0 ? ` (${omitted.length} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
+  logger(`Domain-age: ${selection.selected.length} bounded domains across ${shortlistSet.size} selected keywords using ${policy}${omitted.length > 0 ? ` (${omitted.length} omitted, cap ${DOMAIN_AGE_MAX_DOMAINS})` : ''}.`);
   return { domains: selection.selected, provenance, ranks, omitted };
 }
 
@@ -284,9 +330,14 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
     const clusteringConfig = modules.includes('clusters')
       ? (config.clusters ?? defaultClusteringConfig())
       : config.clusters;
+    const needsBoundedDomainSelection = modules.includes('domain_age') || modules.includes('site_structure');
+    const domainSelectionConfig = needsBoundedDomainSelection
+      ? (resume ? config.domain_selection : config.domain_selection ?? { algorithmVersion: DOMAIN_SELECTION_POLICY_V1 })
+      : config.domain_selection;
     const persistedConfig: EnrichmentModuleConfig = {
       ...config,
       ...(clusteringConfig ? { clusters: clusteringConfig } : {}),
+      ...(domainSelectionConfig ? { domain_selection: domainSelectionConfig } : {}),
       http: httpConfig,
       pages: pagesConfig,
       site_structure: siteStructureConfig,
@@ -389,7 +440,13 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
         );
       }
       checkCancellation(signal);
-      const { domains, provenance, ranks, omitted } = collectSourceDomains(sourceConn.store, sourceRunId, shortlist, logger);
+      const { domains, provenance, ranks, omitted } = collectSourceDomains(
+        sourceConn.store,
+        sourceRunId,
+        shortlist,
+        domainSelectionConfig,
+        logger,
+      );
       domainAgeRecords = await runDomainAgeModule({
         domains,
         provenance,
@@ -536,8 +593,8 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                 possiblyJsRendered: p.possiblyJsRendered ?? false,
                 forms: JSON.parse(p.forms) as FormCounts,
                 structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
-                sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
-                sourcePositions: JSON.parse(p.sourcePositions) as number[],
+                sourceKeywords: JSON.parse(p.sourceKeywords),
+                sourcePositions: JSON.parse(p.sourcePositions),
               };
             });
           } else {
@@ -701,6 +758,7 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
           siteStructureConfig,
           enrichmentStore,
           shortlist,
+          domainSelectionConfig,
           cache,
           ssrfChecker,
           logger,
@@ -1459,6 +1517,7 @@ async function runSiteStructureModule(
   siteStructureConfig: EnrichmentSiteStructureConfig,
   enrichmentStore: RunStore,
   shortlist: string[] | undefined,
+  selectionConfig: DomainSelectionConfig | undefined,
   cache: EnrichmentCache | undefined,
   ssrfChecker: SsrfChecker | undefined,
   logger: EnrichmentLogger,
@@ -1504,33 +1563,42 @@ async function runSiteStructureModule(
   for (const kw of selectedKeywords) {
     const rows = serpRowsByKeywordIdx.get(kw.keywordIdx) ?? [];
     for (const row of rows) {
-      if (row.registrableDomain) {
-        const existing = domainProvenance.get(row.registrableDomain);
-        if (existing) {
-          if (!existing.keywords.includes(kw.keyword)) existing.keywords.push(kw.keyword);
-          if (row.position < existing.bestPosition) {
-            existing.bestPosition = row.position;
-          }
-        } else {
-          domainProvenance.set(row.registrableDomain, {
-            keywords: [kw.keyword],
-            bestPosition: row.position,
-          });
+      if (row.resultType !== 'organic' || !row.registrableDomain) continue;
+      const existing = domainProvenance.get(row.registrableDomain);
+      if (existing) {
+        if (!existing.keywords.includes(kw.keyword)) existing.keywords.push(kw.keyword);
+        if (row.position < existing.bestPosition) {
+          existing.bestPosition = row.position;
         }
-        domainObservations.push({ keyword: kw.keyword, domain: row.registrableDomain, position: row.position });
+      } else {
+        domainProvenance.set(row.registrableDomain, {
+          keywords: [kw.keyword],
+          bestPosition: row.position,
+        });
       }
+      domainObservations.push({
+        keyword: kw.keyword,
+        domain: row.registrableDomain,
+        position: row.position,
+        dr: row.dr,
+        pageIdentity: row.url,
+      });
     }
   }
 
-  const selection = selectDomainsFairly(
+  const selection = selectBoundedEvidenceDomains(
+    sourceStore,
+    sourceRunId,
     selectedKeywords.map((keyword) => keyword.keyword),
     domainObservations,
     siteStructureConfig.maxDomains,
+    selectionConfig,
   );
   const domains = selection.selected;
   const omittedDomains = selection.omitted;
+  const policy = selectionConfig?.algorithmVersion ?? 'legacy-fair';
 
-  logger(`Inspecting site structure for ${domains.length} domains (${omittedDomains.length} omitted due to maxDomains=${siteStructureConfig.maxDomains})`);
+  logger(`Inspecting site structure for ${domains.length} domains using ${policy} (${omittedDomains.length} omitted due to maxDomains=${siteStructureConfig.maxDomains})`);
 
   for (const domain of domains) {
     enrichmentStore.insertSiteStructureTargetIfAbsent(enrichmentId, { domain, status: 'pending' });
