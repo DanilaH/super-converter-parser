@@ -120,7 +120,7 @@ export function buildDomainSelectionEvidence(
         bestRank: Number.isFinite(value.bestRank) ? value.bestRank : Number.MAX_SAFE_INTEGER,
         drStatus,
         dr,
-        isWeak: drStatus === 'known' && dr !== null ? dr <= weakDrMax : null,
+        isWeak: drStatus === 'known' && dr !== null ? dr < weakDrMax : null,
       };
     })
     .sort((a, b) => a.domain.localeCompare(b.domain));
