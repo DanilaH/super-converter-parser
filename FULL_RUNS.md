@@ -1,55 +1,159 @@
-# Full-run aliases
+# FULL_RUNS.md
 
-These commands are thin orchestration over the existing proven CLIs. They do not replace the underlying persistence, fingerprint, freshness, or fail-closed contracts.
+## Purpose
 
-## Full discovery
+This file describes the current operator orchestration surfaces.
+
+The accepted normal path is **config-first**. Direct stage CLIs remain supported for specialist/manual operation and debugging.
+
+## 1. Config-first normal flow
+
+Start from a versioned operator config:
+
+```bash
+npm run research:plan -- --config research.config.json
+npm run research:run -- --config research.config.json
+```
+
+A canonical example is available at:
+
+```text
+configs/examples/research.config.json
+```
+
+The first successful config-driven creation returns a stable `researchId`.
+
+Continue that exact logical research with:
+
+```bash
+npm run research:plan -- --research <research-id> [--continue continuation.json]
+npm run research:run  -- --research <research-id> [--continue continuation.json]
+```
+
+Do not copy generated discovery/enrichment IDs into continuation files. The runner resolves current generated identities from durable research state.
+
+### Human gates
+
+The config describes the maximum desired workflow target. It does not bypass human requirements.
+
+The workflow may stop at states such as:
+
+```text
+awaiting_shortlist
+awaiting_finalist_scope
+awaiting_decisions
+```
+
+Supply only the explicit continuation input requested by the current plan/status.
+
+### Resume without new human input
+
+For a configured existing research with recoverable unfinished work:
+
+```bash
+npm run research:run -- --research <research-id>
+```
+
+The executor acquires the relevant execution boundary, re-reads durable state, and replans before continuing. It does not infer the target from folder order or label.
+
+## 2. Plan/status before mutation
+
+Read-only planning:
+
+```bash
+npm run research:plan -- --research <research-id> --json
+```
+
+Read-only status:
+
+```bash
+npm run research:status -- --research <research-id> --json
+```
+
+Use these to determine current discovery/enrichment/finalization/publication state and the next explicit operator input.
+
+Neither surface should invent a product/business recommendation.
+
+## 3. Direct full discovery
+
+The legacy/direct convenience alias remains:
 
 ```bash
 npm run discovery:full -- --seeds input/seeds.csv --name my-research
 ```
 
-Microsoft input is also supported:
+or:
 
 ```bash
 npm run discovery:full -- --microsoft input/microsoft.csv --name my-research
 ```
 
-`discovery:full` is the normal research CLI with Keyword Surfer depth-one expansion enabled.
+`discovery:full` is the direct discovery CLI with depth-one expansion enabled.
 
-Normal discovery already performs the implemented primary discovery work:
+Current fresh expansion uses **Expansion Admission V1**:
 
-- Keyword Surfer volume/CPC;
-- Google organic SERP;
-- Keyword Surfer related-keyword observation;
-- domain normalization;
-- Ahrefs free Domain Rating when `AHREFS_API_KEY` is configured;
-- durable checkpoints, cache, quality/status artifacts and `results.zip`.
+```text
+all roots collect primary + raw Related evidence
+        ↓
+all roots terminal
+        ↓
+global deterministic admission frontier
+        ↓
+selected expansion children only
+```
 
-Therefore the only extra discovery capability currently activated by the `full` alias is related-keyword expansion (`--expand`). Ahrefs remains optional unless the operator explicitly supplies `--require-ahrefs`; the full alias does not turn an optional external dependency into a blocking one.
+The global additions budget is:
 
-## Append another seed batch to the same research
+```text
+min(500, ceil(originalKeywordCount * 1.25))
+```
 
-A research that is already in use can be extended without creating another top-level research folder:
+Current diagnostics include `expansion-admission.json` and `.csv` for V1 runs.
+
+Ahrefs remains optional unless `--require-ahrefs` is explicitly supplied.
+
+## 4. Discovery resume and repair
+
+Ordinary unfinished-run resume:
+
+```bash
+npm run research -- --resume <run-id>
+```
+
+Explicit repair:
+
+```bash
+npm run research -- --resume <run-id> --retry-failed
+```
+
+Despite the historical flag name, the current repair path covers failed primary checkpoints and provably incomplete repairable partial primary checkpoints. It preserves prior attempt evidence.
+
+## 5. Append another seed batch
 
 ```bash
 npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
 ```
 
-Append is intentionally not hidden inside `discovery:full`: it is an explicit mutation of one logical research container. The command stores the input batch, de-duplicates normalized keywords, and forks a new immutable combined discovery snapshot when the batch either adds a genuinely new keyword **or explicitly promotes a keyword that previously existed only as a `surfer_related` expansion child into a root seed**. Unrelated completed checkpoints/evidence are carried forward; genuinely new seeds and promoted roots are the pending collection work.
+Append advances one logical research through immutable combined discovery generations.
 
-A promotion-only batch can therefore create a new discovery generation even when its `addedKeywordCount` is zero: the normalized keyword was already known, but its semantic role changed from expansion child to explicit root. V1 global-expansion forks preserve raw Related evidence while recomputing generation-local selection decisions instead of publishing the previous frontier's `selected` flags as current truth.
+A new generation may result from:
 
-`research:append` is serialized against config-driven continuation and other research mutations using the canonical `execution -> batch -> discovery` lock order. See `RESEARCH_BATCHES.md` for the full durable lineage, promotion, locking, and failure contract.
+- genuinely new keywords; or
+- explicit promotion of a prior expansion child into a root seed.
 
-Use the **current run ID printed by `research:append`** for the next enrichment. Previous enrichment directories remain historical snapshots and are not rewritten.
+A promotion-only append can therefore have `addedKeywordCount = 0` while still creating a new generation.
 
-## Full enrichment
+For V1 expansion forks, raw Related evidence may carry forward, but previous-generation selection flags are not current truth and the new generation recomputes its own frontier.
+
+See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
+
+## 6. Direct full enrichment
 
 ```bash
-npm run enrich:full -- --run <source-run-id> --shortlist-file input/shortlist.txt
+npm run enrich:full -- --run <current-run-id> --shortlist-file input/shortlist.txt
 ```
 
-The alias runs every enrichment module currently marked implemented:
+The current full module set is:
 
 ```text
 clusters
@@ -59,17 +163,39 @@ pages
 site_structure
 ```
 
-The existing shortlist contract remains authoritative. Because the full module set contains deep modules, supply `--shortlist` or `--shortlist-file` with 5-200 source-run keywords.
+Shortlist-dependent work requires an explicit 5–200 source-run keyword shortlist.
 
-All existing options still pass through, for example:
+Resume the same enrichment generation with:
 
 ```bash
-npm run enrich:full -- --run <source-run-id> --shortlist-file input/shortlist.txt --max-suggestions-per-source 5 --max-parents 10
+npm run enrich -- --resume <enrichment-id>
 ```
 
-## Full finalization
+A persisted `running` generation is not blindly assumed dead. Recovery is guarded by the per-enrichment execution lock so a live concurrent owner is not reset.
 
-After full enrichment, the remaining implemented downstream pipeline can be orchestrated with one command:
+## 7. Direct full finalization
+
+After current enrichment, the accepted finalization chain is:
+
+```text
+representative queries
+        ↓
+entrant cohort
+        ↓
+bounded Common Crawl sampled historical presence
+        ↓
+cohort history
+        ↓
+optional/reused compatible traffic evidence
+        ↓
+finalist evidence matrix
+        ↓
+human decisions
+        ↓
+Research Library publication when allowed
+```
+
+Direct command example:
 
 ```powershell
 npm run finalize:full -- --enrichment <enrichment-id> `
@@ -80,44 +206,47 @@ npm run finalize:full -- --enrichment <enrichment-id> `
   --decisions .\decisions.json
 ```
 
-The command runs, in order:
-
-```text
-representative queries
-entrant cohort
-cohort history
-traffic evidence when supplied or already persisted
-finalist evidence matrix
-Research Library publication when decisions are complete
-```
+The threshold values are example methodology policy, not universal SEO truth.
 
 ### Finalist scope
 
-The first representative-query generation still requires an explicit scope:
+The first representative generation requires explicit scope:
 
 ```bash
 --clusters cluster-1,cluster-2
 ```
 
-or, deliberately:
+or deliberate all-cluster selection:
 
 ```bash
 --all-clusters
 ```
 
-A rerun may omit both when the enrichment already has persisted representative scope. `finalize:full` never silently treats all clusters as finalists.
+A compatible persisted representative scope may be reused on later reruns. `finalize:full` never silently treats all clusters as finalists on first use.
+
+### Sampled historical presence
+
+Current `finalize:full` automatically executes the bounded Common Crawl sampled-presence stage after entrant cohort.
+
+This evidence means:
+
+```text
+bounded sampled web presence in selected collections
+```
+
+It does **not** mean exact first-ever web presence or exact site age.
+
+The stage preserves distinct `not_found`, `not_attempted`, `unavailable`, `error`, omission, and incomplete-traversal semantics.
 
 ### Cohort-history policy
 
-The first cohort-history projection still requires the three explicit policy thresholds supported by `cohort-history`. Later reruns can omit them and reuse the persisted policy.
-
-The example values `730 / 730 / 365` are a previously used pilot policy, not universal SEO truth. The orchestrator does not inject them automatically.
+The first compatible cohort-history projection requires the explicit supported methodology thresholds. Later reruns may reuse compatible persisted policy.
 
 ### Traffic
 
 Traffic remains optional external evidence.
 
-To import it during finalization:
+Example import during direct finalization:
 
 ```powershell
 npm run finalize:full -- --enrichment <id> ... `
@@ -126,38 +255,86 @@ npm run finalize:full -- --enrichment <id> ... `
   --decisions .\decisions.json
 ```
 
-If compatible traffic snapshots and policy are already persisted for the enrichment, `finalize:full` automatically reruns the existing traffic projection even without a new `--traffic` file. If no traffic exists, the stage is skipped and traffic remains missing rather than fabricated.
+If compatible traffic snapshots/policy already exist, finalization may reuse/reproject them. If no traffic exists, traffic remains missing rather than fabricated.
 
-### Human decisions and publication
+### Human decisions
 
-`--decisions <path>` uses the existing strict finalist decision JSON contract.
+`--decisions <path>` uses the existing strict finalist-decision contract.
 
-After rebuilding the finalist matrix, the orchestrator checks the durable decision state. Research Library publication happens automatically only when every current finalist has a current human decision.
+If current decisions are incomplete, finalization stops successfully after rebuilding current evidence and reports the unresolved decisions.
 
-If decisions are incomplete, the command stops successfully after producing the current finalist matrix and prints how many finalist decisions are still missing. Re-run the same command with a decisions file after reviewing the evidence.
-
-For a deliberate evidence-only publication, the operator may explicitly pass:
+For deliberate evidence-only publication:
 
 ```bash
 --publish-without-decisions
 ```
 
-This escape hatch is never implied by `full` mode.
+This escape hatch is explicit and never implied by full mode.
 
-## Why these are separate commands
+## 8. Direct specialist finalization commands
 
-The common workflow is therefore:
+The individual commands remain supported:
 
-```text
-discovery:full
-    ↓
-research:append (optional; repeat as needed)
-    ↓
-enrich:full against the current discovery run
-    ↓
-choose finalist clusters / review evidence
-    ↓
-finalize:full
+```bash
+npm run representatives -- ...
+npm run entrant-cohort -- ...
+npm run cohort-historical-presence -- ...
+npm run cohort-history -- ...
+npm run traffic-evidence -- ...
+npm run finalist-evidence -- ...
+npm run library:publish -- ...
 ```
 
-Discovery and enrichment can be fully automated because their inputs and evidence rules are deterministic. Batch append stays explicit because it advances the immutable discovery lineage of an existing research. Finalization contains explicit methodology choices, optional external traffic, and human BUILD/WATCH/REJECT decisions, so the one-command orchestrator forwards those choices instead of inventing them.
+These direct finalization entrypoints share the research execution serialization boundary with config-first finalization. They must not mutate the same research concurrently with another finalization workflow.
+
+## 9. Manual Research Library publication
+
+```bash
+npm run library:publish -- --enrichment <completed-enrichment-id>
+```
+
+`library.sqlite` is durable publication truth.
+
+Publication is immutable/idempotent for one public fingerprint. Later current versions of the same logical research form a superseding lineage.
+
+Derived `library.json`, `library.zip`, and per-publication archives can be repaired without rerunning upstream evidence when durable Library truth already exists.
+
+See [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md).
+
+## 10. Compare immutable generations
+
+```bash
+npm run research:diff -- --research <research-id> --from discovery:1 --to discovery:2
+npm run research:diff -- --research <research-id> --from enrichment:1 --to enrichment:2
+```
+
+The diff reports factual changes only. It does not decide whether a generation is semantically better or an opportunity became stronger.
+
+## Why stages are still separable
+
+Config-first orchestration reduces remembered IDs/flags, but the underlying stages remain intentionally separable because they have different inputs and evidence boundaries:
+
+- discovery can run from deterministic input and provider configuration;
+- append explicitly mutates one research lineage;
+- enrichment may require a human shortlist;
+- finalization requires explicit finalist/methodology choices and may require human decisions;
+- Library publication has its own immutable publication contract.
+
+The orchestrator forwards those choices. It does not invent them.
+
+## Recommended operator sequence
+
+For normal new work:
+
+```text
+1. author/choose config
+2. research:plan
+3. research:run
+4. record stable researchId
+5. research:status / research:plan
+6. provide only the requested continuation input
+7. research:run --research ... --continue ...
+8. repeat until completed/published or intentionally stopped
+```
+
+Use direct stage CLIs when you specifically need lower-level control, debugging, repair, or an existing legacy workflow.
