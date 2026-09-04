@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { EntrantCohort } from '../enrichment/entrantCohort.js';
 import { HistoricalPresenceCache } from './cache.js';
-import { collectCohortHistoricalPresence } from './cohortCollector.js';
+import {
+  COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY,
+  collectCohortHistoricalPresence,
+} from './cohortCollector.js';
 import type { HistoricalPresenceClient, HistoricalPresenceResult } from './types.js';
 
 function domain(
@@ -170,6 +173,31 @@ test('known weak entrant wins bounded history slot over stronger authority', asy
     assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.isWeak, true);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.dr, 4);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'authority.test')?.coverageStatus, 'omitted');
+  } finally {
+    cache.close();
+  }
+});
+
+test('explicit legacy policy keeps rank-first selection and legacy priority shape', async () => {
+  const calls: string[] = [];
+  const cache = HistoricalPresenceCache.openInMemory();
+  try {
+    const result = await collectCohortHistoricalPresence({
+      cohorts: [cohort('cluster-1', [
+        domain('authority.test', 1, 3, { dr: 80, isWeak: false, queryIds: [1, 2, 3], pages: ['/a', '/b', '/c'] }),
+        domain('entrant.test', 5, 2, { dr: 4, isWeak: true, queryIds: [1, 2], pages: ['/one', '/two'] }),
+      ])],
+      client: client(calls),
+      cache,
+      domainCap: 1,
+      selectionPolicyVersion: COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY,
+      now: () => Date.parse('2026-08-31T00:00:00Z'),
+    });
+
+    assert.deepEqual(calls, ['authority.test']);
+    assert.equal(result.selectionPolicyVersion, undefined);
+    const priority = result.domains.find((row) => row.registrableDomain === 'authority.test')?.priority;
+    assert.deepEqual(priority, { bestRank: 1, occurrenceCount: 3, clusterCount: 1 });
   } finally {
     cache.close();
   }
