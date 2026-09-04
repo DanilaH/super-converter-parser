@@ -109,6 +109,20 @@ The runner may collect and project evidence. It must not fabricate:
 
 Human decisions remain explicit and pinned to their current evidence parents.
 
+## Operator visibility and reliability
+
+Do not regress the operator-facing reliability contract while refactoring internals.
+
+Long-running work must keep the operator able to determine, where applicable:
+
+- current stage and current item;
+- completed/total progress;
+- errors and degraded evidence;
+- cache reuse;
+- useful timing/ETA information when it can be estimated honestly.
+
+Discovery/enrichment must remain resilient to isolated keyword/domain/provider failures, graceful Ctrl+C, process interruption, and durable resume. Parser/systemic failure must pause or fail explicitly rather than silently publish junk. Completed expensive checkpoints must not be repeated merely because a reusable cache row changed or expired.
+
 ## Expansion Admission V1
 
 Fresh V1 expansion does **not** append Related candidates immediately per parent.
