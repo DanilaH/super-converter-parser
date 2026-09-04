@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EntrantCohort } from './entrantCohort.js';
+import { summarizeEntrantCohorts } from './entrantCohortSummary.js';
 import {
   writeEntrantCohortDomainsCsv,
   writeEntrantCohortJson,
@@ -129,10 +130,11 @@ test('occurrence CSV preserves included and excluded top-10 rows explicitly', as
   }
 });
 
-test('JSON pins representative revision, source generation, DR thresholds, top-N and survivorship warning', async () => {
+test('JSON pins source identity and exposes explicit aggregate counting units', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'entrant-json-'));
   try {
     const path = join(directory, 'entrant-cohort.json');
+    const aggregateSummary = summarizeEntrantCohorts([COHORT]);
     await writeEntrantCohortJson(path, {
       enrichmentId: 'enr-1',
       sourceRunId: 'source-1',
@@ -140,6 +142,7 @@ test('JSON pins representative revision, source generation, DR thresholds, top-N
       sourceRunUpdatedAt: SOURCE_UPDATED_AT,
       clusteringUpdatedAt: CLUSTERING_UPDATED_AT,
       drThresholds: THRESHOLDS,
+      aggregateSummary,
       cohorts: [COHORT],
     });
     const json = JSON.parse(await readFile(path, 'utf8')) as {
@@ -149,6 +152,8 @@ test('JSON pins representative revision, source generation, DR thresholds, top-N
       drThresholds: typeof THRESHOLDS;
       cohortVersion: string;
       serpTopN: number;
+      finalistClusterCount: number;
+      aggregateSummary: typeof aggregateSummary;
       cohorts: EntrantCohort[];
     };
     assert.equal(json.representativeRevision, 3);
@@ -157,6 +162,18 @@ test('JSON pins representative revision, source generation, DR thresholds, top-N
     assert.deepEqual(json.drThresholds, THRESHOLDS);
     assert.equal(json.cohortVersion, '1.0.0');
     assert.equal(json.serpTopN, 10);
+    assert.equal(json.finalistClusterCount, 1);
+    assert.deepEqual(json.aggregateSummary, {
+      finalistClusterCount: 1,
+      rankingOccurrenceCount: 2,
+      excludedRankingOccurrenceCount: 1,
+      clusterDomainMembershipCount: 1,
+      globalUniqueDomainCount: 1,
+      crossClusterDomainCount: 0,
+      knownDrDomainMembershipCount: 1,
+      weakDomainMembershipCount: 1,
+      withinClusterRepeatedDomainMembershipCount: 1,
+    });
     assert.deepEqual(json.cohorts[0]?.warnings, ['survivorship warning']);
   } finally {
     await rm(directory, { recursive: true, force: true });
