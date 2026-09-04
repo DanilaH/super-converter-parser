@@ -13,11 +13,7 @@ import {
   resolveEnrichmentLocation,
 } from '../outputs/researchLayout.js';
 import { HistoricalPresenceCache, defaultHistoricalPresenceCachePath } from '../historicalPresence/cache.js';
-import {
-  COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY,
-  COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1,
-  collectCohortHistoricalPresence,
-} from '../historicalPresence/cohortCollector.js';
+import { collectCohortHistoricalPresence } from '../historicalPresence/cohortCollector.js';
 import { createCommonCrawlHistoricalPresenceClient } from '../historicalPresence/commonCrawl.js';
 import {
   writeCohortHistoricalPresenceCsv,
@@ -29,6 +25,7 @@ import {
   type HistoricalPresenceCollectionMode,
 } from '../historicalPresence/types.js';
 import { ResearchError } from '../shared/errors.js';
+import { resolveHistoricalPresenceSelectionPolicy } from './historicalPresenceSelectionPolicy.js';
 
 export type HistoricalPresenceRunRequest = {
   outputRoot: string;
@@ -93,9 +90,7 @@ export async function runCohortHistoricalPresence(
       maxCollections: request.maxCollections,
     };
     const existingSnapshot = loadCohortHistoricalPresenceState(store, request.enrichmentId);
-    const selectionPolicyVersion = existingSnapshot && existingSnapshot.collection.selectionPolicyVersion === undefined
-      ? COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY
-      : COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
+    const selectionPolicyVersion = resolveHistoricalPresenceSelectionPolicy(existingSnapshot);
     const client = createCommonCrawlHistoricalPresenceClient(config);
     const collection = await collectCohortHistoricalPresence({
       cohorts: entrant.cohorts,
