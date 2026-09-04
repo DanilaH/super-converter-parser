@@ -1037,7 +1037,6 @@ async function runClustersModule(
     status: 'running',
     source,
     cacheStatus,
-    fetchedAt: new Date().toISOString(),
   });
 
   checkCancellation(signal);
