@@ -13,7 +13,11 @@ import {
   resolveEnrichmentLocation,
 } from '../outputs/researchLayout.js';
 import { HistoricalPresenceCache, defaultHistoricalPresenceCachePath } from '../historicalPresence/cache.js';
-import { collectCohortHistoricalPresence } from '../historicalPresence/cohortCollector.js';
+import {
+  COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY,
+  COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1,
+  collectCohortHistoricalPresence,
+} from '../historicalPresence/cohortCollector.js';
 import { createCommonCrawlHistoricalPresenceClient } from '../historicalPresence/commonCrawl.js';
 import {
   writeCohortHistoricalPresenceCsv,
@@ -88,12 +92,17 @@ export async function runCohortHistoricalPresence(
       recentMonths: request.recentMonths,
       maxCollections: request.maxCollections,
     };
+    const existingSnapshot = loadCohortHistoricalPresenceState(store, request.enrichmentId);
+    const selectionPolicyVersion = existingSnapshot && existingSnapshot.collection.selectionPolicyVersion === undefined
+      ? COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY
+      : COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
     const client = createCommonCrawlHistoricalPresenceClient(config);
     const collection = await collectCohortHistoricalPresence({
       cohorts: entrant.cohorts,
       client,
       cache,
       domainCap: request.domainCap,
+      selectionPolicyVersion,
     });
     const snapshot = {
       enrichmentId: request.enrichmentId,
@@ -136,6 +145,7 @@ export async function runCohortHistoricalPresence(
       `Complete selected-history observations=${summary.completeSelectedHistoryDomainCount}/${summary.knownPresenceDomainCount}; `
       + `cache hits=${summary.cacheHitCount}; domain lookup requests=${summary.networkRequestCount}.`,
     );
+    logger(`Selection policy: ${selectionPolicyVersion}.`);
     logger('Semantics: earliestSampledCaptureAt is bounded sampled Common Crawl evidence, not exact first-seen.');
     logger(`Artifacts: ${csvPath}, ${jsonPath}`);
 
