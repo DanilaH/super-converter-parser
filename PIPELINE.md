@@ -1,44 +1,76 @@
 # PIPELINE.md
 
-## Pipeline overview
+## Purpose
+
+This document describes the **current merged evidence flow** of Utility Research Runner.
+
+It is not a roadmap. Historical implementation plans and acceptance files may describe older stage behavior; they do not override this pipeline.
+
+## End-to-end overview
 
 ```text
 INPUT
-  ├── Microsoft export
-  └── raw seeds
+  ├── seed CSV
+  └── Microsoft Keyword Planner export
         ↓
-validate + normalize + dedupe
+normalize + dedupe + provenance
         ↓
-keyword queue
+DISCOVERY ROOTS
+  Google + Keyword Surfer
+  ├── volume / CPC
+  ├── raw Related observations
+  └── organic SERP + source-specific Google state
         ↓
-Google + Keyword Surfer
-  ├── volume
-  ├── CPC
-  ├── related ideas
-  └── organic SERP + source-specific SERP status
+optional Expansion Admission V1
         ↓
-optional Surfer expansion
+selected expansion children only
         ↓
 normalize SERP domains
         ↓
-dedupe domains globally
+optional Ahrefs DR
         ↓
-Ahrefs DR
+aggregation + Score v1.1 + run-quality
         ↓
-aggregate trustworthy keyword-level SERP metrics
+DISCOVERY SNAPSHOT
         ↓
-deterministic scoring
+optional immutable append generation(s)
         ↓
-run-quality projection
+explicit shortlist
         ↓
-CSV + Markdown + JSON outputs
+ENRICHMENT
+  ├── clusters
+  ├── query suggestions
+  ├── domain age/history evidence
+  ├── pages
+  └── site structure
+        ↓
+explicit finalist scope
+        ↓
+FINALIZATION
+  representative queries
+        ↓
+  entrant cohort
+        ↓
+  bounded Common Crawl sampled historical presence
+        ↓
+  cohort history (RDAP / first-seen policy projection)
+        ↓
+  optional compatible traffic evidence
+        ↓
+  finalist evidence matrix
+        ↓
+  explicit human decisions
+        ↓
+  optional/current Research Library publication
 ```
+
+The config-first planner/executor orchestrates this same pipeline and stops at unresolved human gates. It does not define a second evidence model.
 
 ## Stage 1 — Input
 
-### Raw seeds
+### Seed CSV
 
-Expected minimal file:
+Minimal shape:
 
 ```csv
 keyword
@@ -49,130 +81,153 @@ filter csv by column
 
 ### Microsoft export
 
-The runner must support a Microsoft Keyword Planner CSV adapter.
+Microsoft Keyword Planner CSV remains a supported discovery source.
 
-Because Microsoft exports may change column names/order, parsing logic should:
+The adapter should:
 
-1. identify required columns by known header aliases;
-2. preserve unknown source columns where practical;
-3. fail with a useful schema error if the export cannot be recognized;
-4. normalize rows into the internal keyword model.
+- recognize required headers by supported aliases;
+- preserve source provenance;
+- normalize into the same canonical keyword model as seed input;
+- fail with a useful schema error when the export is not recognizable.
 
-Microsoft volume is a discovery/prioritization signal, not the final truth.
+Microsoft volume is a discovery signal, not final truth and not a universal kill threshold.
 
-Do not apply a strict kill threshold based solely on Microsoft volume bucket.
-
-## Stage 2 — Keyword dedupe
+## Stage 2 — Keyword normalization and identity
 
 Normalize safely:
 
 - trim surrounding whitespace;
-- collapse accidental repeated whitespace;
+- collapse repeated whitespace;
 - preserve semantic punctuation;
-- case-insensitive dedupe for identical queries;
-- retain original source provenance.
+- case-insensitive dedupe for semantically identical normalized text;
+- preserve source provenance.
 
-If the same keyword appears from seeds, Microsoft, and Surfer expansion, it must become one canonical keyword with multiple sources.
+Text normalization is **not** relational ownership.
 
-## Stage 3 — Google + Keyword Surfer
+Within a source discovery generation, durable keyword-owned relations use the persisted keyword index scoped by the source run:
 
-For each canonical keyword collect:
-
-```ts
-{
-  keyword,
-  volume,
-  cpc,
-  googleUrl,
-  surferMarket,
-  googleHl,
-  googleGl,
-  detectedGoogleLocation,
-  status,
-  google: {
-    serpStatus,
-    serpError
-  }
-}
+```text
+(sourceRunId, keywordIdx)
 ```
 
-The browser collector must also collect organic results.
+Normalized text remains valid for semantic dedupe, cache identity where appropriate, user lookup, and display.
 
-The aggregate keyword `status` is not the source of truth for Google SERP availability because Surfer and Google can succeed or fail independently. Fresh collection persists a Google-specific SERP observation:
+## Stage 3 — Root Google + Keyword Surfer collection
+
+For each root keyword collect and persist primary evidence including:
+
+```text
+keyword
+Surfer volume
+Surfer CPC
+Surfer market
+Google hl/gl
+Google page URL
+detected Google location
+Google source-specific SERP state
+organic result rows
+raw Related observations
+provider/parser errors where applicable
+```
+
+### Google SERP truth
+
+Google and Surfer can succeed/fail independently. Aggregate keyword status does not replace source-specific Google state.
+
+Supported SERP semantics include:
 
 ```text
 ok
 empty
 fetch_error
 parse_error
+not_fetched
+unknown
 ```
 
-`not_fetched` and `unknown` are also supported by the evidence resolver for incomplete/historical state.
+Truth rule:
+
+```text
+ok + persisted rows       -> organic_result_count = N
+empty + zero rows         -> organic_result_count = 0
+fetch/parse/not_fetched/
+unknown                   -> organic_result_count missing
+```
+
+Do not convert an unavailable or ambiguous Google result into an easy zero-result SERP.
 
 ### Organic result rules
 
-Collect up to configured `topN` (default 10).
+Collect up to configured `topN` organic rows.
 
-Do not count:
+Do not count ads, sponsored results, PAA, related searches, shopping widgets, local packs, knowledge panels, Surfer-injected links, or navigation links as organic results.
 
-- ads;
-- sponsored results;
-- People Also Ask;
-- related searches;
-- shopping widgets;
-- local/map packs;
-- knowledge panels;
-- Keyword Surfer-injected links;
-- navigation links.
+If the rendered page yields fewer valid organic rows, preserve the observed number.
 
-Store result type explicitly when uncertain.
+## Stage 4 — Expansion Admission V1
 
-If only 9 valid organic results exist on the rendered page, `9` is correct. Never fabricate a 10th result.
+Fresh public discovery with expansion enabled uses a **global deterministic frontier**.
 
-A numeric zero is equally strict:
+Old immediate-per-parent expansion is not the current V1 path.
+
+### Lifecycle
 
 ```text
-serpStatus=empty + Google explicitly confirmed a zero-results page
-→ organic_result_count = 0
-
-serpStatus=fetch_error | parse_error | not_fetched | unknown
-→ organic_result_count is missing
+collect every root's primary + raw Related evidence
+        ↓
+all roots terminal
+        ↓
+build admission from durable Related rows
+        ↓
+append only selected candidates
+        ↓
+collect primary evidence for selected children
 ```
 
-A Surfer failure does not erase a valid Google zero or valid Google rows. A Google failure does not become zero merely because the aggregate keyword is terminal.
+### V1 rules
 
-Historical rows that predate source-specific SERP status are interpreted conservatively from persisted state: positive stored rows prove a successful SERP; a clean historical completed zero-row keyword preserves the old collector's confirmed zero-results behavior; ambiguous terminal zero-row rows remain unknown/missing.
-
-## Stage 4 — Surfer related-keyword expansion
-
-The spike proved the sidebar can expose:
+- expansion depth is exactly 1;
+- reject candidates already present as original keywords;
+- reject single-token automatic expansion candidates;
+- explicit seeds may still be single-token;
+- apply configured `minOverlap`, `minVolume`, and per-parent candidate cap;
+- rank per-parent occurrences deterministically;
+- rank global candidates by non-broadening first, bucketed parent support, best overlap, bounded specificity, max volume, lexical tie-break;
+- strict lexical broadening is a ranking penalty, not a universal reject;
+- preserve directional queries as distinct;
+- cap newly added candidates at:
 
 ```text
-keyword
-overlap
-volume
+min(500, ceil(originalKeywordCount * 1.25))
 ```
 
-Support optional expansion with the canonical CLI flag:
+### Durable/diagnostic behavior
 
-```bash
---expand
+Raw Related evidence is persisted independently from the final frontier decision.
+
+Current derived diagnostics:
+
+```text
+expansion-admission.json
+expansion-admission.csv
 ```
 
-`--expand-surfer` remains an implemented alias; operator examples use `--expand`.
+They expose decisions such as:
 
-Configurable limits:
+```text
+selected
+existing_keyword
+single_token
+below_min_signal
+parent_cap
+global_budget
+```
 
-- max related keywords per seed;
-- minimum volume;
-- minimum/maximum overlap if desired;
-- expansion depth (v1 supports only depth `1`; deeper recursion is not implemented).
+along with support/priority evidence.
 
-v1 depth is fixed at `1`.
+Do **not** claim omission reasons are unavailable for current V1 runs. Historical runs may lack this report and retain their historical semantics.
 
-Do not recursively explode related keywords indefinitely.
-
-Every expanded keyword must preserve parent/source metadata.
+Unknown persisted admission versions fail closed.
 
 ## Stage 5 — Domain normalization
 
@@ -183,152 +238,59 @@ hostname
 registrable domain (eTLD+1)
 ```
 
-Use a Public Suffix List-aware library.
-
-Examples:
-
-```text
-www.example.com       → example.com
-blog.example.com      → example.com
-foo.example.co.uk     → example.co.uk
-```
-
-Do not implement this with a naive split on dots.
+Use Public Suffix List-aware normalization. Do not derive registrable domains with a naive split on dots.
 
 ## Stage 6 — Ahrefs DR
 
-Collect DR once per unique registrable domain, subject to cache TTL.
+Collect DR once per unique registrable domain subject to the shared cache and provider pacing/TTL policy.
 
-One domain may occur in dozens of keyword SERPs. It must not trigger dozens of API calls.
+Ahrefs is optional unless explicitly required.
 
-## Stage 7 — Aggregation
+Preserve provider outcomes distinctly:
 
-For keywords with trustworthy SERP evidence, compute observable metrics such as:
+```text
+ok
+not_found
+error
+not_attempted
+```
+
+Missing DR does not become `0`.
+
+## Stage 7 — Aggregation and scoring
+
+Aggregate only from trustworthy persisted discovery evidence.
+
+Examples include:
 
 ```text
 organic_result_count
 unique_domains
-min_dr
-max_dr
-median_dr
-top3_median_dr
-top5_median_dr
-very_weak_domains_count
-weak_domains_count
-strong_domains_count
-very_strong_domains_count
+min_dr / median_dr / max_dr
+top3_median_dr / top5_median_dr
+weak/strong domain counts
 missing_dr_count
-niche_domain_count
-exact_match_domain_count
-serp_diversity
+niche-domain heuristic counts
+SERP diversity
 ```
 
-If the SERP observation is unavailable or ambiguous, SERP-derived candidate metrics are missing instead of a bundle of valid-looking zeros.
+If SERP evidence is unavailable/ambiguous, SERP-derived candidate fields stay missing.
 
-Thresholds belong in configuration, not scattered through code.
+Broad-discovery scoring is governed by [`SCORING.md`](./SCORING.md). Do not duplicate or silently alter its formula here.
 
-Initial defaults may be:
+The score is a prioritization signal, not a BUILD/KILL verdict.
 
-```text
-very weak: DR < 10
-weak:      DR < 30
-strong:    DR >= 60
-very strong: DR >= 75
-```
+## Stage 8 — Run-quality projection
 
-These are research heuristics, not SEO laws.
+`run-quality.json` is a deterministic read projection over durable discovery evidence.
 
-## Stage 8 — Candidate scoring
+It reports source-specific coverage/warnings for Google, Surfer, Related, Ahrefs, geo, omissions/caps where available, and other discovery quality facts.
 
-See `SCORING.md`.
+Quality warnings explain uncertainty. They are not negative opportunity evidence.
 
-The arithmetic formula, weights, thresholds, and tier boundaries are unchanged, but `SCORING_VERSION` is `1.1.0` because score eligibility now requires trustworthy SERP evidence. A partial keyword with valid Surfer demand and a Google parse/fetch failure remains visible but receives `score=null` rather than being scored as an empty/easy SERP. Trustworthy SERP evidence is necessary but the existing keyword-status rule still applies: failed/non-terminal keywords remain unscored.
+## Stage 9 — Discovery publication
 
-## Explicit failed-keyword repair
-
-A normal `--resume` never reopens terminal failed keyword checkpoints. Repair is an explicit operator action:
-
-```bash
-npm run research -- --resume <run-id> --retry-failed
-```
-
-Only failed discovery keywords are eligible. Previously completed/partial keywords stay untouched, and `completed`, `failed`, and `cancelled` run states remain immutable. A `completed_with_errors` run may be reopened only through this explicit repair path.
-
-The repair control flow is deliberately ordered:
-
-```text
-read-only repair plan
-→ validate persisted parser/config contract
-→ validate refresh/Ahrefs/cache/output writability
-→ atomically journal old keyword + SERP evidence and reset failed checkpoints to pending
-→ mark run paused/resumable
-→ force cache bypass for open repair checkpoints
-→ browser collection / ordinary executeRun
-→ close retry journal from terminal current checkpoints
-→ republish artifacts from reconciled SQLite state
-```
-
-Rejected config/cache/output preflight leaves `run.sqlite` unchanged because mutation happens only at the atomic apply step. Once applied, the open retry attempt is durable before browser work begins, so a browser/CAPTCHA interruption can continue with ordinary `--resume` without losing operator intent.
-
-Retry history is append-only per `(run_id, keyword_idx, retry_no)`: it preserves the previous keyword record and SERP rows and, after completion, the resulting record and rows. Retry numbers are monotonic. Old SERP rows are replaced rather than appended, stale domain membership is removed, and a domain's previous first-seen keyword owner is retained while that owner still has current SERP evidence.
-
-An open repair is its own transient reason to bypass the ordinary keyword cache. This bypass is not persisted into the run's normal `refresh_keywords`, so completing a one-time repair does not turn the keyword into a permanently forced refresh. Independent successful related-keyword evidence is not erased merely because the primary keyword checkpoint is repaired.
-
-## Run-quality projection
-
-`run-quality.json` is a versioned deterministic projection over durable discovery evidence. It is not a replacement state machine and it is not another opportunity score.
-
-The projection reports explicit denominators and provider-native outcome counts for:
-
-```text
-Google SERP
-Keyword Surfer
-related-keyword observation
-Ahrefs domains
-```
-
-Coverage semantics are source-specific:
-
-- Google trustworthy coverage counts only `ok` + confirmed `empty`; fetch/parse/not-fetched/unknown remain outside trustworthy coverage;
-- Surfer coverage counts persisted successful Surfer observations independently from volume/CPC availability;
-- related coverage treats persisted `ok` and truthful `empty` as successful parent observations; `error` and `notAttempted` stay separate;
-- Ahrefs exposes resolved-provider coverage separately from numeric-DR coverage, so `not_found` can be a valid resolved provider outcome without becoming numeric DR;
-- a zero denominator yields `coveragePercent = null`, never fabricated `0%` evidence.
-
-Geo is graded conservatively:
-
-```text
-mismatch
-→ at least one persisted Google geo warning exists
-
-verified
-→ every trustworthy Google SERP observation has a detected physical location
-  and there is no mismatch
-
-logical_only
-→ trustworthy SERP evidence exists, but physical-location coverage is incomplete
-
-unknown
-→ no trustworthy Google SERP evidence exists to grade geo
-```
-
-Configured SERP/related bounds are exposed where persisted config supports them. Discovery does not persist whether each unselected related candidate was excluded by cap vs threshold vs dedupe, so `explicitOmissionCount` remains `null` with `omissionAccounting = not_persisted`; the projection must not invent that breakdown after the fact.
-
-Warnings identify incomplete/error evidence with explicit affected counts and denominators. They do not collapse sources into one aggregate health number.
-
-## Stage 9 — Output
-
-Write all run artifacts even if some keywords failed.
-
-A partial run must be inspectable.
-
-New discovery artifacts are written under
-`<RESEARCH_OUTPUT_ROOT>/<date>-<label>/discovery`. The sibling research directory
-holds parser debug evidence under `debug/` and the atomically refreshed
-`results.zip`. Legacy `runs/<uuid>` directories are resume-compatible only; they
-are not created for new work.
-
-Generate:
+Current discovery produces derived artifacts such as:
 
 ```text
 manifest.json
@@ -342,456 +304,213 @@ domains.csv
 candidates.csv
 report.md
 status.json
+expansion-admission.json/.csv   # V1 expansion runs
 ```
 
-`run-quality.json` is written before `status.json` / `manifest.json`; a failed quality projection write therefore cannot advertise a terminal run with the declared quality artifact missing. `status.json` exposes its path as `artifacts.runQualityJson`.
+SQLite remains resume truth.
 
-Errors must not disappear from output. Source-specific Google SERP status/error is retained in the per-keyword JSON and surfaced in the failed/incomplete section of `report.md`. Existing CSV column contracts remain stable; unavailable numeric SERP evidence is represented as an empty cell rather than `0` or the string `null`.
+Terminal/public metadata is published from durable state with fail-closed ordering. A generated file is not authoritative merely because it physically exists.
 
----
+## Stage 10 — Append / iterative discovery
 
-## CLI and progress UX
-
-The CLI is the user interface of the product. Progress visibility is required.
-
-## Preflight
-
-Before a large run:
-
-```text
-Utility Research Runner
-
-[preflight]
-✓ Research Chrome connected
-✓ Keyword Surfer detected
-✓ Surfer market: United States
-✓ Google reachable
-• Ahrefs DR: configured, or skipped honestly when no key is supplied
-✓ Cache writable
-✓ Research output directory writable
-
-Input: 217 rows
-Unique keywords: 184
-Ready.
-```
-
-If any required dependency is broken, stop before processing hundreds of keywords.
-
-## Stage progress
-
-Example:
-
-```text
-[1/6] Loading input
-✓ 217 rows loaded
-✓ 184 unique keywords
-
-[2/6] Google + Keyword Surfer
-[47/184] json diff
-✓ volume: 8,100
-✓ cpc: $10.55
-✓ organic results: 10
-✓ related ideas: 20
-
-Keywords 47/184 | Cache 61% | Errors 2 | ETA ~14m
-
-[3/6] Normalizing domains
-✓ 932 unique domains
-
-[4/6] Ahrefs DR
-[381/932] example.com → DR 17
-Domains 381/932 | Cache 74% | API requests 99 | ETA ~3m
-
-[5/6] Aggregating
-✓ metrics calculated
-
-[6/6] Writing outputs
-✓ candidates.csv
-✓ run-quality.json
-✓ report.md
-✓ status.json
-
-Done in 21m 42s
-```
-
-## Waiting/retry states
-
-```text
-[74/184] randomize list
-⚠ Surfer data missing
-retry 1/3 in 4s
-```
-
-## CAPTCHA
-
-```text
-⚠ Google CAPTCHA detected.
-
-Solve the CAPTCHA in Research Chrome.
-The runner polls the page and continues automatically after the challenge disappears.
-
-Ctrl+C pauses safely and leaves the active keyword resumable.
-```
-
-No CAPTCHA bypass, Enter prompt, or marker-file handshake.
-
-## Geo warning
-
-If target market and detected Google location disagree:
-
-```text
-⚠ SERP GEO WARNING
-Target: United States
-Google detected location: Chelyabinsk Oblast, Russia
-
-Keyword Surfer metrics use the configured US market,
-but organic rankings may still be influenced by physical location.
-```
-
-This warning should be visible once prominently and recorded per run.
-
-## Logging modes
-
-```text
-default
---verbose
---debug
-```
-
-Default:
-- stage progress;
-- current keyword/domain;
-- retries;
-- warnings;
-- final summary.
-
-Verbose:
-- cache hits/misses;
-- API status;
-- timing;
-- parser decisions.
-
-Debug:
-- selectors;
-- parser internals;
-- diagnostic artifact paths;
-- browser/frame details.
-
-## Agent-friendly mode
+A logical research can be extended with:
 
 ```bash
-npm run research -- ... --json-status
+npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
 ```
 
-The final stdout line must be valid machine-readable JSON. Artifact paths point at
-the allocated discovery directory, for example:
+Append can create a new immutable combined discovery generation when:
 
-```json
-{
-  "status": "completed_with_errors",
-  "runId": "<run-id>",
-  "keywords": 184,
-  "processedKeywords": 184,
-  "errors": 3,
-  "candidateReport": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/candidates.csv",
-  "report": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/report.md",
-  "statusFile": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/status.json",
-  "artifacts": {
-    "runQualityJson": "<RESEARCH_OUTPUT_ROOT>/2026-08-28-example/discovery/run-quality.json"
-  }
-}
-```
+- a genuinely new normalized keyword appears; or
+- an existing expansion child is explicitly promoted into a root seed.
 
-## Exit codes
+Promotion-only append may therefore create a generation with zero genuinely new keywords.
 
-The research CLI has a stable exit-code contract:
+For V1 expansion forks, raw Related evidence can carry forward, but previous generation `selectedForExpansion` decisions are not current truth and are recomputed for the new frontier.
+
+See `RESEARCH_BATCHES.md`.
+
+## Stage 11 — Enrichment
+
+Current full enrichment modules are:
 
 ```text
-0   success, including completed_with_errors
-1   unexpected internal failure
-2   invalid input/configuration
-3   preflight/infrastructure failure
-130 gracefully paused by Ctrl+C
+clusters
+query_suggestions
+domain_age
+pages
+site_structure
 ```
 
----
+Shortlist-dependent deep work requires an explicit bounded shortlist.
 
-## Scoring
+Each module/target is checkpointed incrementally in the enrichment generation's SQLite database. Successful sibling evidence survives individual provider/target failures.
 
-## Purpose
+### Query suggestions
 
-Scoring is a sorting heuristic, not a final business verdict.
+Suggestion sources are independently observable. One source failing must not erase another source's successful results.
 
-The system must expose the raw features used so the score never becomes an opaque magic number.
+`empty`, `unavailable`, and `error` remain distinct. Cache TTL semantics may differ by outcome.
 
-## Observable inputs
+### Page/site-structure work
 
-Possible v1 inputs:
+HTTP enrichment remains bounded in time/bytes/redirects and must preserve the existing SSRF/private-address protection boundary.
+
+## Stage 12 — Representative queries
+
+Finalist validation begins from explicit finalist cluster scope.
+
+Representative query sets are deterministic/versioned projections over current cluster evidence, with explicit override support where accepted.
+
+A changed representative set invalidates dependent interpretation rather than silently relabeling old entrant/finalist evidence as current.
+
+## Stage 13 — Entrant cohort
+
+Build entrant evidence from current representative-query SERPs.
+
+Preserve ranking occurrences while deduplicating cohort entities by registrable domain for domain-level projection.
+
+Expose transparent repetition/coverage facts; do not convert observed entrant success into a launch-success probability.
+
+## Stage 14 — Bounded sampled historical presence
+
+Current `finalize:full` automatically includes the production Common Crawl sampled-presence step after entrant cohort and before cohort history.
+
+Semantics:
 
 ```text
-Surfer volume
-Surfer CPC
-Microsoft bucket/value
-organic result count
-min DR
-median DR
-top3 median DR
-top5 median DR
-weak-domain count
-very-weak-domain count
-strong-domain count
-very-strong-domain count
-SERP domain diversity
-exact-match/niche-domain count
-missing-DR ratio
+bounded sampled web presence
 ```
 
-SERP-derived inputs participate only when the Google SERP observation is trustworthy.
-
-## Important methodological constraints
-
-### Do not sum synonym volumes automatically
-
-Queries such as:
+Not:
 
 ```text
-compare lists
-list comparison
-compare two lists
+exact first-ever web presence
+exact site age
+proof of non-existence
 ```
 
-may heavily overlap.
-
-Each keyword should retain its own demand signal. Cluster-level volume is not a simple sum.
-
-### Microsoft is not truth
-
-Microsoft data is useful for broad discovery. A low Microsoft bucket must not automatically kill a keyword.
-
-### DR is not truth
-
-DR alone does not determine accessibility.
-
-A low-DR spam domain with zero traffic is not proof of opportunity.
-
-The runner only has DR in v1, so scoring should use it as a coarse filter, while final validation still requires manual Ahrefs traffic/backlink inspection.
-
-## Suggested score structure
-
-Keep weights in config.
-
-Example:
+Keep these states distinct:
 
 ```text
-Demand                  0–30
-SERP accessibility      0–40
-Commercial proxy        0–10
-SERP diversity          0–10
-Data completeness       0–10
+ok
+not_found
+not_attempted
+unavailable
+error
+omitted/domain_cap
+incomplete selected-collection traversal
 ```
 
-Do not include subjective implementation complexity unless it is supplied manually.
+Common Crawl never backfills exact `firstSeenDate` semantics.
 
-## Candidate tiers
+## Stage 15 — Cohort history
 
-The report may expose neutral tiers:
+Cohort history projects registration and first-seen evidence under explicit methodology policy.
+
+RDAP registration evidence, first-seen evidence, and Common Crawl sampled historical presence remain separate fact families.
+
+Coverage denominators must expose checked vs unobserved/omitted/error state rather than treating missing domains as clean negatives.
+
+## Stage 16 — Optional traffic evidence
+
+Traffic is provider-neutral imported evidence and remains optional.
+
+Domain-level traffic must not silently populate page-level traffic facts.
+
+Absent traffic remains missing.
+
+Compatible persisted traffic snapshots may be reused according to their existing parent/currentness contract.
+
+## Stage 17 — Finalist evidence matrix
+
+Project current evidence into independent human-review blocks.
+
+The matrix is an evidence surface, not a hidden scalar opportunity score.
+
+Current evidence may include demand, SERP accessibility, entrant repetition, sampled/historical evidence, traffic, moat observations, monetization/geography fields, and explicitly missing product-feasibility information.
+
+Do not fabricate evidence for blocks the runner cannot measure.
+
+## Stage 18 — Human decisions and Library publication
+
+Human decisions remain explicit facts such as:
 
 ```text
-A — inspect first
-B — inspect if time
-C — weak/uncertain
-D — probably saturated/low-demand
+build | watch | reject | unknown
 ```
 
-Avoid calling these automatically `BUILD` or `KILL`.
+and their current SEO/product role where provided.
 
-## Explainability
+Decisions are pinned to the evidence generation they reviewed. Stale decisions remain visible rather than silently current.
 
-For each scored candidate provide a short machine-generated rationale using raw facts, e.g.:
+Research Library publication is immutable/idempotent for the same public snapshot. Derived Library snapshots may be repaired independently when durable `library.sqlite` already contains the publication.
 
-```text
-Score 84
-- volume 27,100
-- 4/9 ranking domains have DR < 30
-- min DR 3
-- top3 median DR 19
-- CPC $2.40
-```
+## Resume and repair
 
-An unscored candidate with unavailable SERP evidence must remain visibly incomplete rather than receive a zero-like rationale.
-
-Do not generate speculative prose.
-
----
-
-## Output contracts
-
-## keywords.csv
-
-Suggested columns:
-
-```text
-keyword
-sources
-microsoft_volume
-microsoft_bucket
-surfer_volume
-surfer_cpc
-surfer_market
-google_hl
-google_gl
-detected_google_location
-geo_warning
-organic_result_count
-status
-error_code
-```
-
-`organic_result_count` is blank when Google SERP evidence is unavailable/ambiguous and `0` only for a confirmed genuine empty SERP. Source-specific SERP status/error is retained in `keywords.json` and the report without changing the established CSV column list.
-
-## related-keywords.csv
-
-```text
-parent_keyword
-keyword
-overlap
-volume
-selected_for_expansion
-```
-
-## serp.csv
-
-```text
-keyword
-position
-title
-url
-hostname
-registrable_domain
-result_type
-dr
-```
-
-## domains.csv
-
-```text
-domain
-dr
-ahrefs_status
-first_seen_in_run
-cache_hit
-fetched_at
-```
-
-## candidates.csv
-
-```text
-keyword
-surfer_volume
-surfer_cpc
-microsoft_volume
-organic_result_count
-unique_domains
-min_dr
-median_dr
-top3_median_dr
-top5_median_dr
-very_weak_domains
-weak_domains
-strong_domains
-very_strong_domains
-exact_match_domains
-niche_domains
-score
-tier
-status
-```
-
-When a candidate lacks trustworthy SERP evidence, its SERP-derived numeric cells and score/tier are blank. Genuine observed zeros remain numeric zero. Exact-match and niche-domain classification must be documented if implemented.
-
-## run-quality.json
-
-Machine-readable evidence-quality projection. Version `1.0.0` includes:
-
-```text
-per-source denominators
-provider-native status counts
-trustworthy/resolved/numeric coverage percentages
-geo grade + detected-location coverage
-configured SERP/related bounds
-explicit omission-accounting availability
-warnings with affected count + denominator
-```
-
-It deliberately contains no aggregate opportunity/quality score. Missing historical config remains `null`; missing omission classification remains `null`; zero denominators produce `null` coverage.
-
-## report.md
-
-Human-readable summary:
-
-```text
-Run overview
-Input summary
-Environment/geo warnings
-Top candidates
-Failed/incomplete keywords + source-specific SERP status
-Cache statistics
-Ahrefs statistics
-Parser health
-Next manual checks
-```
-
-Do not hide errors.
-
-## status.json
-
-Machine-readable final status. `artifacts.runQualityJson` points at the corresponding `run-quality.json` projection.
-
-## Historical behavior
-
-Ordinary completed runs are historical artifacts and are never reopened by normal resume. The one narrow exception is an explicit `--resume <run-id> --retry-failed` repair of a `completed_with_errors` discovery run, which mutates that same logical run while preserving append-only retry evidence. Fully `completed`, `failed`, and `cancelled` discovery states remain immutable.
-
-New runs use the durable research layout under `RESEARCH_OUTPUT_ROOT`; terminal discovery/enrichment directories are historical artifacts. Legacy `runs/<uuid>` / `enrichments/<uuid>` directories remain readable and resumable only where explicitly supported, but are not the layout for new work.
-
----
-
-## V2.1 post-enrichment finalist evidence
-
-After broad discovery and deep enrichment, explicitly selected finalist clusters use a separate evidence chain. It does not replace discovery scoring and it does not issue automatic BUILD/WATCH/KILL verdicts.
-
-```text
-clustering v2
-  ↓
-representatives
-  ↓
-entrant cohort
-  ├── cohort history
-  └── traffic evidence
-        ↓
-finalist evidence matrix
-```
-
-Implemented commands:
+### Ordinary discovery resume
 
 ```bash
-npm run representatives -- --enrichment <enrichment-id> --clusters cluster-1,cluster-4
-npm run entrant-cohort -- --enrichment <enrichment-id>
-npm run cohort-history -- --enrichment <enrichment-id> --young-domain-max-age-days <n> --recent-web-presence-max-age-days <n> --repurpose-gap-min-days <n>
-npm run traffic-evidence -- --enrichment <enrichment-id> --input <traffic.csv> --low-base-organic-traffic-threshold <n>
-npm run finalist-evidence -- --enrichment <enrichment-id> [--decisions <decisions.json>]
+npm run research -- --resume <run-id>
 ```
 
-The finalist matrix projects independent blocks for demand, SERP accessibility, organic traffic proof, entrant repeatability, moat observations, monetization/geography, and product feasibility. Missing evidence remains missing; every ratio retains its denominator; CPC/site-structure facts are descriptive rather than automatic monetization/moat verdicts; product feasibility remains `null` until a human reviews it.
+Continues unfinished work and does not reopen terminal primary checkpoints.
 
-Human decisions are persisted separately from evidence and pinned to the representative revision plus entrant fingerprint they reviewed. `unknown` is an explicit decision and is not the same as no recorded decision. Upstream changes make old decisions stale/retired rather than silently current.
+### Explicit primary repair
 
-Published finalist artifacts are:
+```bash
+npm run research -- --resume <run-id> --retry-failed
+```
+
+The current implementation repairs:
+
+- failed primary keyword checkpoints; and
+- provably incomplete `partial` primary checkpoints where persisted source evidence establishes repairable primary collection.
+
+The historical flag name must not be interpreted as “failed rows only”.
+
+Repair is planned/validated before mutation, journals previous evidence, reopens only eligible current checkpoints, and remains resumable if interrupted.
+
+### Enrichment resume/recovery
+
+```bash
+npm run enrich -- --resume <enrichment-id>
+```
+
+A persisted `running` enrichment generation may be treated as crash residue only after acquiring that generation's execution lock. A live concurrent owner must not be reset.
+
+## Config-first orchestration
+
+Primary operator flow:
+
+```bash
+npm run research:plan -- --config research.config.json
+npm run research:run -- --config research.config.json
+npm run research:plan -- --research <research-id> [--continue continuation.json]
+npm run research:run -- --research <research-id> [--continue continuation.json]
+```
+
+Planner/executor use the same semantic resolution model.
+
+Human-gated states stop explicitly. Continuation names the stable research; generated run/enrichment IDs are resolved from durable state.
+
+## Progress and cancellation
+
+The CLI should expose current stage/item, completed/total, errors, cache behavior, and useful timing/progress data where available.
+
+First Ctrl+C requests graceful cancellation/pause. A later stage must not launch merely because the current stage happened to complete after the signal was already raised.
+
+## Evidence honesty invariant
+
+At every stage:
 
 ```text
-finalist-evidence-matrix.csv
-finalist-evidence-matrix.json
+unknown != zero
+missing != negative
+not_found != unavailable
+not_attempted != checked
+error != empty
+omitted != measured
 ```
 
-They are manifest-gated in `results.zip`. Representative, entrant, cohort-history, traffic, or explicit human-decision generation changes invalidate stale finalist publication before a new matrix is advertised. Raw traffic imports remain durable append-only facts and are revalidated against the current entrant generation.
-
-See `FINALIST_EVIDENCE_ACCEPTANCE.md` for the exact PR-09 contract.
+This invariant is more important than making every table numerically complete.

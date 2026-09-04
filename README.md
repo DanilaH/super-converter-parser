@@ -2,34 +2,43 @@
 
 Local-first CLI for discovering, validating, extending, and preserving SEO research for small browser utilities.
 
-This is an internal research tool, not a SaaS product. SQLite checkpoints are the durable source of truth; CSV/JSON/Markdown/ZIP files are derived operator artifacts.
+This is an internal research tool, not a SaaS product. SQLite checkpoints are the durable source of truth; CSV/JSON/Markdown/ZIP files are derived operator or publication artifacts.
 
 ## Current operator workflow
 
+The accepted primary operator layer is **config-first**:
+
 ```text
-seed / Microsoft keyword input
+research.config.json
         ↓
-discovery:full
+research:plan
         ↓
-research:append (optional, repeatable)
+research:run
         ↓
-enrich:full against the current discovery snapshot
+explicit stable researchId
         ↓
-choose finalist clusters / review evidence
+continue the same research through human gates
         ↓
-finalize:full
-        ↓
-Research Library publication when current human decisions are complete
+Research Library publication when current decisions are complete
 ```
 
-The phases stay separate deliberately:
+Typical commands:
 
-- discovery and enrichment collect deterministic evidence;
-- append advances one research through immutable combined discovery snapshots;
-- finalization forwards explicit finalist scope, methodology policy, optional traffic, and human decisions rather than inventing them;
-- Research Library publication preserves immutable cross-research history.
+```bash
+npm run research:plan -- --config configs/examples/research.config.json
+npm run research:run -- --config configs/examples/research.config.json
+```
 
-See [`FULL_RUNS.md`](./FULL_RUNS.md) for the normal end-to-end command flow.
+Continuation always targets a stable research identity:
+
+```bash
+npm run research:plan -- --research <research-id> [--continue continuation.json]
+npm run research:run  -- --research <research-id> [--continue continuation.json]
+```
+
+The planner is read-only. The runner resolves the same workflow semantics against current durable state and stops truthfully at unresolved human inputs such as shortlist, finalist scope, or finalist decisions.
+
+Legacy/direct stage CLIs remain supported as specialist/operator surfaces. See [`FULL_RUNS.md`](./FULL_RUNS.md).
 
 ## Runtime and install
 
@@ -52,23 +61,118 @@ npm run chrome:start
 
 The default CDP endpoint is `http://127.0.0.1:9333` and can be overridden with `CDP_URL`.
 
-## Primary commands
+## Config-first research
 
-### Full discovery
+A canonical example lives at:
+
+```text
+configs/examples/research.config.json
+```
+
+The config describes semantic research intent such as:
+
+- label and input source;
+- market and Google `hl/gl`;
+- maximum workflow target;
+- discovery expansion and Ahrefs requirement;
+- enrichment modules;
+- finalization/history policy.
+
+Machine/runtime settings remain separate. Credentials, CDP URL, cache path, transport timeouts, parser selectors, and machine-specific absolute paths are not semantic research identity.
+
+Presets are available under `configs/presets/`. Preset identity/revision and effective semantic provenance are persisted so later preset changes do not reinterpret an existing research.
+
+### Plan without side effects
+
+```bash
+npm run research:plan -- --config research.config.json
+npm run research:plan -- --config research.config.json --json
+```
+
+For an existing research:
+
+```bash
+npm run research:plan -- --research <research-id> [--continue continuation.json]
+```
+
+`research:plan` may inspect durable state, but it does not start Chrome, call providers, mutate SQLite, apply human inputs, or publish artifacts.
+
+### Execute
+
+```bash
+npm run research:run -- --config research.config.json
+```
+
+The result exposes the stable `researchId`. Generated discovery/enrichment IDs flow internally after that.
+
+To continue or resume the same configured research:
+
+```bash
+npm run research:run -- --research <research-id>
+npm run research:run -- --research <research-id> --continue continuation.json
+```
+
+Continuation files are typed/versioned and explicitly target the same stable research. The runner never guesses the target from “latest”, label, directory order, or config fingerprint.
+
+## Discovery
+
+Direct discovery remains available:
 
 ```bash
 npm run discovery:full -- --seeds input/seeds.csv --name my-research
-```
-
-or:
-
-```bash
 npm run discovery:full -- --microsoft input/microsoft.csv --name my-research
 ```
 
-`discovery:full` is the normal discovery runner with depth-one Keyword Surfer expansion enabled. Discovery persists Google organic evidence, Surfer volume/CPC and related observations, domain normalization, optional Ahrefs DR, cache provenance, quality state, and resumable checkpoints.
+or via the lower-level CLI:
 
-Ahrefs remains optional unless `--require-ahrefs` is supplied. Missing evidence stays missing; it is never converted to zero.
+```bash
+npm run research -- --seeds input/seeds.csv
+npm run research -- --microsoft input/microsoft.csv
+npm run research -- --seeds input/seeds.csv --expand
+```
+
+Discovery persists:
+
+- Google organic evidence and explicit SERP observation state;
+- Keyword Surfer volume/CPC and Related observations;
+- normalized domains;
+- optional Ahrefs DR;
+- cache provenance and quality state;
+- resumable SQLite checkpoints;
+- deterministic derived artifacts.
+
+Ahrefs remains optional unless explicitly required. Missing evidence stays missing; it is never converted to zero.
+
+### Expansion Admission V1
+
+Fresh public discovery with expansion enabled uses the accepted **global admission V1** path.
+
+It does not append Related candidates immediately after each parent. Instead:
+
+```text
+collect every root + raw Related evidence
+        ↓
+all roots terminal
+        ↓
+deterministic global admission frontier
+        ↓
+append only selected expansion children
+        ↓
+collect their SERPs
+```
+
+Important V1 behavior:
+
+- depth remains 1;
+- automatic single-token expansion candidates are rejected;
+- explicit seeds may still be single-token;
+- `minOverlap`, `minVolume`, and per-parent limits remain admission inputs;
+- strict lexical broadening is deprioritized;
+- additions are capped at `min(500, ceil(originalKeywordCount * 1.25))`;
+- directional queries remain distinct;
+- `expansion-admission.json` and `.csv` expose every deterministic decision/reason/supporting parent;
+- unsupported persisted admission versions fail closed;
+- historical snapshots without the marker keep their historical behavior.
 
 ### Ordinary resume
 
@@ -76,7 +180,7 @@ Ahrefs remains optional unless `--require-ahrefs` is supplied. Missing evidence 
 npm run research -- --resume <run-id>
 ```
 
-Ordinary resume continues unfinished work. Terminal keyword checkpoints are not silently reopened.
+Ordinary resume continues unfinished work. Terminal primary checkpoints are not silently reopened.
 
 ### Explicit primary-checkpoint repair
 
@@ -84,55 +188,57 @@ Ordinary resume continues unfinished work. Terminal keyword checkpoints are not 
 npm run research -- --resume <run-id> --retry-failed
 ```
 
-`--retry-failed` is the historical flag name. The implemented repair surface includes:
+`--retry-failed` is a historical flag name. The current repair surface includes:
 
-- `failed` keyword checkpoints; and
-- `partial` primary checkpoints whose persisted Surfer/Google evidence proves that primary collection is incomplete.
+- failed primary keyword checkpoints; and
+- provably incomplete `partial` primary checkpoints whose persisted source evidence establishes a repairable primary failure.
 
-Completed checkpoints and partial checkpoints without a repairable primary failure are left untouched. Before reopening current state, the previous keyword/SERP evidence is copied into the append-only retry journal. An interrupted repair remains resumable through ordinary `--resume`.
+Prior attempt evidence is journaled before current primary state is reopened.
 
-### Append another seed batch to the same research
+## Append another seed batch
 
 ```bash
 npm run research:append -- --to <research-id-or-run-id> --seeds input/more-seeds.csv
 ```
 
-Append stores the input batch under the same research, de-duplicates normalized keywords, and forks a new immutable combined discovery snapshot when the batch either adds a genuinely new keyword or explicitly promotes a keyword that previously existed only as a `surfer_related` expansion child into a root seed. Unrelated completed checkpoints/evidence are carried forward; genuinely new seeds and promoted roots are the pending collection work.
+Append extends one logical research through immutable combined discovery generations.
 
-A promotion-only batch can therefore create a new generation with `addedKeywordCount = 0`. Append is serialized against config-driven continuation and other research mutations; V1 global-expansion forks preserve raw Related evidence but recompute the current generation's selection flags instead of carrying the old frontier decision forward.
+A batch may create a new generation because it:
 
-Use the **current run ID printed by the command** for downstream enrichment. See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
+- adds a genuinely new normalized keyword; or
+- explicitly promotes an existing expansion child into a root seed.
 
-### Inspect current research status
+A promotion-only append may therefore create a new generation with `addedKeywordCount = 0`.
+
+The stable research identity remains anchored to the first discovery generation while `research.json.currentRunId` advances. See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
+
+## Inspect current research status
 
 ```bash
 npm run research:status -- --research <research-id-or-any-run-id>
+npm run research:status -- --research <research-id-or-any-run-id> --json
 ```
 
-`research:status` is read-only. It resolves the logical research to `research.json.currentRunId` and reports the current discovery generation, keyword completion/repairability, existing quality warnings, immutable enrichment generations and module state, finalization/human-decision progress, and whether the **current exact public snapshot fingerprint** already exists in the Research Library. It also projects deep evidence coverage from current durable representative/cohort/history/traffic state, keeping omitted, unobserved, unavailable, mismatched, and missing evidence explicit instead of converting it to zero or negative evidence. It never resumes, repairs, finalizes, publishes, or rewrites state.
+`research:status` is read-only. It resolves the current logical research, reports current discovery/enrichment/finalization/publication state, projects evidence gaps truthfully, and exposes workflow navigation without making a product/business recommendation.
 
-Use `--json` for the machine-readable projection. Deep coverage warning codes are deterministic uncertainty/navigation facts; the finalist evidence matrix remains the detailed generated artifact with its existing coverage blocks and audit flags. The displayed next action is workflow navigation only; it is not a business or opportunity recommendation.
-
-### Compare immutable generations
+## Compare immutable generations
 
 ```bash
 npm run research:diff -- --research <research-id-or-run-id> --from discovery:1 --to discovery:2
 npm run research:diff -- --research <research-id-or-run-id> --from enrichment:1 --to enrichment:2
 ```
 
-`research:diff` is read-only and compares two explicit immutable generations inside one logical research. Generation refs are intentionally typed: discovery can only be compared with discovery, and enrichment with enrichment. Bare numbers are rejected rather than guessed.
+The diff is factual. It does not infer semantic continuity, opportunity quality, or whether a newer generation is “better”.
 
-Discovery diff reports factual keyword additions/removals, persisted status changes, and Google SERP evidence coverage. Enrichment diff reports module changes, persisted cluster/member changes, representative-query changes, entrant-domain changes, cohort-history coverage/omissions, and traffic snapshot currentness where those evidence layers exist.
+## Deep enrichment
 
-Cluster membership changes are matched by the persisted `clusterId` only. The command does not infer semantic cluster continuity, split/merge meaning, opportunity quality, or whether a newer generation is “better”. Use `--json` for deterministic machine-readable output.
-
-### Full enrichment
+Direct full enrichment:
 
 ```bash
 npm run enrich:full -- --run <current-run-id> --shortlist-file input/shortlist.txt
 ```
 
-The current full enrichment alias runs:
+The current full module set is:
 
 ```text
 clusters
@@ -142,15 +248,39 @@ pages
 site_structure
 ```
 
-Deep modules require an explicit 5-200 keyword shortlist. Enrichment resume uses the same enrichment ID:
+Shortlist-dependent deep work requires an explicit 5–200 keyword shortlist. Config-first execution stops at the corresponding human gate rather than inventing one.
+
+Resume an existing enrichment generation with:
 
 ```bash
 npm run enrich -- --resume <enrichment-id>
 ```
 
-Completed module/target checkpoints are restored from SQLite; unfinished work continues without replaying already committed network work.
+## Finalization
 
-### Full finalization
+The accepted finalization evidence chain is:
+
+```text
+representative queries
+        ↓
+entrant cohort
+        ↓
+bounded Common Crawl sampled historical presence
+        ↓
+cohort history (RDAP / first-seen policy projection)
+        ↓
+optional compatible traffic evidence
+        ↓
+finalist evidence matrix
+        ↓
+explicit human decisions
+        ↓
+Research Library publication
+```
+
+Common Crawl evidence is **bounded sampled web presence**, not exact first-ever web presence or site age.
+
+Direct orchestration remains available:
 
 ```powershell
 npm run finalize:full -- --enrichment <enrichment-id> `
@@ -161,142 +291,71 @@ npm run finalize:full -- --enrichment <enrichment-id> `
   --decisions .\decisions.json
 ```
 
-The threshold values above are an example policy, not universal SEO truth. The first finalization must receive explicit finalist scope (`--clusters ...` or deliberately `--all-clusters`) and explicit cohort-history policy. Later reruns may reuse compatible persisted state.
+The threshold values above are example policy, not universal SEO truth.
 
-Finalization builds, in order:
+First finalization requires explicit finalist scope unless compatible persisted scope already exists. Human decisions are never fabricated. Evidence-only publication requires the deliberate `--publish-without-decisions` escape hatch.
 
-```text
-representative queries
-entrant cohort
-cohort history
-optional compatible traffic evidence
-finalist evidence matrix
-Research Library publication when every current finalist has a current human decision
-```
+## Research Library
 
-If human decisions are incomplete, finalization stops successfully after rebuilding the evidence matrix and reports what is still missing. It does not fabricate a decision.
-
-A deliberate evidence-only publication requires the explicit `--publish-without-decisions` escape hatch.
-
-### Manual Research Library publication
+Manual publication remains available:
 
 ```bash
 npm run library:publish -- --enrichment <completed-enrichment-id>
 ```
 
-Publication is immutable and idempotent for the same public snapshot. Later versions of the same top-level research form one `supersedes` lineage even when append created a new discovery run and enrichment ID. See [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md).
+`library.sqlite` is cumulative durable publication truth. `library.json`, `library.zip`, and per-publication archives are derived snapshots. Publication is immutable/idempotent for the same public fingerprint and keeps superseding history for later versions of the same research.
 
-## Discovery CLI controls
+See [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md).
 
-The lower-level research CLI remains available when the full alias is not desired:
-
-```bash
-npm run research -- --seeds input/seeds.csv
-npm run research -- --microsoft input/microsoft.csv
-npm run research -- --seeds input/seeds.csv --expand
-npm run research -- --seeds input/seeds.csv --force-refresh
-npm run research -- --seeds input/seeds.csv --refresh-keyword "json diff"
-npm run research -- --seeds input/seeds.csv --json-status
-npm run research -- --resume <run-id>
-npm run research -- --resume <run-id> --retry-failed
-```
-
-Use `npm run research -- --help` for the main discovery CLI flags. `.env.example` is the authoritative copyable list of current environment settings and defaults.
-
-## Enrichment CLI controls
-
-Individual modules remain independently runnable:
-
-```bash
-npm run enrich -- --run <run-id> --modules clusters
-npm run enrich -- --run <run-id> --modules query_suggestions --shortlist-file input/shortlist.txt
-npm run enrich -- --run <run-id> --modules domain_age --shortlist-file input/shortlist.txt
-npm run enrich -- --run <run-id> --modules pages --shortlist-file input/shortlist.txt
-npm run enrich -- --run <run-id> --modules site_structure --shortlist-file input/shortlist.txt
-npm run enrich -- --resume <enrichment-id>
-```
-
-Use `npm run enrich -- --help` for the current module/shortlist flags. Unknown flags and unexpected positional arguments are rejected as invalid input rather than silently ignored.
-
-## Durable research layout
+## Durable layout
 
 A logical research may contain multiple immutable discovery and enrichment generations:
 
 ```text
 <RESEARCH_OUTPUT_ROOT>/
 └── <date>-<label>/
-    ├── research.json                 # stable research id + current discovery run
-    ├── batches/                      # preserved append inputs
-    ├── discovery/                    # original discovery snapshot
-    ├── discovery-02/                 # combined snapshot after append
-    ├── discovery-03/
-    ├── enrichment/                   # enrichment for one discovery snapshot
-    ├── enrichment-02/                # later enrichment generation
-    ├── debug/                        # parser-failure evidence; excluded from results.zip
-    └── results.zip                   # portable current research snapshot
+    ├── research.json
+    ├── operator-config.json          # config-first provenance when applicable
+    ├── batches/
+    ├── discovery/
+    ├── discovery-02/
+    ├── enrichment/
+    ├── enrichment-02/
+    ├── debug/
+    └── results.zip
 ```
 
-Each discovery directory owns `run.sqlite`; each enrichment directory owns `enrichment.sqlite`. Old generations are retained for audit/history and are never rewritten merely because a newer generation exists.
+Each discovery generation owns `run.sqlite`; each enrichment generation owns `enrichment.sqlite`. Old generations are retained and are not rewritten merely because a newer generation becomes current.
 
-The output root also contains an `index/` used to resolve run/enrichment IDs independently of the active checkout/worktree.
-
-## Research Library layout
-
-```text
-<RESEARCH_OUTPUT_ROOT>/research-library/
-├── library.sqlite
-├── library.json
-├── library.zip
-└── researches/
-    └── pub_<fingerprint>.zip
-```
-
-`library.sqlite` is the cumulative queryable truth. `library.json` and `library.zip` are derived snapshots.
+The output root also contains the run/enrichment locator index and `research-library/`.
 
 ## Core truth and safety contracts
 
-- **SQLite first.** Resume/rebuild never reconstructs truth from CSV/JSON output files.
-- **Immutable generations.** Append and re-enrichment create new snapshots instead of mutating historical discovery/enrichment evidence.
-- **Fail closed on stale parents.** Representative, entrant, history, traffic, finalist, and publication layers pin compatible upstream generations/fingerprints.
-- **Missing is not zero.** Unavailable, failed, omitted, synthetic, and unmeasured evidence remain distinguishable.
-- **No automatic finalist verdict.** Automated evidence blocks remain separate from human `build | watch | reject | unknown` decisions.
-- **Truthful Google geography.** Surfer market, `hl/gl`, and detected physical Google location are tracked separately.
-- **Bounded network work.** HTTP enrichment uses bounded time/bytes/redirects, SSRF validation with pinned public destinations, rate limiting, and bounded retries for explicit transient failures.
-- **No anti-bot bypass.** No proxy rotation for evasion, fingerprint spoofing, CAPTCHA solving service, or stealth browser work.
+- **SQLite first.** Generated artifacts are not resume/currentness truth.
+- **Immutable generations.** Append/re-enrichment create new snapshots.
+- **Stable research identity.** Current lineage is validated, not inferred from timestamps.
+- **Fail closed on stale parents.** Downstream evidence pins compatible parent revisions/fingerprints.
+- **Missing is not zero.** Unknown/unavailable/error/omitted states stay explicit.
+- **No automatic finalist verdict.** Human decisions remain separate from automated evidence.
+- **Truthful geography.** Surfer market, Google `hl/gl`, and detected location remain separate facts.
+- **Bounded provider work.** Existing retry/rate/timeout/SSRF contracts remain enforced.
+- **No anti-bot bypass.** CAPTCHA is solved manually; no stealth/proxy-evasion stack.
+- **Currentness is lineage/fingerprint based.** Do not infer semantic freshness from mtime.
 
-## Cache and interruption behavior
+## Documentation map
 
-Discovery uses the persistent cross-run cache at `data/cache/cache.sqlite` by default. HTTP enrichment has its own persisted cache. Cache hits are copied into the durable run/enrichment checkpoint; completed work never depends on the cache row afterwards.
+For current behavior, use these documents by role:
 
-The first Ctrl+C requests a graceful pause and preserves resumability. A second interrupt may force termination. Browser CAPTCHA handling pauses for manual intervention instead of bypassing the challenge.
+1. [`README.md`](./README.md) — current operator entry points and map.
+2. [`PRODUCT.md`](./PRODUCT.md) — product boundary.
+3. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — durable architecture/invariants.
+4. [`PIPELINE.md`](./PIPELINE.md) — evidence pipeline.
+5. [`FULL_RUNS.md`](./FULL_RUNS.md) — operator orchestration and direct stage commands.
+6. [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md) — append lineage/provenance/locking.
+7. [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md) — publication/version lineage.
+8. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
+9. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
 
-## Current external evidence boundaries
+Versioned roadmaps, release acceptance files, methodology reports, and PR-specific plans are historical evidence unless a current document explicitly marks them as active planning. They do not override merged runtime behavior.
 
-- **Keyword Surfer**: browser extension data; a missing related widget is explicit non-fatal evidence, not an empty success.
-- **Ahrefs DR**: official free API only; optional unless required explicitly.
-- **RDAP**: registration evidence.
-- **Wayback/first seen**: separate optional evidence from registration age and may be unavailable.
-- **Traffic**: provider-neutral imported evidence; absent traffic remains missing.
-- **Paid page/backlink/organic provider metrics**: not a hidden dependency of the current full workflow. Do not fabricate them when no supported provider/account is configured.
-
-## Read next / source of truth
-
-Use these instead of treating this README as a duplicate specification:
-
-1. [`FULL_RUNS.md`](./FULL_RUNS.md) — current end-to-end command orchestration.
-2. [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md) — append generations, provenance, locks, failure behavior.
-3. [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md) — cumulative publication and version lineage.
-4. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — durable state, module boundaries, invariants.
-5. [`PIPELINE.md`](./PIPELINE.md) — evidence flow.
-6. [`SCORING.md`](./SCORING.md) — broad-discovery Score v1 contract.
-7. `*_ACCEPTANCE.md` and methodology regression documents — feature-specific acceptance contracts and frozen-corpus evidence.
-8. [`AGENTS.md`](./AGENTS.md) — repository rules for coding agents.
-
-### Future planning (not current runtime/CLI contracts)
-
-- [`V3_COMMERCIAL_EVIDENCE_SPEC.md`](./V3_COMMERCIAL_EVIDENCE_SPEC.md) — next-major-version commercial evidence scope and explicit runner boundary.
-- [`COMMERCIAL_DATA_PROVIDER_MATRIX.md`](./COMMERCIAL_DATA_PROVIDER_MATRIX.md) — free-first provider/access audit; provider constraints must be re-verified before implementation.
-
-## Proven integration
-
-The original spike proved the browser-risky path: Playwright/CDP can control a dedicated Research Chrome profile, Keyword Surfer data is accessible to automation, and organic results can be parsed without confusing Surfer annotations with organic links. Production discovery, enrichment, append/finalization, and Research Library behavior are now governed by the durable contracts and acceptance documents above rather than by the historical single-query spike.
+`V3_COMMERCIAL_EVIDENCE_SPEC.md` and `COMMERCIAL_DATA_PROVIDER_MATRIX.md` are future/inactive planning documents, not current runtime contracts.
