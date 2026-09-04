@@ -79,7 +79,7 @@ export async function collectCohortHistoricalPresence(input: {
   const now = input.now ?? Date.now;
   const nowMs = now();
   const priorities = buildDomainPriorities(input.cohorts);
-  const selected = new Set(priorities.slice(0, domainCap).map((item) => item.registrableDomain));
+  const selected = selectDomainPrioritiesAcrossClusters(input.cohorts, priorities, domainCap);
   const domains: CohortHistoricalPresenceDomain[] = [];
 
   for (const priority of priorities) {
@@ -167,6 +167,60 @@ function buildDomainPriorities(cohorts: EntrantCohort[]): DomainPriority[] {
     }
   }
   return [...byDomain.values()].sort(compareDomainPriority);
+}
+
+function selectDomainPrioritiesAcrossClusters(
+  cohorts: EntrantCohort[],
+  priorities: DomainPriority[],
+  domainCap: number,
+): Set<string> {
+  const priorityByDomain = new Map(priorities.map((priority) => [priority.registrableDomain, priority]));
+  const orderedCohorts = [...cohorts].sort((a, b) => compareClusterIds(a.clusterId, b.clusterId));
+  const fairCohortOrder = spreadAcrossCohortOrder(orderedCohorts, domainCap);
+  const candidatesByCluster = new Map<string, DomainPriority[]>();
+
+  for (const cohort of fairCohortOrder) {
+    const candidates = cohort.domains
+      .map((domain) => priorityByDomain.get(domain.registrableDomain))
+      .filter((priority): priority is DomainPriority => priority !== undefined)
+      .sort(compareDomainPriority);
+    candidatesByCluster.set(cohort.clusterId, candidates);
+  }
+
+  const selected = new Set<string>();
+  const cursors = new Map(fairCohortOrder.map((cohort) => [cohort.clusterId, 0]));
+
+  while (selected.size < domainCap) {
+    let advanced = false;
+    for (const cohort of fairCohortOrder) {
+      const candidates = candidatesByCluster.get(cohort.clusterId) ?? [];
+      let cursor = cursors.get(cohort.clusterId) ?? 0;
+      while (cursor < candidates.length && selected.has(candidates[cursor]!.registrableDomain)) cursor += 1;
+      cursors.set(cohort.clusterId, cursor + 1);
+      const candidate = candidates[cursor];
+      if (!candidate) continue;
+      selected.add(candidate.registrableDomain);
+      advanced = true;
+      if (selected.size >= domainCap) break;
+    }
+    if (!advanced) break;
+  }
+
+  return selected;
+}
+
+function spreadAcrossCohortOrder(cohorts: EntrantCohort[], domainCap: number): EntrantCohort[] {
+  if (cohorts.length <= domainCap) return cohorts;
+
+  const sampledIndices = new Set<number>();
+  for (let slot = 0; slot < domainCap; slot += 1) {
+    sampledIndices.add(Math.floor((slot * cohorts.length) / domainCap));
+  }
+
+  return [
+    ...[...sampledIndices].map((index) => cohorts[index]!),
+    ...cohorts.filter((_, index) => !sampledIndices.has(index)),
+  ];
 }
 
 function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
