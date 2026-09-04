@@ -193,7 +193,7 @@ function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomai
       ? 'known'
       : 'conflict';
   const weakValues = [...priority.weakValues];
-  const isWeak = weakValues.length === 1 ? weakValues[0]! : null;
+  const isWeak = drStatus === 'known' && weakValues.length === 1 ? weakValues[0]! : null;
   return {
     bestRank: priority.bestRank,
     occurrenceCount: priority.occurrenceCount,
