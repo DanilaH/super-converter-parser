@@ -1,135 +1,209 @@
 # PRODUCT.md
 
+## Product
+
+**Utility Research Runner** is a local-first internal research tool for discovering and validating SEO opportunities for small browser utilities.
+
+Its purpose is to remove repetitive evidence collection so broad opportunity spaces can be falsified cheaply before expensive manual product research begins.
+
 ## Problem
 
-Current SEO opportunity research requires too much repetitive browser work.
-
-The manual loop looks like:
+Manual SEO opportunity research tends to repeat the same loop:
 
 ```text
 candidate keyword
 → Google
-→ read Keyword Surfer
-→ inspect SERP
-→ open Ahrefs
-→ check domains
+→ Keyword Surfer / demand evidence
+→ inspect organic SERP
+→ inspect domain strength/history
+→ compare related queries
 → repeat dozens or hundreds of times
 ```
 
-This makes broad falsification expensive and encourages premature focus on a small number of ideas.
+That makes broad exploration expensive and encourages premature commitment to a few hand-picked ideas.
 
 ## Goal
 
-Build a local CLI that automatically gathers enough observable data to eliminate obvious bad opportunities and surface anomalies worth deeper manual research.
+The runner should turn large, messy intent spaces into auditable evidence that helps the operator decide what deserves deeper investigation.
 
-The tool must reduce something like:
+Conceptually:
 
 ```text
-200–500 raw intents
+broad seed / keyword space
         ↓
-automatic collection + filtering
+automatic collection + bounded expansion
         ↓
-20–40 interesting opportunities
+structured discovery evidence
         ↓
-manual deep research
+deep enrichment for an explicit shortlist
         ↓
-5–10 finalists
+finalist evidence for explicit clusters
+        ↓
+human decision
 ```
 
-## What the tool decides
+The runner optimizes **research throughput and evidence quality**, not automatic business decision-making.
 
-The tool may automatically calculate observable signals:
+## Primary users
 
-- search volume;
-- CPC;
-- Microsoft volume bucket;
-- related keyword volume/overlap;
-- SERP composition;
-- DR distribution;
-- weak/strong-domain counts;
-- exact/niche-domain indicators;
-- deterministic opportunity score.
+1. Human operator.
+2. Local coding/research agent capable of launching CLI commands and reading machine-readable artifacts.
 
-## What the tool does NOT decide
+The tool should remain usable by both without requiring a hosted dashboard.
+
+## What the runner may automate
+
+The runner may collect, normalize, persist, compare, and project observable facts such as:
+
+- search volume and CPC proxies;
+- Google organic SERP evidence;
+- explicit source-specific SERP success/failure state;
+- Keyword Surfer Related observations;
+- deterministic bounded expansion admission;
+- domain normalization and Ahrefs DR where configured;
+- broad-discovery score inputs;
+- clustering and query-suggestion evidence;
+- registration / first-seen / sampled historical-presence evidence;
+- entrant repetition across representative queries;
+- page/site-structure observations;
+- optional imported traffic evidence;
+- immutable generation differences;
+- evidence coverage, omissions, errors, and stale-parent state;
+- publication lineage.
+
+## What the runner must not decide
 
 The runner must not autonomously decide:
 
 - whether a product should definitely be built;
-- implementation complexity;
-- monetization viability;
-- legal/regulatory risk;
-- whether search intent is genuinely useful;
-- final BUILD / WATCH / KILL.
+- whether an SEO opportunity is commercially viable;
+- implementation or production complexity;
+- legal/regulatory suitability;
+- final search-intent usefulness;
+- launch-success probability;
+- final `build | watch | reject | unknown` decision;
+- product role or monetization strategy.
 
-Those require human/agent analysis after collection.
-
-## Users
-
-Primary users:
-
-1. human operator;
-2. local coding/research agent capable of launching CLI commands and reading result files.
-
-The tool must work equally well for both.
+Those are human/agent interpretation tasks after evidence collection.
 
 ## Core workflows
 
-### Workflow A — Broad discovery
+### 1. Broad discovery
 
 ```text
-generated seeds
-→ Microsoft Keyword Planner bulk upload
-→ Microsoft CSV export
-→ runner
-→ Surfer + Google SERP
-→ Ahrefs DR
-→ shortlist
+seeds or Microsoft Keyword Planner export
+        ↓
+Google + Keyword Surfer
+        ↓
+optional bounded Expansion Admission V1
+        ↓
+optional Ahrefs DR
+        ↓
+ranked / inspectable discovery evidence
 ```
 
-Microsoft remains a deliberate first-stage discovery source. It is not removed from the research methodology.
+Microsoft remains a supported first-stage discovery source. It is not required for direct seed research.
 
-### Workflow B — Fast direct research
+### 2. Config-first research orchestration
 
 ```text
-small seed CSV
-→ runner
-→ optional Surfer related-keyword expansion
-→ Google + Surfer
-→ Ahrefs DR
-→ shortlist
+OperatorResearchConfig
+        ↓
+read-only research:plan
+        ↓
+research:run
+        ↓
+stable researchId
+        ↓
+explicit continuation through human gates
 ```
 
-This is useful when researching a specific family without another Microsoft pass.
+This is the accepted normal orchestration layer. It must reuse existing durable stage semantics rather than becoming a parallel workflow implementation.
 
-### Workflow C — Resume
+### 3. Append / iterative discovery
 
-If the process stops after 137/200 keywords:
+A logical research can receive later seed batches without creating a new top-level project.
+
+Append creates immutable combined discovery generations when new keywords are added or an expansion child is explicitly promoted into a root.
+
+### 4. Deep enrichment
+
+An explicit shortlist may be enriched with clustering, query suggestions, domain age/history, page evidence, and site-structure evidence.
+
+Deep work remains bounded and resumable.
+
+### 5. Finalist validation
+
+Explicit finalist clusters flow through:
 
 ```text
-restart
-→ load existing run state
-→ reuse cache/checkpoints
-→ continue unfinished work
+representative queries
+→ entrant cohort
+→ bounded sampled historical presence
+→ cohort history
+→ optional traffic evidence
+→ finalist evidence matrix
+→ human decision
 ```
 
-Completed expensive work must not be repeated unnecessarily.
+Evidence blocks remain separable; missing evidence is not converted into a negative verdict.
 
-## Non-goals
+### 6. Research Library
 
-Do not build in v1:
+Reviewed/current research snapshots may be published into an immutable cumulative library with superseding version history.
 
-- dashboard;
-- React/Next.js frontend;
-- hosted web app;
-- accounts;
-- multi-user support;
-- server/API product;
-- proxy network;
-- CAPTCHA bypass;
-- anti-bot evasion;
-- Ahrefs UI scraping;
-- Similarweb UI scraping;
-- automated Microsoft Ads browser scraping;
-- LLM-based scoring;
-- scheduler/daemon;
-- Redis/queue infrastructure.
+Publication does not change the underlying research evidence and does not fabricate missing human decisions.
+
+## Product principles
+
+### Evidence honesty
+
+```text
+missing != zero
+unknown != negative
+not_found != unavailable
+error != empty
+omitted != measured
+```
+
+### Durable reproducibility
+
+SQLite owns resume/currentness truth. Generated artifacts are projections.
+
+### Immutable history
+
+Older discovery/enrichment/publication generations are preserved instead of silently rewritten.
+
+### Explicit human gates
+
+The runner stops when a shortlist, finalist scope, decision, or another genuinely human input is required.
+
+### Bounded automation
+
+Provider work, expansion, retries, and expensive enrichment must have explicit limits.
+
+### Scope discipline
+
+Add complexity only when it improves actual research value, evidence truthfulness, maintainability, or operator efficiency.
+
+## Current non-goals
+
+Do not add by default:
+
+- hosted SaaS architecture;
+- accounts or multi-user support;
+- remote database infrastructure;
+- Redis / distributed queues;
+- generic provider/plugin framework;
+- CAPTCHA bypass or anti-detection stack;
+- Ahrefs/Similarweb UI scraping;
+- LLM-based opportunity scoring;
+- automatic product recommendations;
+- recursive unbounded Related expansion;
+- a large dashboard;
+- a local GUI unless explicitly revisited;
+- V3 commercial-evidence collection unless that future track is explicitly activated.
+
+## Success criterion
+
+The runner is successful when it lets the operator explore materially broader opportunity spaces with less repetitive manual work **without making the evidence less trustworthy or hiding uncertainty**.
