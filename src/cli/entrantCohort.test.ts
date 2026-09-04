@@ -216,7 +216,9 @@ test('entrant-cohort CLI persists, publishes and reruns idempotently', async () 
     const first = await runCli(args);
     assert.equal(first.code, 0, first.stderr);
     assert.match(first.stdout, /representative revision 1 \(changed\)/);
-    assert.match(first.stdout, /Weak domains: 1\/2 domains with known DR/);
+    assert.match(first.stdout, /Weak domain memberships: 1\/2 with known DR/);
+    assert.match(first.stdout, /3 cluster-domain membership\(s\), 3 globally unique domain\(s\), 4 ranking occurrence\(s\)/);
+    assert.match(first.stdout, /cross-cluster domains: 0/);
 
     let enrichmentStore = RunStore.open(join(fixture.enrichmentDirectory, 'enrichment.sqlite'));
     let state = loadEntrantCohortState(enrichmentStore, fixture.enrichmentId);
@@ -268,13 +270,29 @@ test('entrant-cohort CLI persists, publishes and reruns idempotently', async () 
       await readFile(join(fixture.enrichmentDirectory, 'manifest.json'), 'utf8'),
     ) as {
       artifacts: string[];
-      entrantCohort: { changed: boolean; representativeRevision: number; knownDrDomainCount: number };
+      entrantCohort: {
+        changed: boolean;
+        representativeRevision: number;
+        rankingOccurrenceCount: number;
+        clusterDomainMembershipCount: number;
+        globalUniqueDomainCount: number;
+        crossClusterDomainCount: number;
+        knownDrDomainMembershipCount: number;
+        weakDomainMembershipCount: number;
+        withinClusterRepeatedDomainMembershipCount: number;
+      };
       representativeQueries: { revision: number };
     };
     assert.equal(manifest.representativeQueries.revision, 1);
     assert.equal(manifest.entrantCohort.changed, false);
     assert.equal(manifest.entrantCohort.representativeRevision, 1);
-    assert.equal(manifest.entrantCohort.knownDrDomainCount, 2);
+    assert.equal(manifest.entrantCohort.rankingOccurrenceCount, 4);
+    assert.equal(manifest.entrantCohort.clusterDomainMembershipCount, 3);
+    assert.equal(manifest.entrantCohort.globalUniqueDomainCount, 3);
+    assert.equal(manifest.entrantCohort.crossClusterDomainCount, 0);
+    assert.equal(manifest.entrantCohort.knownDrDomainMembershipCount, 2);
+    assert.equal(manifest.entrantCohort.weakDomainMembershipCount, 1);
+    assert.equal(manifest.entrantCohort.withinClusterRepeatedDomainMembershipCount, 1);
     assert.equal(manifest.artifacts.includes('entrant-cohort.csv'), true);
     assert.equal(manifest.artifacts.includes('entrant-cohort-occurrences.csv'), true);
     assert.equal(manifest.artifacts.includes('entrant-cohort.json'), true);
