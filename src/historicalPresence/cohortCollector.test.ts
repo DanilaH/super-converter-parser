@@ -95,6 +95,38 @@ test('collector applies deterministic entrant-aware cross-cluster priority and e
   }
 });
 
+test('historical allocation preserves cluster breadth before taking deeper weak candidates', async () => {
+  const calls: string[] = [];
+  const cache = HistoricalPresenceCache.openInMemory();
+  try {
+    const result = await collectCohortHistoricalPresence({
+      cohorts: [
+        cohort('cluster-1', [
+          domain('shared-weak.test', 4, 2, { dr: 4, isWeak: true, queryIds: [1, 2], pages: ['/one', '/two'] }),
+          domain('cluster-1-weak.test', 5, 1, { dr: 5, isWeak: true }),
+        ]),
+        cohort('cluster-2', [
+          domain('shared-weak.test', 3, 2, { dr: 4, isWeak: true, queryIds: [3, 4], pages: ['/three', '/four'] }),
+          domain('cluster-2-weak.test', 6, 1, { dr: 6, isWeak: true }),
+        ]),
+        cohort('cluster-3', [
+          domain('cluster-3-authority.test', 1, 3, { dr: 80, isWeak: false, queryIds: [5], pages: ['/authority'] }),
+        ]),
+      ],
+      client: client(calls),
+      cache,
+      domainCap: 3,
+      now: () => Date.parse('2026-08-31T00:00:00Z'),
+    });
+
+    assert.deepEqual(calls, ['shared-weak.test', 'cluster-2-weak.test', 'cluster-3-authority.test']);
+    assert.equal(result.summary.checkedDomainCount, 3);
+    assert.equal(result.domains.find((row) => row.registrableDomain === 'cluster-1-weak.test')?.coverageStatus, 'omitted');
+  } finally {
+    cache.close();
+  }
+});
+
 test('known weak entrant wins bounded history slot over stronger authority', async () => {
   const calls: string[] = [];
   const cache = HistoricalPresenceCache.openInMemory();
