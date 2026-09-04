@@ -9,7 +9,12 @@ import {
 
 export const COHORT_HISTORICAL_PRESENCE_VERSION = '1.0.0';
 export const COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1 = 'entrant-v1';
+export const COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY = 'legacy-rank-v1';
 export const DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP = 30;
+
+type CollectorSelectionPolicy =
+  | typeof COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1
+  | typeof COHORT_HISTORICAL_PRESENCE_LEGACY_SELECTION_POLICY;
 
 export type CohortHistoricalPresenceDomain = {
   registrableDomain: string;
@@ -70,25 +75,33 @@ export async function collectCohortHistoricalPresence(input: {
   client: HistoricalPresenceClient;
   cache: HistoricalPresenceCache;
   domainCap?: number;
+  selectionPolicyVersion?: CollectorSelectionPolicy;
   now?: () => number;
 }): Promise<CohortHistoricalPresenceCollection> {
   const domainCap = input.domainCap ?? DEFAULT_COHORT_HISTORICAL_PRESENCE_DOMAIN_CAP;
   if (!Number.isInteger(domainCap) || domainCap < 1 || domainCap > 100) {
     throw new Error(`Historical-presence domain cap must be an integer from 1 to 100; got ${domainCap}.`);
   }
+  const selectionPolicyVersion = input.selectionPolicyVersion ?? COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
+  const entrantAware = selectionPolicyVersion === COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1;
   const now = input.now ?? Date.now;
   const nowMs = now();
-  const priorities = buildDomainPriorities(input.cohorts);
-  const selected = selectDomainPrioritiesAcrossClusters(input.cohorts, priorities, domainCap);
+  const priorities = buildDomainPriorities(input.cohorts).sort(
+    entrantAware ? compareDomainPriority : compareLegacyDomainPriority,
+  );
+  const selected = entrantAware
+    ? selectDomainPrioritiesAcrossClusters(input.cohorts, priorities, domainCap)
+    : new Set(priorities.slice(0, domainCap).map((item) => item.registrableDomain));
   const domains: CohortHistoricalPresenceDomain[] = [];
 
   for (const priority of priorities) {
+    const publishedPriority = entrantAware ? publicPriority(priority) : legacyPublicPriority(priority);
     if (!selected.has(priority.registrableDomain)) {
       domains.push({
         registrableDomain: priority.registrableDomain,
         coverageStatus: 'omitted',
         omitReason: 'domain_cap',
-        priority: publicPriority(priority),
+        priority: publishedPriority,
         cacheStatus: 'omitted',
         result: null,
       });
@@ -106,7 +119,7 @@ export async function collectCohortHistoricalPresence(input: {
         registrableDomain: priority.registrableDomain,
         coverageStatus: 'checked',
         omitReason: null,
-        priority: publicPriority(priority),
+        priority: publishedPriority,
         cacheStatus: 'hit',
         result: cachedResult(cached),
       });
@@ -124,7 +137,7 @@ export async function collectCohortHistoricalPresence(input: {
       registrableDomain: priority.registrableDomain,
       coverageStatus: 'checked',
       omitReason: null,
-      priority: publicPriority(priority),
+      priority: publishedPriority,
       cacheStatus: cached === null ? 'miss' : identityMatches ? 'expired' : 'identity_mismatch',
       result,
     });
@@ -133,7 +146,7 @@ export async function collectCohortHistoricalPresence(input: {
   domains.sort((a, b) => a.registrableDomain.localeCompare(b.registrableDomain));
   return {
     version: COHORT_HISTORICAL_PRESENCE_VERSION,
-    selectionPolicyVersion: COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1,
+    ...(entrantAware ? { selectionPolicyVersion: COHORT_HISTORICAL_PRESENCE_SELECTION_POLICY_V1 } : {}),
     domainCap,
     domains,
     summary: summarize(domains),
@@ -166,7 +179,7 @@ function buildDomainPriorities(cohorts: EntrantCohort[]): DomainPriority[] {
       byDomain.set(domain.registrableDomain, existing);
     }
   }
-  return [...byDomain.values()].sort(compareDomainPriority);
+  return [...byDomain.values()];
 }
 
 function selectDomainPrioritiesAcrossClusters(
@@ -223,6 +236,13 @@ function spreadAcrossCohortOrder(cohorts: EntrantCohort[], domainCap: number): E
   ];
 }
 
+function compareLegacyDomainPriority(a: DomainPriority, b: DomainPriority): number {
+  return a.bestRank - b.bestRank
+    || b.clusterIds.size - a.clusterIds.size
+    || b.occurrenceCount - a.occurrenceCount
+    || a.registrableDomain.localeCompare(b.registrableDomain);
+}
+
 function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
   const aPublic = publicPriority(a);
   const bPublic = publicPriority(b);
@@ -237,6 +257,14 @@ function compareDomainPriority(a: DomainPriority, b: DomainPriority): number {
   const bDr = bPublic.drStatus === 'known' && bPublic.dr !== null && bPublic.dr !== undefined ? bPublic.dr : Number.POSITIVE_INFINITY;
   if (aDr !== bDr) return aDr - bDr;
   return a.registrableDomain.localeCompare(b.registrableDomain);
+}
+
+function legacyPublicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
+  return {
+    bestRank: priority.bestRank,
+    occurrenceCount: priority.occurrenceCount,
+    clusterCount: priority.clusterIds.size,
+  };
 }
 
 function publicPriority(priority: DomainPriority): CohortHistoricalPresenceDomain['priority'] {
