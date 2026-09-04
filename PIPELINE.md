@@ -346,6 +346,24 @@ Shortlist-dependent deep work requires an explicit bounded shortlist.
 
 Each module/target is checkpointed incrementally in the enrichment generation's SQLite database. Successful sibling evidence survives individual provider/target failures.
 
+### Entrant-aware bounded domain selection
+
+Fresh enrichment generations that execute `domain_age` or `site_structure` use the versioned `entrant-v1` allocation policy for bounded deep-domain targets. This changes **which domains receive the existing evidence budget**, not the cap or provider budget itself.
+
+The policy preserves shortlist keyword round-robin breadth. Within each keyword it prefers:
+
+```text
+known weak DR
+→ recurrence across shortlisted queries
+→ distinct normalized ranking pages
+→ better rank
+→ lower known DR / occurrence count / deterministic tie-breaks
+```
+
+`weak` reuses the immutable source-discovery scoring contract `DR < scoring.drThresholds.weakMax`; no enrichment-specific threshold is invented. Missing or conflicting DR is unknown evidence and is never silently classified as weak.
+
+Persisted enrichments created before the `entrant-v1` marker retain their legacy rank-first selection when resumed. A software update must not silently change the target population of an existing enrichment generation.
+
 ### Query suggestions
 
 Suggestion sources are independently observable. One source failing must not erase another source's successful results.
@@ -375,6 +393,10 @@ Expose transparent repetition/coverage facts; do not convert observed entrant su
 ## Stage 14 — Bounded sampled historical presence
 
 Current `finalize:full` automatically includes the production Common Crawl sampled-presence step after entrant cohort and before cohort history.
+
+Fresh collections use a separately versioned entrant-aware allocation policy inside the existing Common Crawl domain cap. Selection prefers known weak entrants and then cross-cluster/cross-query recurrence, distinct ranking-page evidence, and rank/occurrence evidence. The collection format remains independently versioned; legacy snapshots without the selection-policy marker remain readable under their historical semantics.
+
+The enrichment deep-domain cap and the historical-presence cap are separate bounded allocation contexts. Success of one selector does not imply coverage by the other, and neither may silently increase its configured cap.
 
 Semantics:
 
