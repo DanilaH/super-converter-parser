@@ -8,6 +8,7 @@ import type { SerpResult } from '../google/serp.js';
 import { CacheStore } from '../cache/store.js';
 import type { RdapClient } from '../rdap/types.js';
 import type { FirstSeenClient } from '../firstseen/types.js';
+import { resolveDrThresholds } from '../scoring/scoring.js';
 import {
   clusterKeywords,
   CLUSTERING_ALGORITHM_VERSION,
@@ -18,7 +19,7 @@ import {
   type ClusteringResult,
 } from './clustering.js';
 import { loadPersistedClusteringRelations } from './clusteringSnapshot.js';
-import { CLUSTER_URL_IDENTITY_VERSION } from './urlIdentity.js';
+import { CLUSTER_URL_IDENTITY_VERSION, clusteringUrlIdentity } from './urlIdentity.js';
 import { writeKeywordClustersCsv, writeKeywordClustersJson, writePagesCsv, writePagesJson, writeSiteStructureCsv, writeSiteStructureJson } from './outputs.js';
 import {
   runDomainAgeModule,
@@ -219,7 +220,7 @@ function selectBoundedEvidenceDomains(
     keywordOrder,
     observations,
     maxDomains,
-    sourceRun.configSnapshot.scoring.drThresholds.weakMax,
+    resolveDrThresholds(sourceRun.configSnapshot).weakMax,
   );
 }
 
@@ -273,7 +274,7 @@ function collectSourceDomains(
       domain,
       position: row.position,
       dr: row.dr,
-      pageIdentity: row.url,
+      pageIdentity: clusteringUrlIdentity(row.url),
     });
   }
 
@@ -593,8 +594,8 @@ export async function runEnrichment(options: EnrichmentOptions): Promise<Enrichm
                 possiblyJsRendered: p.possiblyJsRendered ?? false,
                 forms: JSON.parse(p.forms) as FormCounts,
                 structuredDataTypes: JSON.parse(p.structuredDataTypes) as string[],
-                sourceKeywords: JSON.parse(p.sourceKeywords),
-                sourcePositions: JSON.parse(p.sourcePositions),
+                sourceKeywords: JSON.parse(p.sourceKeywords) as string[],
+                sourcePositions: JSON.parse(p.sourcePositions) as number[],
               };
             });
           } else {
@@ -1036,6 +1037,7 @@ async function runClustersModule(
     status: 'running',
     source,
     cacheStatus,
+    fetchedAt: new Date().toISOString(),
   });
 
   checkCancellation(signal);
@@ -1581,7 +1583,7 @@ async function runSiteStructureModule(
         domain: row.registrableDomain,
         position: row.position,
         dr: row.dr,
-        pageIdentity: row.url,
+        pageIdentity: clusteringUrlIdentity(row.url),
       });
     }
   }
