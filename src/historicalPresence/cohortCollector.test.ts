@@ -5,11 +5,28 @@ import { HistoricalPresenceCache } from './cache.js';
 import { collectCohortHistoricalPresence } from './cohortCollector.js';
 import type { HistoricalPresenceClient, HistoricalPresenceResult } from './types.js';
 
-function domain(name: string, bestRank: number, occurrenceCount = 1) {
+function domain(
+  name: string,
+  bestRank: number,
+  occurrenceCount = 1,
+  options: { dr?: number | null; isWeak?: boolean | null; queryIds?: number[]; pages?: string[] } = {},
+) {
+  const dr = options.dr === undefined ? 70 : options.dr;
+  const isWeak = options.isWeak === undefined ? false : options.isWeak;
   return {
     registrableDomain: name,
     bestRank,
     occurrenceCount,
+    queryIdsPresent: options.queryIds ?? [bestRank],
+    normalizedPageIdentities: options.pages ?? [`/${name}`],
+    drEvidence: {
+      status: dr === null ? 'missing' : 'known',
+      value: dr,
+      observedValues: dr === null ? [] : [dr],
+      knownOccurrenceCount: dr === null ? 0 : occurrenceCount,
+      occurrenceCount,
+      isWeak: dr === null ? null : isWeak,
+    },
   } as EntrantCohort['domains'][number];
 }
 
@@ -50,7 +67,7 @@ function client(calls: string[]): HistoricalPresenceClient {
   };
 }
 
-test('collector applies deterministic cross-cluster priority and explicit cap omissions', async () => {
+test('collector applies deterministic entrant-aware cross-cluster priority and explicit cap omissions', async () => {
   const calls: string[] = [];
   const cache = HistoricalPresenceCache.openInMemory();
   try {
@@ -65,13 +82,37 @@ test('collector applies deterministic cross-cluster priority and explicit cap om
       now: () => Date.parse('2026-08-31T00:00:00Z'),
     });
 
-    assert.deepEqual(calls, ['only-b.test', 'shared.test']);
+    assert.deepEqual(calls, ['shared.test', 'only-b.test']);
     assert.equal(result.summary.uniqueDomainCount, 3);
     assert.equal(result.summary.checkedDomainCount, 2);
     assert.equal(result.summary.omittedDomainCount, 1);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'only-a.test')?.omitReason, 'domain_cap');
     assert.equal(result.domains.find((row) => row.registrableDomain === 'shared.test')?.priority.clusterCount, 2);
     assert.equal(result.domains.find((row) => row.registrableDomain === 'shared.test')?.priority.bestRank, 2);
+  } finally {
+    cache.close();
+  }
+});
+
+test('known weak entrant wins bounded history slot over stronger authority', async () => {
+  const calls: string[] = [];
+  const cache = HistoricalPresenceCache.openInMemory();
+  try {
+    const result = await collectCohortHistoricalPresence({
+      cohorts: [cohort('cluster-1', [
+        domain('authority.test', 1, 3, { dr: 80, isWeak: false, queryIds: [1, 2, 3], pages: ['/a', '/b', '/c'] }),
+        domain('entrant.test', 5, 2, { dr: 4, isWeak: true, queryIds: [1, 2], pages: ['/one', '/two'] }),
+      ])],
+      client: client(calls),
+      cache,
+      domainCap: 1,
+      now: () => Date.parse('2026-08-31T00:00:00Z'),
+    });
+
+    assert.deepEqual(calls, ['entrant.test']);
+    assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.isWeak, true);
+    assert.equal(result.domains.find((row) => row.registrableDomain === 'entrant.test')?.priority.dr, 4);
+    assert.equal(result.domains.find((row) => row.registrableDomain === 'authority.test')?.coverageStatus, 'omitted');
   } finally {
     cache.close();
   }
