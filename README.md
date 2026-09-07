@@ -143,9 +143,9 @@ Discovery persists:
 
 Ahrefs remains optional unless explicitly required. Missing evidence stays missing; it is never converted to zero.
 
-### Expansion Admission V1
+### Expansion Admission V1.1
 
-Fresh public discovery with expansion enabled uses the accepted **global admission V1** path.
+Fresh public discovery with expansion enabled uses the accepted **global admission V1.1** path.
 
 It does not append Related candidates immediately after each parent. Instead:
 
@@ -161,18 +161,22 @@ append only selected expansion children
 collect their SERPs
 ```
 
-Important V1 behavior:
+Important V1.1 behavior:
 
 - depth remains 1;
 - automatic single-token expansion candidates are rejected;
 - explicit seeds may still be single-token;
 - `minOverlap`, `minVolume`, and per-parent limits remain admission inputs;
-- strict lexical broadening is deprioritized;
+- parent-support tier is ranked before the strict lexical broadening penalty;
+- within the same support tier, strict lexical broadening remains deprioritized;
 - additions are capped at `min(500, ceil(originalKeywordCount * 1.25))`;
 - directional queries remain distinct;
-- `expansion-admission.json` and `.csv` expose every deterministic decision/reason/supporting parent;
+- `expansion-admission.json` and `.csv` expose every deterministic decision/reason/supporting parent and the persisted admission version;
+- persisted `v1` runs keep their original broadening-first comparator on resume/regeneration;
 - unsupported persisted admission versions fail closed;
-- historical snapshots without the marker keep their historical behavior.
+- historical snapshots without the marker keep their pre-global historical behavior.
+
+The read-only `npm run expansion:replay -- --run <run-id>` experiment remains intentionally scoped to preserved `v1` runs; it does not reinterpret V1.1 runs or mutate durable state. See [`docs/EXPANSION_ADMISSION_V1.md`](./docs/EXPANSION_ADMISSION_V1.md).
 
 ### Ordinary resume
 
