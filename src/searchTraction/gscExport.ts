@@ -94,15 +94,12 @@ export function parseGscSearchTractionExport(input: {
     search_appearance: parseDimension(requiredEntry(entries, 'Search appearance.csv'), 'Search appearance.csv', 'Search Appearance'),
   };
   const filters = parseFilters(requiredEntry(entries, 'Filters.csv'));
-  const totals = chart.reduce(
-    (acc, row) => ({ clicks: acc.clicks + row.clicks, impressions: acc.impressions + row.impressions }),
-    { clicks: 0, impressions: 0 },
-  );
+  const totals = sumMetrics(chart, 'Chart.csv');
   const dates = chart.map((row) => row.date).sort();
   const dimensionTotals = Object.fromEntries(
     (Object.keys(dimensions) as SearchTractionDimension[]).map((dimension) => [
       dimension,
-      totalsForDimension(dimensions[dimension], totals),
+      totalsForDimension(dimensions[dimension], totals, dimension),
     ]),
   ) as Record<SearchTractionDimension, SearchTractionDimensionTotals>;
 
@@ -249,14 +246,36 @@ function parseOptionalNonNegativeNumber(
   return numeric;
 }
 
+function sumMetrics(
+  rows: Array<Pick<SearchMetricRow, 'clicks' | 'impressions'>>,
+  source: string,
+): { clicks: number; impressions: number } {
+  let clicks = 0;
+  let impressions = 0;
+  for (const row of rows) {
+    clicks = safeAddMetric(clicks, row.clicks, source, 'Clicks');
+    impressions = safeAddMetric(impressions, row.impressions, source, 'Impressions');
+  }
+  return { clicks, impressions };
+}
+
+function safeAddMetric(current: number, next: number, source: string, field: string): number {
+  const sum = current + next;
+  if (!Number.isSafeInteger(sum)) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `${source} aggregate ${field} exceeds JavaScript safe-integer precision.`,
+    );
+  }
+  return sum;
+}
+
 function totalsForDimension(
   rows: SearchTractionDimensionRow[],
   chartTotals: { clicks: number; impressions: number },
+  dimension: SearchTractionDimension,
 ): SearchTractionDimensionTotals {
-  const sums = rows.reduce(
-    (acc, row) => ({ clicks: acc.clicks + row.clicks, impressions: acc.impressions + row.impressions }),
-    { clicks: 0, impressions: 0 },
-  );
+  const sums = sumMetrics(rows, `${dimension} dimension`);
   return {
     ...sums,
     // These are comparison ratios, not universal coverage fractions. Search
