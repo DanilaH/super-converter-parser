@@ -67,6 +67,7 @@ test('single-token related heads are rejected even with strong support and volum
   assert.equal(sheets?.parentSupport, 3);
   assert.deepEqual(sheets?.supportingParents, ['compare google sheets', 'merge spreadsheet columns', 'sheet diff tool']);
   assert.equal(specific?.selected, true);
+  assert.equal(specific?.parentSupport, 2);
 });
 
 test('single-token technical heads are also rejected while specific utility intents survive', () => {
