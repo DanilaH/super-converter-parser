@@ -87,6 +87,29 @@ test('GSC import persists one immutable snapshot and deduplicates the same prope
   }
 });
 
+test('concurrent duplicate imports converge to one immutable snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gsc-import-concurrent-'));
+  const inputPath = join(root, 'export.zip');
+  await writeFile(inputPath, fixtureZip());
+  const request = {
+    outputRoot: root,
+    inputPath,
+    property: 'sc-domain:example.com',
+    now: () => new Date('2026-09-07T12:00:00.000Z'),
+  };
+
+  const [a, b] = await Promise.all([
+    importGscSearchTraction(request),
+    importGscSearchTraction(request),
+  ]);
+
+  assert.equal(a.snapshotId, b.snapshotId);
+  assert.deepEqual([a.changed, b.changed].sort(), [false, true]);
+  assert.equal(a.snapshotCount, 1);
+  assert.equal(b.snapshotCount, 1);
+  assert.deepEqual(await readFile(a.sourceArchivePath), fixtureZip());
+});
+
 test('duplicate import restores a missing exact source archive without creating a new snapshot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gsc-import-repair-'));
   const inputPath = join(root, 'export.zip');
