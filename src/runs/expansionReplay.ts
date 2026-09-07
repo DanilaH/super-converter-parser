@@ -43,9 +43,9 @@ export type ExpansionReplaySelectionVariant = {
 
 export type ExpansionReplayVariant = ExpansionReplaySelectionVariant & {
   postHocObservedOnly: {
-    durableChildCount: number;
-    durableChildCoveragePercent: number | null;
-    counterfactualUnknownCount: number;
+    durableChildKeywordCount: number;
+    durableChildKeywordCoveragePercent: number | null;
+    counterfactualUnmaterializedCount: number;
     trustworthySerpCount: number;
     trustworthySerpCoveragePercent: number | null;
     scoredChildCount: number;
@@ -77,6 +77,7 @@ export type ExpansionReplaySelectionSet = {
   };
   variants: ExpansionReplaySelectionVariant[];
   methodology: {
+    baseline: 'current_v1_policy_replay';
     selectorEvidence: 'pre_serp_related_only';
   };
 };
@@ -84,9 +85,10 @@ export type ExpansionReplaySelectionSet = {
 export type ExpansionReplayResult = Omit<ExpansionReplaySelectionSet, 'variants' | 'methodology'> & {
   variants: ExpansionReplayVariant[];
   methodology: {
+    baseline: 'current_v1_policy_replay';
     selectorEvidence: 'pre_serp_related_only';
-    evaluatorEvidence: 'durably_collected_child_evidence_only';
-    missingCounterfactuals: 'unknown_not_zero';
+    evaluatorEvidence: 'materialized_child_keywords_then_observed_evidence';
+    missingCounterfactuals: 'unmaterialized_or_unobserved_stay_unknown';
     automaticWinner: 'not_computed';
   };
 };
@@ -101,7 +103,7 @@ export type BuildExpansionReplaySelectionsInput = {
 };
 
 const VARIANT_DESCRIPTIONS: Record<ExpansionReplayVariantId, string> = {
-  v1: 'Production V1: broadening → support → overlap → specificity → volume.',
+  v1: 'Current V1 policy replay: broadening → support → overlap → specificity → volume.',
   broadening_after_support: 'support → broadening → overlap → specificity → volume.',
   broadening_after_overlap: 'support → overlap → broadening → specificity → volume.',
   broadening_last: 'support → overlap → specificity → volume → broadening.',
@@ -141,6 +143,7 @@ export function buildExpansionReplaySelections(
     relatedEvidence: summarizeRelatedEvidence(admission.originalKeywordCount, input.related),
     variants,
     methodology: {
+      baseline: 'current_v1_policy_replay',
       selectorEvidence: 'pre_serp_related_only',
     },
   };
@@ -167,9 +170,10 @@ export function evaluateExpansionReplay(
       postHocObservedOnly: evaluateSelection(variant.selectedKeywords, evidenceByKeyword),
     })),
     methodology: {
+      baseline: 'current_v1_policy_replay',
       selectorEvidence: 'pre_serp_related_only',
-      evaluatorEvidence: 'durably_collected_child_evidence_only',
-      missingCounterfactuals: 'unknown_not_zero',
+      evaluatorEvidence: 'materialized_child_keywords_then_observed_evidence',
+      missingCounterfactuals: 'unmaterialized_or_unobserved_stay_unknown',
       automaticWinner: 'not_computed',
     },
   };
@@ -227,13 +231,13 @@ function evaluateSelection(
   selectedKeywords: ReadonlyArray<string>,
   evidenceByKeyword: ReadonlyMap<string, Candidate>,
 ): ExpansionReplayVariant['postHocObservedOnly'] {
-  const evidence = selectedKeywords
+  const materialized = selectedKeywords
     .map((keyword) => evidenceByKeyword.get(keyword) ?? null)
     .filter((candidate): candidate is Candidate => candidate !== null);
-  const trustworthy = evidence.filter((candidate) => candidate.organicResultCount !== null);
-  const scored = evidence.filter((candidate) => candidate.score !== null);
-  const completeScoring = evidence.filter((candidate) => candidate.scoringCompleteness === 'complete');
-  const childVolumes = evidence
+  const trustworthy = materialized.filter((candidate) => candidate.organicResultCount !== null);
+  const scored = materialized.filter((candidate) => candidate.score !== null);
+  const completeScoring = materialized.filter((candidate) => candidate.scoringCompleteness === 'complete');
+  const childVolumes = materialized
     .map((candidate) => candidate.surferVolume)
     .filter((value): value is number => value !== null && Number.isFinite(value));
   const scores = scored.map((candidate) => candidate.score as number);
@@ -253,9 +257,9 @@ function evaluateSelection(
   }
 
   return {
-    durableChildCount: evidence.length,
-    durableChildCoveragePercent: percent(evidence.length, selectedKeywords.length),
-    counterfactualUnknownCount: selectedKeywords.length - evidence.length,
+    durableChildKeywordCount: materialized.length,
+    durableChildKeywordCoveragePercent: percent(materialized.length, selectedKeywords.length),
+    counterfactualUnmaterializedCount: selectedKeywords.length - materialized.length,
     trustworthySerpCount: trustworthy.length,
     trustworthySerpCoveragePercent: percent(trustworthy.length, selectedKeywords.length),
     scoredChildCount: scored.length,
