@@ -167,6 +167,7 @@ async function loadPublicationRows(outputRoot: string): Promise<LibraryRows> {
   let db: Database.Database | null = null;
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 1000');
     const schema = db.prepare(
       'SELECT version FROM research_library_schema WHERE singleton = 1',
     ).get() as { version: number } | undefined;
