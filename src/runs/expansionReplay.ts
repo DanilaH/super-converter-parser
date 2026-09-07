@@ -136,7 +136,7 @@ export function buildExpansionReplaySelections(
   return {
     version: EXPANSION_REPLAY_VERSION,
     runId: input.runId,
-    admissionVersion: admission.version,
+    admissionVersion: EXPANSION_ADMISSION_V1_VERSION,
     originalKeywordCount: admission.originalKeywordCount,
     rawCandidateCount: admission.rawCandidateCount,
     eligibleCandidateCount: admission.eligibleCandidateCount,
