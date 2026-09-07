@@ -55,3 +55,28 @@ They preserve the decision, reason, support, overlap, volume, broadening flag, c
 - `policyRejectedUniqueCandidateCount` and `policyRejectionReasonCounts` describe current V1 policy rejections, which can differ from durable final selection after monotonic repair/top-up history.
 
 The V1 projection is emitted only when the persisted run has `expansion.admissionVersion = "v1"`; historical runs do not receive fabricated V1 accounting. The old `explicitOmissionCount` / `omissionAccounting` fields remain compatibility-only and are not redefined.
+
+## Offline comparator replay
+
+`npm run expansion:replay -- --run <run-id>` is a read-only experiment surface for preserved V1 discovery runs. It does not mutate `run.sqlite`, call providers, change admission, or write a new discovery generation.
+
+The replay keeps V1 eligibility, per-parent caps, thresholds, and the global budget fixed. It compares only the position of the existing `broadeningOnly` signal in the global comparator:
+
+- `v1`: broadening → parent support → overlap → bounded specificity → Related volume;
+- `broadening_after_support`: parent support → broadening → overlap → bounded specificity → Related volume;
+- `broadening_after_overlap`: parent support → overlap → broadening → bounded specificity → Related volume;
+- `broadening_last`: parent support → overlap → bounded specificity → Related volume → broadening.
+
+The `v1` baseline is explicitly a **current V1 policy replay over durable Related evidence**. It is not a claim that the replayed selected set must equal a historical monotonic final frontier after repair/top-up history.
+
+Selection and evaluation are deliberately separate. `buildExpansionReplaySelections()` accepts only the same pre-SERP Related evidence used by admission. Materialized child rows plus their SERP/scoring evidence are connected later by `evaluateExpansionReplay()` and cannot affect any comparator.
+
+Counterfactual evidence is incomplete by construction: candidates rejected by the historical V1 run normally were never materialized as child keywords, and therefore normally have no collected child SERP. Replay keeps these units separate:
+
+- `durableChildKeywordCount` / `durableChildKeywordCoveragePercent` report whether a replay-selected candidate exists as a durable expansion child row;
+- `counterfactualUnmaterializedCount` reports replay-selected candidates that were never materialized historically;
+- `trustworthySerpCount` / `trustworthySerpCoveragePercent` separately report trustworthy child SERP observations.
+
+A materialized child with failed, pending, or otherwise untrustworthy SERP evidence is not mislabeled as observed. Unmaterialized or unobserved counterfactual outcomes stay unknown; they are never converted to zero or treated as negative evidence.
+
+The replay reports deterministic pre-SERP selection/churn metrics and observed-only child evidence, but it does not compute or recommend an automatic winner. A production admission version change requires a separate decision after reviewing replay coverage and candidate-level churn.
