@@ -1,6 +1,10 @@
 import { normalizeKeyword } from '../input/seeds/normalize.js';
 
-export const EXPANSION_ADMISSION_VERSION = 'v1' as const;
+export const EXPANSION_ADMISSION_V1_VERSION = 'v1' as const;
+export const EXPANSION_ADMISSION_VERSION = 'v1.1' as const;
+export type ExpansionAdmissionVersion =
+  | typeof EXPANSION_ADMISSION_V1_VERSION
+  | typeof EXPANSION_ADMISSION_VERSION;
 
 export const EXPANSION_ADMISSION_POLICY_V1 = {
   minCandidateTokens: 2,
@@ -42,7 +46,7 @@ export type ExpansionAdmissionDecision = {
 };
 
 export type ExpansionAdmissionResult = {
-  version: typeof EXPANSION_ADMISSION_VERSION;
+  version: ExpansionAdmissionVersion;
   policy: typeof EXPANSION_ADMISSION_POLICY_V1;
   originalKeywordCount: number;
   rawCandidateCount: number;
@@ -70,6 +74,12 @@ type RankedCandidate = {
   supportingParents: string[];
 };
 
+export function isSupportedExpansionAdmissionVersion(
+  value: string,
+): value is ExpansionAdmissionVersion {
+  return value === EXPANSION_ADMISSION_V1_VERSION || value === EXPANSION_ADMISSION_VERSION;
+}
+
 export function expansionAddedBudget(originalKeywordCount: number): number {
   if (!Number.isInteger(originalKeywordCount) || originalKeywordCount < 0) {
     throw new Error(`originalKeywordCount must be a non-negative integer, got ${originalKeywordCount}`);
@@ -86,6 +96,7 @@ export function buildExpansionAdmission(input: {
   maxCandidatesPerKeyword: number;
   minOverlap: number;
   minVolume: number;
+  version?: ExpansionAdmissionVersion;
 }): ExpansionAdmissionResult {
   if (!Number.isInteger(input.maxCandidatesPerKeyword) || input.maxCandidatesPerKeyword < 1) {
     throw new Error(`maxCandidatesPerKeyword must be a positive integer, got ${input.maxCandidatesPerKeyword}`);
@@ -97,6 +108,7 @@ export function buildExpansionAdmission(input: {
     throw new Error(`minVolume must be a non-negative number, got ${input.minVolume}`);
   }
 
+  const version = input.version ?? EXPANSION_ADMISSION_VERSION;
   const originals = new Set(input.originalKeywords.map(normalizeKeyword));
   const rawByCandidate = groupRawCandidates(input.related);
   const thresholdPassing = input.related
@@ -134,7 +146,7 @@ export function buildExpansionAdmission(input: {
     ranked.push(rankCandidate(eligibleRows));
   }
 
-  ranked.sort(compareRankedCandidates);
+  ranked.sort((a, b) => compareRankedCandidates(version, a, b));
   const budget = expansionAddedBudget(originals.size);
   const selected = new Set(ranked.slice(0, budget).map((candidate) => candidate.normalizedKeyword));
   const rankedDecisions = ranked.map((candidate): ExpansionAdmissionDecision => ({
@@ -144,12 +156,12 @@ export function buildExpansionAdmission(input: {
   }));
   const decisions = [...rankedDecisions, ...fixedDecisions].sort((a, b) =>
     Number(b.selected) - Number(a.selected)
-      || compareDecisionPriority(a, b)
+      || compareDecisionPriority(version, a, b)
       || a.normalizedKeyword.localeCompare(b.normalizedKeyword),
   );
 
   return {
-    version: EXPANSION_ADMISSION_VERSION,
+    version,
     policy: EXPANSION_ADMISSION_POLICY_V1,
     originalKeywordCount: originals.size,
     rawCandidateCount: rawByCandidate.size,
@@ -239,18 +251,41 @@ function rankCandidate(rows: CandidateOccurrence[]): RankedCandidate {
   };
 }
 
-function compareRankedCandidates(a: RankedCandidate, b: RankedCandidate): number {
-  return Number(a.broadeningOnly) - Number(b.broadeningOnly)
-    || b.parentSupportTier - a.parentSupportTier
+function compareRankedCandidates(
+  version: ExpansionAdmissionVersion,
+  a: RankedCandidate,
+  b: RankedCandidate,
+): number {
+  if (version === EXPANSION_ADMISSION_V1_VERSION) {
+    return Number(a.broadeningOnly) - Number(b.broadeningOnly)
+      || b.parentSupportTier - a.parentSupportTier
+      || compareNullableDesc(a.bestOverlap, b.bestOverlap)
+      || Math.min(b.tokenCount, 4) - Math.min(a.tokenCount, 4)
+      || compareNullableDesc(a.maxVolume, b.maxVolume)
+      || a.normalizedKeyword.localeCompare(b.normalizedKeyword);
+  }
+  return b.parentSupportTier - a.parentSupportTier
+    || Number(a.broadeningOnly) - Number(b.broadeningOnly)
     || compareNullableDesc(a.bestOverlap, b.bestOverlap)
     || Math.min(b.tokenCount, 4) - Math.min(a.tokenCount, 4)
     || compareNullableDesc(a.maxVolume, b.maxVolume)
     || a.normalizedKeyword.localeCompare(b.normalizedKeyword);
 }
 
-function compareDecisionPriority(a: ExpansionAdmissionDecision, b: ExpansionAdmissionDecision): number {
-  return Number(a.broadeningOnly) - Number(b.broadeningOnly)
-    || b.parentSupportTier - a.parentSupportTier
+function compareDecisionPriority(
+  version: ExpansionAdmissionVersion,
+  a: ExpansionAdmissionDecision,
+  b: ExpansionAdmissionDecision,
+): number {
+  if (version === EXPANSION_ADMISSION_V1_VERSION) {
+    return Number(a.broadeningOnly) - Number(b.broadeningOnly)
+      || b.parentSupportTier - a.parentSupportTier
+      || compareNullableDesc(a.bestOverlap, b.bestOverlap)
+      || Math.min(b.tokenCount, 4) - Math.min(a.tokenCount, 4)
+      || compareNullableDesc(a.maxVolume, b.maxVolume);
+  }
+  return b.parentSupportTier - a.parentSupportTier
+    || Number(a.broadeningOnly) - Number(b.broadeningOnly)
     || compareNullableDesc(a.bestOverlap, b.bestOverlap)
     || Math.min(b.tokenCount, 4) - Math.min(a.tokenCount, 4)
     || compareNullableDesc(a.maxVolume, b.maxVolume);
