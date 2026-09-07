@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { buildZip } from '../library/zip.js';
 import { importGscSearchTraction } from './import.js';
+import { searchTractionSnapshotId } from './store.js';
 
 function csv(value: string): Buffer {
   return Buffer.from(value.replace(/^\n/, ''), 'utf8');
@@ -39,7 +40,7 @@ Desktop,1,10,10%,42.5
   ], new Date('2026-09-06T00:00:00Z'));
 }
 
-test('GSC import persists one immutable snapshot and deduplicates the same property/source export', async () => {
+test('GSC import persists one immutable snapshot and deduplicates the same property/source/parser export', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gsc-import-'));
   const inputPath = join(root, 'export.zip');
   await writeFile(inputPath, fixtureZip());
@@ -86,6 +87,29 @@ test('GSC import persists one immutable snapshot and deduplicates the same prope
   }
 });
 
+test('duplicate import restores a missing exact source archive without creating a new snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gsc-import-repair-'));
+  const inputPath = join(root, 'export.zip');
+  await writeFile(inputPath, fixtureZip());
+  const first = await importGscSearchTraction({
+    outputRoot: root,
+    inputPath,
+    property: 'sc-domain:example.com',
+  });
+  await rm(first.sourceArchivePath, { force: true });
+
+  const second = await importGscSearchTraction({
+    outputRoot: root,
+    inputPath,
+    property: 'sc-domain:example.com',
+  });
+
+  assert.equal(second.changed, false);
+  assert.equal(second.sourceArchiveRestored, true);
+  assert.equal(second.snapshotCount, 1);
+  assert.deepEqual(await readFile(second.sourceArchivePath), fixtureZip());
+});
+
 test('same ZIP imported for a different explicit property remains a distinct snapshot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gsc-import-property-'));
   const inputPath = join(root, 'export.zip');
@@ -104,4 +128,10 @@ test('same ZIP imported for a different explicit property remains a distinct sna
 
   assert.notEqual(first.snapshotId, second.snapshotId);
   assert.equal(second.snapshotCount, 2);
+});
+
+test('snapshot identity changes when parser semantics version changes', () => {
+  const v1 = searchTractionSnapshotId('sc-domain:example.com', 'source-sha', '1.0.0');
+  const v11 = searchTractionSnapshotId('sc-domain:example.com', 'source-sha', '1.1.0');
+  assert.notEqual(v1, v11);
 });
