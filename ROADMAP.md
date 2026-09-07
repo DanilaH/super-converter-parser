@@ -222,19 +222,30 @@ Further R3 work requires another concrete provider inconsistency; do not keep no
 
 ## R4 — Cost-aware progressive enrichment
 
-**Status:** deferred; current evidence does not justify implementation.
+**Status:** measurement complete on the available representative deep-enrichment corpus; no implementation change justified.
 
 ### Why
 
-The runner already bounds expensive deep work through explicit shortlists and finalist scope. That is a real existing form of progressive enrichment.
+The runner already bounds expensive deep work through explicit shortlists, explicit configured modules, finalist scope, and bounded domain allocation. That is already a real form of progressive enrichment.
 
-A further optimization is useful only if real runs show that expensive provider/module work is still being executed for entities that cannot contribute useful downstream evidence.
+The available completed 30-keyword deep-enrichment/finalization corpus was inspected against durable SQLite and derived operator artifacts rather than inferred from ZIP size or later intuition. The full enrichment generation took about 16.4 minutes wall-clock, so additional deterministic skips could matter operationally if a valid pre-call predicate existed; this measurement does not attribute that duration to individual modules.
 
-Representative large run archives are now available for analysis, so lack of artifacts is no longer the blocker. What is still missing is the **measurement**: no current analysis has quantified provider/module cost, avoidable work, or deterministic skip opportunities strongly enough to justify a new scheduler.
+The measured downstream relationships did **not** expose such a skip:
+
+- all 30 shortlisted keywords produced 30 clusters and all 30 clusters entered representative/finalist scope;
+- all 30 query-suggestion parent keywords were also representative keywords;
+- all 87 fetched page targets were present in entrant-cohort ranking URLs;
+- all 30 domains actually selected for `domain_age` were present in entrant cohorts;
+- all 30 domains actually selected for `site_structure` were present in entrant cohorts;
+- 194 candidate domains were observed for bounded domain evidence; the 164 beyond the cap were persisted as explicit omissions without provider work (`domain_age`: `not_attempted` / `domain_cap`; `site_structure`: omitted `maxDomains` checkpoints), rather than provider fan-out.
+
+`query_suggestions`, `pages`, and `domain_age` are also explicit standalone enrichment evidence surfaces with their own durable/exported artifacts. The fact that a later finalist-matrix projection does not directly consume every field is therefore not a valid pre-call skip predicate. Treating later non-consumption as waste would be hindsight and would silently change configured enrichment semantics.
 
 ### Re-activation gate
 
-First measure provider/module cost and deterministic skip opportunities on representative real runs. Only if material waste is demonstrated should the runner consider predicates such as:
+Do not build a progressive-enrichment scheduler from this corpus.
+
+Re-open R4 only when another representative real corpus demonstrates **material avoidable provider work that can be identified before the provider call** from evidence already available at that point. A valid future predicate may use facts such as:
 
 ```text
 required parent evidence exists?
@@ -243,13 +254,13 @@ current human shortlist/finalist scope includes it?
 provider/module is configured for this stage?
 ```
 
-Any future skip must be durably explainable (`skipped` + reason/policy provenance where appropriate), not converted into missing/zero evidence.
+A later artifact merely failing to consume earlier evidence is not enough. Any future skip must also be durably explainable (`skipped` + reason/policy provenance where appropriate), not converted into missing/zero evidence.
 
 This track must not introduce opaque opportunity scoring or automatically decide which product/niche deserves research.
 
 ### Result
 
-No speculative progressive-enrichment scheduler is being added. The track remains available only after representative run evidence proves that the additional complexity would pay for itself.
+R4 is closed with **no scheduler implementation** on current evidence. Existing shortlist/module/domain caps remain the correct cost guards. The track becomes active again only if a later real corpus proves a deterministic, material pre-call waste pattern.
 
 ---
 
@@ -427,4 +438,4 @@ Rules:
 
 Use the completed R1–R7 surfaces on real research work rather than manufacturing another implementation item.
 
-R6 is analysis-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. R4 is measurement-gated: representative archives now exist, but progressive enrichment stays deferred until actual provider/module waste is quantified. Wordstat and V3 remain inactive without a new measured need.
+R4 measurement is complete on the available representative deep-enrichment corpus and does not justify scheduler work. R6 remains analysis-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. Wordstat and V3 remain inactive without a new measured need.
