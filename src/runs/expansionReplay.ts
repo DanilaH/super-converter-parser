@@ -1,4 +1,3 @@
-import { normalizeKeyword } from '../input/seeds/normalize.js';
 import type { Candidate } from '../scoring/scoring.js';
 import {
   buildExpansionAdmission,
@@ -18,7 +17,7 @@ export const EXPANSION_REPLAY_VARIANTS = [
 
 export type ExpansionReplayVariantId = typeof EXPANSION_REPLAY_VARIANTS[number];
 
-export type ExpansionReplayVariant = {
+export type ExpansionReplaySelectionVariant = {
   id: ExpansionReplayVariantId;
   description: string;
   selectedCount: number;
@@ -40,6 +39,9 @@ export type ExpansionReplayVariant = {
     addedKeywords: string[];
     removedKeywords: string[];
   };
+};
+
+export type ExpansionReplayVariant = ExpansionReplaySelectionVariant & {
   postHocObservedOnly: {
     durableChildCount: number;
     durableChildCoveragePercent: number | null;
@@ -58,7 +60,7 @@ export type ExpansionReplayVariant = {
   };
 };
 
-export type ExpansionReplayResult = {
+export type ExpansionReplaySelectionSet = {
   version: typeof EXPANSION_REPLAY_VERSION;
   runId: string;
   admissionVersion: typeof EXPANSION_ADMISSION_VERSION;
@@ -66,6 +68,20 @@ export type ExpansionReplayResult = {
   rawCandidateCount: number;
   eligibleCandidateCount: number;
   budget: number;
+  relatedEvidence: {
+    denominator: number;
+    ok: number;
+    empty: number;
+    error: number;
+    notAttempted: number;
+  };
+  variants: ExpansionReplaySelectionVariant[];
+  methodology: {
+    selectorEvidence: 'pre_serp_related_only';
+  };
+};
+
+export type ExpansionReplayResult = Omit<ExpansionReplaySelectionSet, 'variants' | 'methodology'> & {
   variants: ExpansionReplayVariant[];
   methodology: {
     selectorEvidence: 'pre_serp_related_only';
@@ -75,14 +91,13 @@ export type ExpansionReplayResult = {
   };
 };
 
-export type BuildExpansionReplayInput = {
+export type BuildExpansionReplaySelectionsInput = {
   runId: string;
   originalKeywords: ReadonlyArray<string>;
   related: ReadonlyArray<ExpansionRelatedOccurrence>;
   maxCandidatesPerKeyword: number;
   minOverlap: number;
   minVolume: number;
-  candidateEvidence: ReadonlyArray<Candidate>;
 };
 
 const VARIANT_DESCRIPTIONS: Record<ExpansionReplayVariantId, string> = {
@@ -92,7 +107,9 @@ const VARIANT_DESCRIPTIONS: Record<ExpansionReplayVariantId, string> = {
   broadening_last: 'support → overlap → specificity → volume → broadening.',
 };
 
-export function buildExpansionReplay(input: BuildExpansionReplayInput): ExpansionReplayResult {
+export function buildExpansionReplaySelections(
+  input: BuildExpansionReplaySelectionsInput,
+): ExpansionReplaySelectionSet {
   const admission = buildExpansionAdmission({
     originalKeywords: input.originalKeywords,
     related: input.related,
@@ -105,15 +122,12 @@ export function buildExpansionReplay(input: BuildExpansionReplayInput): Expansio
   );
   const baselineSelected = admission.decisions.filter((decision) => decision.selected);
   const baselineSet = new Set(baselineSelected.map((decision) => decision.normalizedKeyword));
-  const evidenceByKeyword = new Map(
-    input.candidateEvidence.map((candidate) => [candidate.normalizedKeyword, candidate] as const),
-  );
 
-  const variants = EXPANSION_REPLAY_VARIANTS.map((id): ExpansionReplayVariant => {
+  const variants = EXPANSION_REPLAY_VARIANTS.map((id): ExpansionReplaySelectionVariant => {
     const selected = id === 'v1'
       ? baselineSelected
       : [...eligible].sort((a, b) => compareVariant(id, a, b)).slice(0, admission.budget);
-    return buildVariant(id, selected, baselineSet, evidenceByKeyword);
+    return buildSelectionVariant(id, selected, baselineSet);
   });
 
   return {
@@ -124,7 +138,34 @@ export function buildExpansionReplay(input: BuildExpansionReplayInput): Expansio
     rawCandidateCount: admission.rawCandidateCount,
     eligibleCandidateCount: admission.eligibleCandidateCount,
     budget: admission.budget,
+    relatedEvidence: summarizeRelatedEvidence(admission.originalKeywordCount, input.related),
     variants,
+    methodology: {
+      selectorEvidence: 'pre_serp_related_only',
+    },
+  };
+}
+
+export function evaluateExpansionReplay(
+  selections: ExpansionReplaySelectionSet,
+  candidateEvidence: ReadonlyArray<Candidate>,
+): ExpansionReplayResult {
+  const evidenceByKeyword = new Map(
+    candidateEvidence.map((candidate) => [candidate.normalizedKeyword, candidate] as const),
+  );
+  return {
+    version: selections.version,
+    runId: selections.runId,
+    admissionVersion: selections.admissionVersion,
+    originalKeywordCount: selections.originalKeywordCount,
+    rawCandidateCount: selections.rawCandidateCount,
+    eligibleCandidateCount: selections.eligibleCandidateCount,
+    budget: selections.budget,
+    relatedEvidence: selections.relatedEvidence,
+    variants: selections.variants.map((variant) => ({
+      ...variant,
+      postHocObservedOnly: evaluateSelection(variant.selectedKeywords, evidenceByKeyword),
+    })),
     methodology: {
       selectorEvidence: 'pre_serp_related_only',
       evaluatorEvidence: 'durably_collected_child_evidence_only',
@@ -134,12 +175,11 @@ export function buildExpansionReplay(input: BuildExpansionReplayInput): Expansio
   };
 }
 
-function buildVariant(
+function buildSelectionVariant(
   id: ExpansionReplayVariantId,
   selected: ReadonlyArray<ExpansionAdmissionDecision>,
   baselineSet: ReadonlySet<string>,
-  evidenceByKeyword: ReadonlyMap<string, Candidate>,
-): ExpansionReplayVariant {
+): ExpansionReplaySelectionVariant {
   const selectedKeywords = selected.map((decision) => decision.normalizedKeyword);
   const selectedSet = new Set(selectedKeywords);
   const addedKeywords = selectedKeywords.filter((keyword) => !baselineSet.has(keyword)).sort();
@@ -153,31 +193,6 @@ function buildVariant(
   const relatedVolumes = selected
     .map((decision) => decision.maxVolume)
     .filter((value): value is number => value !== null && Number.isFinite(value));
-
-  const evidence = selected
-    .map((decision) => evidenceByKeyword.get(decision.normalizedKeyword) ?? null)
-    .filter((candidate): candidate is Candidate => candidate !== null);
-  const trustworthy = evidence.filter((candidate) => candidate.organicResultCount !== null);
-  const scored = evidence.filter((candidate) => candidate.score !== null);
-  const completeScoring = evidence.filter((candidate) => candidate.scoringCompleteness === 'complete');
-  const childVolumes = evidence
-    .map((candidate) => candidate.surferVolume)
-    .filter((value): value is number => value !== null && Number.isFinite(value));
-  const scores = scored.map((candidate) => candidate.score as number);
-  const tierCounts = { A: 0, B: 0, C: 0, D: 0 };
-  for (const candidate of scored) {
-    if (candidate.tier !== null) tierCounts[candidate.tier] += 1;
-  }
-  let weakSerpAtLeastOneCount = 0;
-  let weakSerpAtLeastTwoCount = 0;
-  for (const candidate of trustworthy) {
-    const veryWeak = candidate.veryWeakDomainsCount;
-    const weak = candidate.weakDomainsCount;
-    if (veryWeak === null || weak === null) continue;
-    const weakTotal = veryWeak + weak;
-    if (weakTotal >= 1) weakSerpAtLeastOneCount += 1;
-    if (weakTotal >= 2) weakSerpAtLeastTwoCount += 1;
-  }
 
   return {
     id,
@@ -205,22 +220,81 @@ function buildVariant(
       addedKeywords,
       removedKeywords,
     },
-    postHocObservedOnly: {
-      durableChildCount: evidence.length,
-      durableChildCoveragePercent: percent(evidence.length, selectedKeywords.length),
-      counterfactualUnknownCount: selectedKeywords.length - evidence.length,
-      trustworthySerpCount: trustworthy.length,
-      trustworthySerpCoveragePercent: percent(trustworthy.length, selectedKeywords.length),
-      scoredChildCount: scored.length,
-      completeScoringCount: completeScoring.length,
-      childVolumeKnownCount: childVolumes.length,
-      medianChildVolume: median(childVolumes),
-      sumChildVolume: sumKnown(childVolumes),
-      medianCandidateScore: median(scores),
-      tierCounts,
-      weakSerpAtLeastOneCount,
-      weakSerpAtLeastTwoCount,
-    },
+  };
+}
+
+function evaluateSelection(
+  selectedKeywords: ReadonlyArray<string>,
+  evidenceByKeyword: ReadonlyMap<string, Candidate>,
+): ExpansionReplayVariant['postHocObservedOnly'] {
+  const evidence = selectedKeywords
+    .map((keyword) => evidenceByKeyword.get(keyword) ?? null)
+    .filter((candidate): candidate is Candidate => candidate !== null);
+  const trustworthy = evidence.filter((candidate) => candidate.organicResultCount !== null);
+  const scored = evidence.filter((candidate) => candidate.score !== null);
+  const completeScoring = evidence.filter((candidate) => candidate.scoringCompleteness === 'complete');
+  const childVolumes = evidence
+    .map((candidate) => candidate.surferVolume)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const scores = scored.map((candidate) => candidate.score as number);
+  const tierCounts = { A: 0, B: 0, C: 0, D: 0 };
+  for (const candidate of scored) {
+    if (candidate.tier !== null) tierCounts[candidate.tier] += 1;
+  }
+  let weakSerpAtLeastOneCount = 0;
+  let weakSerpAtLeastTwoCount = 0;
+  for (const candidate of trustworthy) {
+    const veryWeak = candidate.veryWeakDomainsCount;
+    const weak = candidate.weakDomainsCount;
+    if (veryWeak === null || weak === null) continue;
+    const weakTotal = veryWeak + weak;
+    if (weakTotal >= 1) weakSerpAtLeastOneCount += 1;
+    if (weakTotal >= 2) weakSerpAtLeastTwoCount += 1;
+  }
+
+  return {
+    durableChildCount: evidence.length,
+    durableChildCoveragePercent: percent(evidence.length, selectedKeywords.length),
+    counterfactualUnknownCount: selectedKeywords.length - evidence.length,
+    trustworthySerpCount: trustworthy.length,
+    trustworthySerpCoveragePercent: percent(trustworthy.length, selectedKeywords.length),
+    scoredChildCount: scored.length,
+    completeScoringCount: completeScoring.length,
+    childVolumeKnownCount: childVolumes.length,
+    medianChildVolume: median(childVolumes),
+    sumChildVolume: sumKnown(childVolumes),
+    medianCandidateScore: median(scores),
+    tierCounts,
+    weakSerpAtLeastOneCount,
+    weakSerpAtLeastTwoCount,
+  };
+}
+
+function summarizeRelatedEvidence(
+  originalKeywordCount: number,
+  related: ReadonlyArray<ExpansionRelatedOccurrence>,
+): ExpansionReplaySelectionSet['relatedEvidence'] {
+  const outcomes = new Map<number, 'ok' | 'empty' | 'error'>();
+  for (const row of related) {
+    const current = outcomes.get(row.parentIdx);
+    if (row.status === 'ok') outcomes.set(row.parentIdx, 'ok');
+    else if (row.status === 'error' && current !== 'ok') outcomes.set(row.parentIdx, 'error');
+    else if (row.status === 'empty' && current === undefined) outcomes.set(row.parentIdx, 'empty');
+  }
+  let ok = 0;
+  let empty = 0;
+  let error = 0;
+  for (const outcome of outcomes.values()) {
+    if (outcome === 'ok') ok += 1;
+    else if (outcome === 'empty') empty += 1;
+    else error += 1;
+  }
+  return {
+    denominator: originalKeywordCount,
+    ok,
+    empty,
+    error,
+    notAttempted: Math.max(0, originalKeywordCount - outcomes.size),
   };
 }
 
@@ -279,12 +353,8 @@ export function expansionReplayOriginalKeywords(
     .map((keyword) => keyword.keyword);
 }
 
-export function expansionReplayChildKeywords<T extends { normalizedKeyword: string; sources: ReadonlyArray<{ type: string }> }>(
+export function expansionReplayChildKeywords<T extends { sources: ReadonlyArray<{ type: string }> }>(
   keywords: ReadonlyArray<T>,
 ): T[] {
   return keywords.filter((keyword) => keyword.sources.some((source) => source.type === 'surfer_related'));
-}
-
-export function normalizeReplayKeyword(value: string): string {
-  return normalizeKeyword(value);
 }
