@@ -52,6 +52,6 @@ They preserve the decision, reason, support, overlap, volume, broadening flag, c
 - `rawUniqueCandidateCount` and `eligibleUniqueCandidateCount` count normalized unique candidates;
 - `policySelectedUniqueKeywordCount` is the current V1 policy selection from durable evidence;
 - `selectedUniqueKeywordCount` counts durably committed expansion keywords in the run;
-- `rejectedUniqueCandidateCount` and `rejectionReasonCounts` describe current V1 policy rejections.
+- `policyRejectedUniqueCandidateCount` and `policyRejectionReasonCounts` describe current V1 policy rejections, which can differ from durable final selection after monotonic repair/top-up history.
 
 The V1 projection is emitted only when the persisted run has `expansion.admissionVersion = "v1"`; historical runs do not receive fabricated V1 accounting. The old `explicitOmissionCount` / `omissionAccounting` fields remain compatibility-only and are not redefined.
