@@ -53,7 +53,7 @@ If an item fails these filters, defer or drop it.
 
 ## R0 — Documentation consolidation and roadmap authority
 
-**Status:** current documentation PR.
+**Status:** delivered by the roadmap/documentation consolidation in PR #155; complete once that PR is merged.
 
 ### Why
 
