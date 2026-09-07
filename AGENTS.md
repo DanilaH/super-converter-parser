@@ -23,6 +23,8 @@ For **implemented/current behavior**, read in this order:
    - `FULL_RUNS.md`
 6. Code, schemas, tests, and current CLI help are the final implementation evidence when documentation is ambiguous.
 
+For **current development sequencing**, consult `ROADMAP.md`. It is active planning only: it may prioritize future work, but it does not override implemented/current behavior or promote inactive future plans unless it says so explicitly.
+
 See `docs/README.md` for the non-current documentation taxonomy.
 
 Files under `docs/history/` are **frozen historical evidence**. Files under `docs/plans/` are **inactive future planning** unless a current root contract explicitly activates them. Neither category overrides current runtime contracts.
