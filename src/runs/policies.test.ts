@@ -61,7 +61,33 @@ test('google breaker trips after consecutive parse failures', () => {
   breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
   assert.equal(breaker.tripReason(), null);
   breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
-  assert.match(breaker.tripReason() ?? '', /Google/);
+  assert.match(breaker.tripReason() ?? '', /Google collection failures/);
+});
+
+test('google breaker trips after consecutive exhausted availability failures', () => {
+  const breaker = new CircuitBreaker({
+    surferWindow: 15,
+    surferFailureThreshold: 12,
+    googleConsecutiveThreshold: 3,
+  });
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
+  assert.equal(breaker.tripReason(), null);
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
+  assert.match(breaker.tripReason() ?? '', /Google collection failures/);
+});
+
+test('google breaker treats parse and exhausted availability failures as one consecutive sequence', () => {
+  const breaker = new CircuitBreaker({
+    surferWindow: 15,
+    surferFailureThreshold: 12,
+    googleConsecutiveThreshold: 3,
+  });
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
+  breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
+  assert.equal(breaker.tripReason(), null);
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
+  assert.match(breaker.tripReason() ?? '', /Google collection failures/);
 });
 
 test('google breaker resets on a successful result', () => {
@@ -70,10 +96,10 @@ test('google breaker resets on a successful result', () => {
     surferFailureThreshold: 12,
     googleConsecutiveThreshold: 3,
   });
-  breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
   breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
   breaker.record('completed', null);
-  breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
+  breaker.record('failed', 'GOOGLE_UNAVAILABLE');
   breaker.record('partial', 'GOOGLE_SERP_PARSE_ERROR');
   assert.equal(breaker.tripReason(), null);
 });
