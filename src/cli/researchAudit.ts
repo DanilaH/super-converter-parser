@@ -60,8 +60,8 @@ function printUsage(): void {
   console.log('  --json               Print the audit projection as JSON.');
   console.log('  --help, -h           Show this help.');
   console.log('');
-  console.log('This command is read-only. WARN means degraded/incomplete/unknown evidence, not corruption.');
-  console.log('FAIL is reserved for unsafe/stale integrity state or a failed durable read/projection.');
+  console.log('This command is read-only. WARN means degraded/incomplete/unknown or stale derived evidence, not durable-state corruption.');
+  console.log('FAIL is reserved for a failed durable read/projection or an impossible current-state relationship.');
 }
 
 export function renderResearchAudit(audit: ResearchAudit): string {
