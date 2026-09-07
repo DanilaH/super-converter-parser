@@ -64,7 +64,7 @@ test('GSC import persists one immutable snapshot and deduplicates the same prope
   assert.equal(first.snapshotId, second.snapshotId);
   assert.equal(second.snapshotCount, 1);
   assert.deepEqual(second.observedRange, { startDate: '2026-09-01', endDate: '2026-09-02' });
-  assert.equal(second.coverage.query.impressionCoverageRatio, 0.6);
+  assert.equal(second.dimensionTotals.query.impressionRatioToChart, 0.6);
   assert.deepEqual(await readFile(first.sourceArchivePath), fixtureZip());
 
   const db = new Database(first.databasePath, { readonly: true, fileMustExist: true });
