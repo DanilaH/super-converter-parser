@@ -23,7 +23,7 @@ keyboard test,0,2,0%,55
 `) },
     { name: 'Pages.csv', data: csv(`
 Top pages,Clicks,Impressions,CTR,Position
-https://example.com/keyboard-tester,1,10,10%,42.5
+https://example.com/keyboard-tester,1,11,9.09%,42.5
 `) },
     { name: 'Countries.csv', data: csv(`
 Country,Clicks,Impressions,CTR,Position
@@ -46,7 +46,7 @@ Date,Last 3 months
   ], new Date('2026-09-06T00:00:00Z'));
 }
 
-test('GSC export keeps filters, observed chart range, and independent dimension coverage explicit', () => {
+test('GSC export keeps filters, observed chart range, and independent dimension totals explicit', () => {
   const snapshot = parseGscSearchTractionExport({
     archive: gscFixture(),
     property: 'sc-domain:example.com',
@@ -65,9 +65,10 @@ test('GSC export keeps filters, observed chart range, and independent dimension 
   assert.equal(snapshot.chart[0]?.ctrRatio, null);
   assert.equal(snapshot.chart[0]?.position, null);
   assert.equal(snapshot.dimensions.search_appearance.length, 0, 'header-only Search Appearance must be preserved as an empty aggregate, not an error');
-  assert.equal(snapshot.coverage.query.impressions, 6);
-  assert.equal(snapshot.coverage.query.impressionCoverageRatio, 0.6, 'query rows can cover less than chart totals and must not be padded/fabricated');
-  assert.equal(snapshot.coverage.page.impressionCoverageRatio, 1);
+  assert.equal(snapshot.dimensionTotals.query.impressions, 6);
+  assert.equal(snapshot.dimensionTotals.query.impressionRatioToChart, 0.6, 'query rows may total less than Chart and must not be padded/fabricated');
+  assert.equal(snapshot.dimensionTotals.page.impressions, 11);
+  assert.equal(snapshot.dimensionTotals.page.impressionRatioToChart, 1.1, 'dimension/chart ratios may exceed 100% and are not universal coverage fractions');
   assert.equal(snapshot.dimensions.query[0]?.value, 'keyboard tester');
   assert.equal(snapshot.dimensions.page[0]?.value, 'https://example.com/keyboard-tester');
 });
