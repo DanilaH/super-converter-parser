@@ -42,7 +42,7 @@ export type ExpansionReplaySelectionVariant = {
 };
 
 export type ExpansionReplayVariant = ExpansionReplaySelectionVariant & {
-  postHocObservedOnly: {
+  postHocEvidence: {
     durableChildKeywordCount: number;
     durableChildKeywordCoveragePercent: number | null;
     counterfactualUnmaterializedCount: number;
@@ -167,7 +167,7 @@ export function evaluateExpansionReplay(
     relatedEvidence: selections.relatedEvidence,
     variants: selections.variants.map((variant) => ({
       ...variant,
-      postHocObservedOnly: evaluateSelection(variant.selectedKeywords, evidenceByKeyword),
+      postHocEvidence: evaluateSelection(variant.selectedKeywords, evidenceByKeyword),
     })),
     methodology: {
       baseline: 'current_v1_policy_replay',
@@ -230,7 +230,7 @@ function buildSelectionVariant(
 function evaluateSelection(
   selectedKeywords: ReadonlyArray<string>,
   evidenceByKeyword: ReadonlyMap<string, Candidate>,
-): ExpansionReplayVariant['postHocObservedOnly'] {
+): ExpansionReplayVariant['postHocEvidence'] {
   const materialized = selectedKeywords
     .map((keyword) => evidenceByKeyword.get(keyword) ?? null)
     .filter((candidate): candidate is Candidate => candidate !== null);
