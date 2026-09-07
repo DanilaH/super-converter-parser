@@ -67,8 +67,16 @@ The replay keeps V1 eligibility, per-parent caps, thresholds, and the global bud
 - `broadening_after_overlap`: parent support → overlap → broadening → bounded specificity → Related volume;
 - `broadening_last`: parent support → overlap → bounded specificity → Related volume → broadening.
 
-Selection and evaluation are deliberately separate. `buildExpansionReplaySelections()` accepts only the same pre-SERP Related evidence used by admission. Existing child SERP/scoring evidence is connected later by `evaluateExpansionReplay()` and cannot affect any comparator.
+The `v1` baseline is explicitly a **current V1 policy replay over durable Related evidence**. It is not a claim that the replayed selected set must equal a historical monotonic final frontier after repair/top-up history.
 
-Counterfactual evidence is incomplete by construction: candidates rejected by the historical V1 run normally have no collected child SERP. Replay therefore reports post-hoc metrics only for durably collected child keywords and exposes `durableChildCoveragePercent` plus `counterfactualUnknownCount`. Missing counterfactuals stay unknown; they are never converted to zero or treated as negative evidence.
+Selection and evaluation are deliberately separate. `buildExpansionReplaySelections()` accepts only the same pre-SERP Related evidence used by admission. Materialized child rows plus their SERP/scoring evidence are connected later by `evaluateExpansionReplay()` and cannot affect any comparator.
+
+Counterfactual evidence is incomplete by construction: candidates rejected by the historical V1 run normally were never materialized as child keywords, and therefore normally have no collected child SERP. Replay keeps these units separate:
+
+- `durableChildKeywordCount` / `durableChildKeywordCoveragePercent` report whether a replay-selected candidate exists as a durable expansion child row;
+- `counterfactualUnmaterializedCount` reports replay-selected candidates that were never materialized historically;
+- `trustworthySerpCount` / `trustworthySerpCoveragePercent` separately report trustworthy child SERP observations.
+
+A materialized child with failed, pending, or otherwise untrustworthy SERP evidence is not mislabeled as observed. Unmaterialized or unobserved counterfactual outcomes stay unknown; they are never converted to zero or treated as negative evidence.
 
 The replay reports deterministic pre-SERP selection/churn metrics and observed-only child evidence, but it does not compute or recommend an automatic winner. A production admission version change requires a separate decision after reviewing replay coverage and candidate-level churn.
