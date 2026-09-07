@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "researchId": "<research-id>",
+  "action": {
+    "type": "finalists",
+    "clusters": ["<cluster-id>"]
+  }
+}
