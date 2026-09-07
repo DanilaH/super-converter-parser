@@ -120,7 +120,7 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.equal(status.counts.relatedKeywords, 1);
 
   const quality = JSON.parse(await readFile(join(runDirectory, 'run-quality.json'), 'utf8'));
-  assert.equal(quality.version, '1.0.0');
+  assert.equal(quality.version, '1.1.0');
   assert.equal(quality.runId, runId);
   assert.equal(quality.sources.googleSerp.denominator, 3);
   assert.equal(quality.sources.googleSerp.trustworthy, 2);
