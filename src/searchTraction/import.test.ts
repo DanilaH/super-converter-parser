@@ -110,6 +110,29 @@ test('duplicate import restores a missing exact source archive without creating 
   assert.deepEqual(await readFile(second.sourceArchivePath), fixtureZip());
 });
 
+test('duplicate import replaces a corrupted source archive portably', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gsc-import-corrupt-repair-'));
+  const inputPath = join(root, 'export.zip');
+  await writeFile(inputPath, fixtureZip());
+  const first = await importGscSearchTraction({
+    outputRoot: root,
+    inputPath,
+    property: 'sc-domain:example.com',
+  });
+  await writeFile(first.sourceArchivePath, Buffer.from('corrupted source copy'));
+
+  const second = await importGscSearchTraction({
+    outputRoot: root,
+    inputPath,
+    property: 'sc-domain:example.com',
+  });
+
+  assert.equal(second.changed, false);
+  assert.equal(second.sourceArchiveRestored, true);
+  assert.equal(second.snapshotCount, 1);
+  assert.deepEqual(await readFile(second.sourceArchivePath), fixtureZip());
+});
+
 test('same ZIP imported for a different explicit property remains a distinct snapshot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gsc-import-property-'));
   const inputPath = join(root, 'export.zip');
