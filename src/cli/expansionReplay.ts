@@ -89,7 +89,7 @@ export function renderExpansionReplay(result: ExpansionReplayResult): string {
   ];
 
   for (const variant of result.variants) {
-    const postHoc = variant.postHocObservedOnly;
+    const postHoc = variant.postHocEvidence;
     lines.push(
       '',
       `${variant.id}`,
