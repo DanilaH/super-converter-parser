@@ -77,7 +77,8 @@ export function readFlatZipEntries(
       throw invalidZip(`ZIP expands beyond the ${maxTotalBytes} byte total limit.`);
     }
 
-    const name = archive.subarray(cursor + 46, cursor + 46 + fileNameLength).toString('utf8');
+    const nameBytes = archive.subarray(cursor + 46, cursor + 46 + fileNameLength);
+    const name = nameBytes.toString('utf8');
     if (!isSafeFlatFileName(name)) {
       throw invalidZip(`Unsafe or nested ZIP entry name: ${JSON.stringify(name)}.`);
     }
@@ -89,13 +90,31 @@ export function readFlatZipEntries(
     if (archive.readUInt32LE(localHeaderOffset) !== LOCAL_SIGNATURE) {
       throw invalidZip(`Invalid local header for ${name}.`);
     }
+    const localFlags = archive.readUInt16LE(localHeaderOffset + 6);
     const localMethod = archive.readUInt16LE(localHeaderOffset + 8);
     const localNameLength = archive.readUInt16LE(localHeaderOffset + 26);
     const localExtraLength = archive.readUInt16LE(localHeaderOffset + 28);
+    const localVariableLength = localNameLength + localExtraLength;
+    requireRange(archive, localHeaderOffset + 30, localVariableLength, `local name/extra for ${name}`);
+
     if (localMethod !== compressionMethod) {
       throw invalidZip(`Compression method mismatch for ${name}.`);
     }
-    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    // The data-descriptor bit is allowed (and used by real Google exports), but
+    // central/local identity still has to agree. Otherwise a crafted central
+    // directory could label another local payload as a required GSC filename.
+    if ((localFlags & 0x0001) !== (flags & 0x0001) || (localFlags & 0x0008) !== (flags & 0x0008)) {
+      throw invalidZip(`General-purpose flag mismatch for ${name}.`);
+    }
+    const localNameBytes = archive.subarray(
+      localHeaderOffset + 30,
+      localHeaderOffset + 30 + localNameLength,
+    );
+    if (!localNameBytes.equals(nameBytes)) {
+      throw invalidZip(`Local and central filenames differ for ${name}.`);
+    }
+
+    const dataOffset = localHeaderOffset + 30 + localVariableLength;
     requireRange(archive, dataOffset, compressedSize, `compressed data for ${name}`);
     const compressed = archive.subarray(dataOffset, dataOffset + compressedSize);
 
