@@ -14,6 +14,8 @@ Current runtime/operator contracts deliberately remain at the repository root:
 - [`RESEARCH_LIBRARY.md`](../RESEARCH_LIBRARY.md) — immutable publication/library contract;
 - [`SCORING.md`](../SCORING.md) — current broad-discovery score contract.
 
+Current development sequencing lives separately at [`ROADMAP.md`](../ROADMAP.md). It is active planning, **not runtime authority**: it must follow the contracts above and current merged implementation rather than reinterpret them.
+
 ## Authority rule
 
 Files under `docs/history/` are frozen records of what a release, phase, PR plan, or acceptance gate meant **at that time**. Internal phrases such as “current backlog”, “next PR”, “ready to merge”, or old command/architecture descriptions are historical context, not instructions for present work.
