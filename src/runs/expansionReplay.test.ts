@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import type { Candidate } from '../scoring/scoring.js';
 import { buildExpansionAdmission } from './expansionAdmission.js';
 import {
-  buildExpansionReplay,
-  type BuildExpansionReplayInput,
+  buildExpansionReplaySelections,
+  evaluateExpansionReplay,
+  type BuildExpansionReplaySelectionsInput,
 } from './expansionReplay.js';
 
 const ORIGINALS = ['roof pitch calculator', 'roof slope calculator'];
-const RELATED: BuildExpansionReplayInput['related'] = [
+const RELATED: BuildExpansionReplaySelectionsInput['related'] = [
   {
     parentIdx: 0,
     parentKeyword: ORIGINALS[0]!,
@@ -87,7 +88,7 @@ function evidence(normalizedKeyword: string, score = 60, volume = 1_000): Candid
   };
 }
 
-function input(candidateEvidence: Candidate[] = []): BuildExpansionReplayInput {
+function input(): BuildExpansionReplaySelectionsInput {
   return {
     runId: 'replay-test',
     originalKeywords: ORIGINALS,
@@ -95,7 +96,6 @@ function input(candidateEvidence: Candidate[] = []): BuildExpansionReplayInput {
     maxCandidatesPerKeyword: 20,
     minOverlap: 0,
     minVolume: 0,
-    candidateEvidence,
   };
 }
 
@@ -107,7 +107,7 @@ test('V1 replay selection exactly matches the production admission selection', (
     minOverlap: 0,
     minVolume: 0,
   });
-  const replay = buildExpansionReplay(input());
+  const replay = buildExpansionReplaySelections(input());
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
 
   assert.equal(replay.budget, 3);
@@ -118,7 +118,7 @@ test('V1 replay selection exactly matches the production admission selection', (
 });
 
 test('moving broadening behind parent support changes only ranking, not eligibility or budget', () => {
-  const replay = buildExpansionReplay(input());
+  const replay = buildExpansionReplaySelections(input());
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
   const afterSupport = replay.variants.find((variant) => variant.id === 'broadening_after_support')!;
 
@@ -131,27 +131,28 @@ test('moving broadening behind parent support changes only ranking, not eligibil
   assert.equal(afterSupport.versusV1.removedCount, 1);
 });
 
-test('post-hoc child evidence cannot change any replay selection', () => {
-  const withoutEvidence = buildExpansionReplay(input());
-  const withEvidence = buildExpansionReplay(input([
+test('selector API is fixed before any post-hoc child evidence is connected', () => {
+  const selections = buildExpansionReplaySelections(input());
+  const evaluated = evaluateExpansionReplay(selections, [
     evidence('roof calculator', 99, 9_000_000),
     evidence('roof pitch angle', 1, 1),
     evidence('roof pitch degrees', 1, 1),
     evidence('roof slope angle', 1, 1),
-  ]));
+  ]);
 
   assert.deepEqual(
-    withEvidence.variants.map((variant) => [variant.id, variant.selectedKeywords]),
-    withoutEvidence.variants.map((variant) => [variant.id, variant.selectedKeywords]),
+    evaluated.variants.map((variant) => [variant.id, variant.selectedKeywords]),
+    selections.variants.map((variant) => [variant.id, variant.selectedKeywords]),
   );
 });
 
 test('uncollected counterfactual children remain unknown instead of becoming zero-quality evidence', () => {
-  const replay = buildExpansionReplay(input([
+  const selections = buildExpansionReplaySelections(input());
+  const replay = evaluateExpansionReplay(selections, [
     evidence('roof pitch angle'),
     evidence('roof pitch degrees'),
     evidence('roof slope angle'),
-  ]));
+  ]);
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
   const afterSupport = replay.variants.find((variant) => variant.id === 'broadening_after_support')!;
 
@@ -161,4 +162,19 @@ test('uncollected counterfactual children remain unknown instead of becoming zer
   assert.equal(afterSupport.postHocObservedOnly.counterfactualUnknownCount, 1);
   assert.equal(afterSupport.postHocObservedOnly.durableChildCoveragePercent, 66.67);
   assert.equal(afterSupport.postHocObservedOnly.trustworthySerpCount, 2);
+});
+
+test('related root completeness is explicit and missing roots are not treated as empty', () => {
+  const replay = buildExpansionReplaySelections({
+    ...input(),
+    originalKeywords: [...ORIGINALS, 'third root calculator'],
+  });
+
+  assert.deepEqual(replay.relatedEvidence, {
+    denominator: 3,
+    ok: 2,
+    empty: 0,
+    error: 0,
+    notAttempted: 1,
+  });
 });
