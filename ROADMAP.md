@@ -306,36 +306,42 @@ The cumulative Library can be browsed and traced through immutable versions with
 
 ## R6 — Expansion quality evaluation telemetry
 
-**Status:** observation/analysis track; no implementation change currently justified. **Do not change V1.1 now.**
+**Status:** first downstream-lineage pilot complete; observation/analysis remains active, but no implementation or policy change is justified. **Do not change V1.1 now.**
 
 ### Why
 
-Expansion V1.1 was adopted from preserved evidence through offline replay and deliberately made the minimal comparator change. There is currently no evidence-backed reason to invent V1.2.
+Expansion V1.1 was adopted from preserved evidence through offline replay and deliberately made the minimal comparator change. The persistence linkage needed for downstream evaluation already existed, so no new telemetry subsystem was required.
 
-A fresh persistence audit established that the required linkage already exists without adding telemetry plumbing: expansion admission preserves candidate/parent/support/overlap/broadening/selection facts, discovery preserves normalized keyword/provenance, enrichment preserves shortlist keywords and cluster keyword membership, and finalist evidence is cluster-scoped.
+One completed lineage can now be evaluated end to end. Its persisted V1 source run contained 240 deliberate roots, 652 raw unique admission candidates, 558 eligible candidates, and a 300-keyword expansion budget. All 300 selected expansion children materialized with observed organic-result counts, known Score, complete scoring, and known Surfer volume, so the downstream pilot is not distorted by missing child evidence.
 
-The missing input is therefore a representative downstream corpus, not another runtime subsystem.
+The later human-selected 30-keyword enrichment/finalization scope contained:
 
-### Means
+- 25 deliberate roots;
+- 5 selected expansion children;
+- 30 resulting clusters, all carried into representative/finalist scope.
 
-Reuse persisted expansion decisions and later durable evidence to evaluate facts such as:
+Those five observed expansion contributions were all B-tier candidates. However, shortlist inclusion must not be treated as a universal binary quality label: the human shortlist overlapped the raw top-30-by-Score set on only 10/30 keywords, so it encoded selection criteria beyond raw Score. The observed 5/300 expansion-child shortlist rate versus 25/240 for roots is therefore descriptive lineage evidence, not a causal policy-quality comparison.
+
+The support-first replay that motivated V1.1 changes only 2/300 selections on this corpus. It retains all five observed expansion children that later entered finalist scope. Its two newly admitted broadening candidates were not materialized in the historical V1 run, so their post-SERP outcome remains unknown; the two displaced V1 children were materialized and did not enter the later shortlist. More aggressive replay positions substitute 5/300 or 7/300 selections and also retain the five observed downstream hits, but their newly admitted counterfactuals are likewise unmaterialized. That is more churn without evaluable evidence of downstream improvement.
+
+### Evaluation rule
+
+Continue R6 only as post-hoc evaluation over preserved immutable evidence:
 
 ```text
-candidate source / parent support / overlap / broadening
-selected vs rejected reason
-child materialized?
-trustworthy SERP obtained?
-entered a human shortlist?
-contributed to a finalist cluster?
+fix selection from pre-SERP admission evidence
+→ attach only later observed child/SERP/scoring evidence
+→ attach human shortlist/finalist outcomes
+→ keep unmaterialized counterfactuals unknown
 ```
 
-Keep this as evaluation/analysis. Do not use post-SERP evidence to retroactively rewrite historical admission decisions, and do not silently change fresh-run policy.
+Do not use post-SERP evidence to retroactively rewrite historical admission decisions. Do not interpret absence from one human shortlist as proof that a keyword was bad. Do not silently change fresh-run policy.
 
-Only a repeated, quantified defect across representative corpora can justify proposing another admission version.
+Additional independent downstream corpora are still needed before generalizing the pilot. Only a repeated, quantified failure mode that survives those semantic caveats can justify proposing another versioned admission policy.
 
 ### Result
 
-Expansion evolves from observed failure modes rather than comparator experimentation for its own sake. No extra telemetry implementation is currently needed.
+The existing persisted evidence is sufficient for R6 evaluation without extra telemetry implementation. The first end-to-end downstream pilot gives no evidence-backed reason for V1.2 or for a more aggressive comparator. V1.1 remains current while future real research naturally accumulates additional independent downstream corpora.
 
 ---
 
@@ -438,4 +444,4 @@ Rules:
 
 Use the completed R1–R7 surfaces on real research work rather than manufacturing another implementation item.
 
-R4 measurement is complete on the available representative deep-enrichment corpus and does not justify scheduler work. R6 remains analysis-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. Wordstat and V3 remain inactive without a new measured need.
+R4 measurement is complete and does not justify scheduler work. R6 now has one end-to-end downstream lineage pilot and still does not justify telemetry code or V1.2; accumulate additional independent downstream corpora through normal research before reconsidering policy. Wordstat and V3 remain inactive without a new measured need.
