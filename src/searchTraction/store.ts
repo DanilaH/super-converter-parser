@@ -12,6 +12,13 @@ import type {
 export const SEARCH_TRACTION_SCHEMA_VERSION = 1;
 export const SEARCH_TRACTION_DIRECTORY = 'first-party-search';
 
+type SnapshotIdentityRow = {
+  snapshot_id: string;
+  property: string;
+  source_sha256: string;
+  parser_version: string;
+};
+
 export type PersistSearchTractionResult = {
   snapshotId: string;
   changed: boolean;
@@ -42,28 +49,18 @@ export async function persistGscSearchTractionSnapshot(input: {
   let sourceArchiveRestored = false;
   let inserted = false;
   try {
+    db.pragma('busy_timeout = 1000');
     db.pragma('foreign_keys = ON');
     db.pragma('journal_mode = DELETE');
-    db.pragma('busy_timeout = 1000');
     applySchema(db);
 
-    const existing = db.prepare(
+    const identityStatement = db.prepare(
       'SELECT snapshot_id, property, source_sha256, parser_version FROM snapshots WHERE snapshot_id = ?',
-    ).get(snapshotId) as {
-      snapshot_id: string;
-      property: string;
-      source_sha256: string;
-      parser_version: string;
-    } | undefined;
+    );
+    const existing = identityStatement.get(snapshotId) as SnapshotIdentityRow | undefined;
 
     if (existing) {
-      if (
-        existing.property !== input.snapshot.property
-        || existing.source_sha256 !== input.snapshot.source.sha256
-        || existing.parser_version !== input.snapshot.source.parserVersion
-      ) {
-        throw new ResearchError('DB_ERROR', `Search traction snapshot identity collision: ${snapshotId}.`);
-      }
+      assertSnapshotIdentity(existing, input.snapshot, snapshotId);
       sourceArchiveRestored = await ensureSourceArchive(
         sourceArchivePath,
         input.archive,
@@ -75,84 +72,88 @@ export async function persistGscSearchTractionSnapshot(input: {
         input.archive,
         input.snapshot.source.sha256,
       );
-      try {
-        const insert = db.transaction(() => {
-          db.prepare(`
-            INSERT INTO snapshots (
-              snapshot_id, property, source_kind, parser_version, source_sha256,
-              source_archive_relative_path, imported_at,
-              observed_start_date, observed_end_date, total_clicks, total_impressions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            snapshotId,
-            input.snapshot.property,
-            input.snapshot.source.kind,
-            input.snapshot.source.parserVersion,
-            input.snapshot.source.sha256,
-            `sources/${snapshotId}.zip`,
-            importedAt,
-            input.snapshot.observedRange?.startDate ?? null,
-            input.snapshot.observedRange?.endDate ?? null,
-            input.snapshot.totals.clicks,
-            input.snapshot.totals.impressions,
-          );
 
-          const dailyStatement = db.prepare(`
-            INSERT INTO daily_metrics (
-              snapshot_id, ordinal, date, clicks, impressions, ctr_ratio, position
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          `);
-          input.snapshot.chart.forEach((row, ordinal) => {
-            dailyStatement.run(
+      const insertSnapshot = db.transaction((): boolean => {
+        const insertResult = db.prepare(`
+          INSERT OR IGNORE INTO snapshots (
+            snapshot_id, property, source_kind, parser_version, source_sha256,
+            source_archive_relative_path, imported_at,
+            observed_start_date, observed_end_date, total_clicks, total_impressions
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          snapshotId,
+          input.snapshot.property,
+          input.snapshot.source.kind,
+          input.snapshot.source.parserVersion,
+          input.snapshot.source.sha256,
+          `sources/${snapshotId}.zip`,
+          importedAt,
+          input.snapshot.observedRange?.startDate ?? null,
+          input.snapshot.observedRange?.endDate ?? null,
+          input.snapshot.totals.clicks,
+          input.snapshot.totals.impressions,
+        );
+
+        if (insertResult.changes === 0) return false;
+
+        const dailyStatement = db.prepare(`
+          INSERT INTO daily_metrics (
+            snapshot_id, ordinal, date, clicks, impressions, ctr_ratio, position
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        input.snapshot.chart.forEach((row, ordinal) => {
+          dailyStatement.run(
+            snapshotId,
+            ordinal,
+            row.date,
+            row.clicks,
+            row.impressions,
+            row.ctrRatio,
+            row.position,
+          );
+        });
+
+        const dimensionStatement = db.prepare(`
+          INSERT INTO dimension_metrics (
+            snapshot_id, dimension, ordinal, value,
+            clicks, impressions, ctr_ratio, position
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const [dimension, rows] of dimensionEntries(input.snapshot.dimensions)) {
+          rows.forEach((row, ordinal) => {
+            dimensionStatement.run(
               snapshotId,
+              dimension,
               ordinal,
-              row.date,
+              row.value,
               row.clicks,
               row.impressions,
               row.ctrRatio,
               row.position,
             );
           });
-
-          const dimensionStatement = db.prepare(`
-            INSERT INTO dimension_metrics (
-              snapshot_id, dimension, ordinal, value,
-              clicks, impressions, ctr_ratio, position
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-          for (const [dimension, rows] of dimensionEntries(input.snapshot.dimensions)) {
-            rows.forEach((row, ordinal) => {
-              dimensionStatement.run(
-                snapshotId,
-                dimension,
-                ordinal,
-                row.value,
-                row.clicks,
-                row.impressions,
-                row.ctrRatio,
-                row.position,
-              );
-            });
-          }
-
-          const filterStatement = db.prepare(`
-            INSERT INTO snapshot_filters (snapshot_id, ordinal, name, value)
-            VALUES (?, ?, ?, ?)
-          `);
-          input.snapshot.filters.forEach((filter, ordinal) => {
-            filterStatement.run(snapshotId, ordinal, filter.name, filter.value);
-          });
-        });
-        insert();
-        inserted = true;
-      } catch (error) {
-        // The source ZIP is written before the SQLite transaction so a committed
-        // snapshot can never point at an archive that failed to persist. If this
-        // was a newly written orphan for an insert that did not commit, remove it.
-        if (sourceArchiveRestored) {
-          await rm(sourceArchivePath, { force: true }).catch(() => undefined);
         }
-        throw error;
+
+        const filterStatement = db.prepare(`
+          INSERT INTO snapshot_filters (snapshot_id, ordinal, name, value)
+          VALUES (?, ?, ?, ?)
+        `);
+        input.snapshot.filters.forEach((filter, ordinal) => {
+          filterStatement.run(snapshotId, ordinal, filter.name, filter.value);
+        });
+        return true;
+      });
+
+      inserted = insertSnapshot.immediate();
+      if (!inserted) {
+        const concurrentExisting = identityStatement.get(snapshotId) as SnapshotIdentityRow | undefined;
+        if (!concurrentExisting) {
+          throw new ResearchError(
+            'DB_ERROR',
+            `Search traction snapshot ${snapshotId} was not inserted and no concurrent durable row exists.`,
+          );
+        }
+        assertSnapshotIdentity(concurrentExisting, input.snapshot, snapshotId);
       }
     }
 
@@ -195,19 +196,20 @@ function applySchema(db: Database.Database): void {
       version INTEGER NOT NULL
     );
   `);
+  db.prepare(
+    'INSERT OR IGNORE INTO search_traction_schema (singleton, version) VALUES (1, ?)',
+  ).run(SEARCH_TRACTION_SCHEMA_VERSION);
   const current = db.prepare(
     'SELECT version FROM search_traction_schema WHERE singleton = 1',
   ).get() as { version: number } | undefined;
-  if (current && current.version !== SEARCH_TRACTION_SCHEMA_VERSION) {
+  if (!current) {
+    throw new ResearchError('DB_ERROR', 'Search traction schema version row is missing after initialization.');
+  }
+  if (current.version !== SEARCH_TRACTION_SCHEMA_VERSION) {
     throw new ResearchError(
       'DB_ERROR',
       `Search traction schema version ${current.version} is unsupported by this build (${SEARCH_TRACTION_SCHEMA_VERSION}).`,
     );
-  }
-  if (!current) {
-    db.prepare(
-      'INSERT INTO search_traction_schema (singleton, version) VALUES (1, ?)',
-    ).run(SEARCH_TRACTION_SCHEMA_VERSION);
   }
 
   db.exec(`
@@ -284,19 +286,45 @@ async function ensureSourceArchive(path: string, archive: Buffer, expectedSha256
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${randomUUID()}`;
   try {
-    // Write the complete replacement before touching an existing target. Windows
-    // does not reliably allow rename() to replace an existing file, so remove the
-    // known-bad target only after the temp file is safely written.
     await writeFile(temp, archive);
     if (existingNeedsReplacement) {
       await rm(path, { force: true });
     }
-    await rename(temp, path);
+    try {
+      await rename(temp, path);
+      return true;
+    } catch (renameError) {
+      // Another concurrent importer may have won the same deterministic path.
+      // If the target now contains the exact expected bytes, that is success for
+      // durable state even though this call did not perform the winning rename.
+      try {
+        const concurrent = await readFile(path);
+        if (sha256(concurrent) === expectedSha256) return false;
+      } catch {
+        // Preserve the original rename failure below.
+      }
+      throw renameError;
+    }
   } catch (error) {
-    await rm(temp, { force: true }).catch(() => undefined);
     throw new ResearchError('OUTPUT_WRITE_ERROR', `Cannot persist first-party source archive ${path}.`, { cause: error });
+  } finally {
+    await rm(temp, { force: true }).catch(() => undefined);
   }
-  return true;
+}
+
+function assertSnapshotIdentity(
+  row: SnapshotIdentityRow,
+  snapshot: GscSearchTractionSnapshot,
+  expectedSnapshotId: string,
+): void {
+  if (
+    row.snapshot_id !== expectedSnapshotId
+    || row.property !== snapshot.property
+    || row.source_sha256 !== snapshot.source.sha256
+    || row.parser_version !== snapshot.source.parserVersion
+  ) {
+    throw new ResearchError('DB_ERROR', `Search traction snapshot identity collision: ${expectedSnapshotId}.`);
+  }
 }
 
 function dimensionEntries(
