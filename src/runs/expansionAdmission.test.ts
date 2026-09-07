@@ -35,7 +35,7 @@ function build(
     maxCandidatesPerKeyword: overrides.maxCandidatesPerKeyword ?? 20,
     minOverlap: overrides.minOverlap ?? 0,
     minVolume: overrides.minVolume ?? 0,
-    version: overrides.version,
+    ...(overrides.version === undefined ? {} : { version: overrides.version }),
   });
 }
 
