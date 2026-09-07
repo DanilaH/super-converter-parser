@@ -359,8 +359,9 @@ For current behavior, use these documents by role:
 7. [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md) — publication/version lineage.
 8. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
 9. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
-10. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
+10. [`ROADMAP.md`](./ROADMAP.md) — current development sequencing; planning only, not runtime authority.
+11. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
 
-Versioned roadmaps, release acceptance files, methodology reports, and PR-specific plans are archived under `docs/history/`. They preserve historical context and do not override merged runtime behavior.
+Versioned release roadmaps, acceptance files, methodology reports, and PR-specific plans are archived under `docs/history/`. They preserve historical context and do not override merged runtime behavior. The root `ROADMAP.md` is the explicit current-development exception and likewise does not override runtime contracts.
 
 Future commercial-evidence planning lives under [`docs/plans/v3/`](./docs/plans/v3/). In particular, `V3_COMMERCIAL_EVIDENCE_SPEC.md` and `COMMERCIAL_DATA_PROVIDER_MATRIX.md` are inactive planning documents, not current runtime contracts or current backlog.
