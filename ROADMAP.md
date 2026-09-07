@@ -23,6 +23,7 @@ The runner already has a substantial accepted baseline:
 
 - config-first `research:plan` / `research:run` orchestration through a stable `researchId`;
 - read-only `research:status` with current lifecycle state, evidence gaps, and next operator action;
+- read-only `research:audit` integrity/degradation checklist over existing status/evidence-health projections;
 - immutable-generation `research:diff`;
 - durable SQLite truth, immutable discovery/enrichment generations, and explicit lineage;
 - explicit human gates for shortlist, finalist scope, and decisions;
@@ -53,7 +54,7 @@ If an item fails these filters, defer or drop it.
 
 ## R0 — Documentation consolidation and roadmap authority
 
-**Status:** delivered by the roadmap/documentation consolidation in PR #155; complete once that PR is merged.
+**Status:** complete; merged in PR #155.
 
 ### Why
 
@@ -81,7 +82,7 @@ There is one obvious answer to “what are we building next?” without weakenin
 
 ## R1 — Read-only research integrity audit surface
 
-**Status:** committed next runtime track, subject to normal PR review/CI.
+**Status:** implemented in the current runtime baseline by `research:audit`.
 
 ### Why
 
@@ -91,32 +92,35 @@ There is one obvious answer to “what are we building next?” without weakenin
 
 That should not be replaced.
 
-The remaining gap is a different question:
+The remaining gap was a different question:
 
 > Before I hand this research to analysis, is its current durable/projection state internally trustworthy, and what exactly is degraded?
 
-The repository already contains much of the underlying evidence in separate mechanisms, including run-quality accounting, deep evidence coverage, current-parent/finalization freshness checks, research-container invariants, and Research Library derived-snapshot health. The useful change is to **compose existing truth**, not create a second quality model.
+The repository already contained most of the underlying evidence in separate mechanisms, including run-quality accounting, deep evidence coverage, current-parent/finalization freshness checks, research-container invariants, sampled historical-presence coverage, and Research Library derived-snapshot health. The correct implementation therefore composes existing truth rather than creating a second quality model.
 
-### Intended means
+### Implemented means
 
-Add a read-only operator command, tentatively:
+Read-only operator commands:
 
 ```bash
 npm run research:audit -- --research <research-id>
 npm run research:audit -- --research <research-id> --json
 ```
 
-The exact check set must be derived from current contracts during implementation. The bounded target is to cover existing high-value integrity facts such as:
+The audit reuses `research:status` and its existing evidence-health projections. It does not call providers, mutate SQLite, repair checkpoints, publish artifacts, or persist a new quality store.
 
-- stable research/container lineage and current generation identity;
-- current discovery terminal/open/repairable state;
-- current run-quality/provider coverage and warnings without rounding missing evidence into success;
-- current enrichment parent identity and completion/error state;
-- stale/current finalization parent projections already detectable by current code;
-- evidence-coverage warnings and explicit unavailable/missing states;
-- Research Library publication/derived-snapshot consistency when applicable.
+The checklist covers the currently applicable high-value integrity/degradation facts:
 
-Output should use explicit states such as:
+- successful durable/status projection and modern-vs-legacy audit coverage;
+- discovery terminal/open/partial/failed/repairable state;
+- existing run-quality warnings;
+- latest enrichment state and persisted module error/open/not-attempted counts;
+- finalization state and derived-artifact currentness warnings already exposed by status;
+- deep evidence-coverage warnings;
+- sampled historical-presence warnings under bounded sampled-presence semantics;
+- current Research Library publication lookup and derived-snapshot health.
+
+Output states are:
 
 ```text
 PASS
@@ -126,34 +130,30 @@ NOT_APPLICABLE
 UNKNOWN
 ```
 
-where the semantics genuinely differ. A warning must not silently become failure, and missing optional evidence must not be presented as corruption.
+with deliberately conservative semantics:
 
-### Constraints
+- `PASS` means no degradation was observed among currently applicable checks, not that every downstream stage has run;
+- `WARN` preserves incomplete/degraded/optional evidence and stale/repairable derived artifacts without pretending durable truth is corrupted;
+- `FAIL` is reserved for a failed durable/status projection or an internally contradictory projected current-state relationship;
+- `NOT_APPLICABLE` means the downstream check does not apply at the current workflow stage;
+- `UNKNOWN` means a relevant integrity fact could not be established.
+
+Warnings do not fail the process. Audit failures return non-zero; invalid input/unknown targets remain a separate invalid-input class.
+
+### Constraints retained
 
 - read-only;
 - no provider/network calls;
 - no state repair as a side effect;
 - no new scoring/recommendation model;
 - no duplicate durable truth;
-- reuse existing status/run-quality/health functions where possible;
+- existing status/run-quality/health functions remain authoritative;
 - machine-readable JSON plus concise human output;
-- tests must prove that incomplete evidence cannot masquerade as a clean audit.
+- incomplete optional evidence does not masquerade as success, but also does not become corruption.
 
 ### Result
 
-Before analyzing a run or sharing its ZIP, the operator can run one deterministic integrity check and distinguish:
-
-```text
-structurally trustworthy but evidence-partial
-```
-
-from:
-
-```text
-internally stale/inconsistent and unsafe to interpret
-```
-
-This should reduce manual artifact inspection while strengthening measurement honesty.
+Before analyzing a run or sharing its ZIP, the operator has one deterministic checklist that distinguishes a clean current-stage projection from warning-level evidence degradation and from hard inability to establish a trustworthy current projection.
 
 ---
 
@@ -414,6 +414,6 @@ Rules:
 - update active documentation in the same PR when merged behavior changes;
 - do not let roadmap wording override evidence found during implementation.
 
-## Immediate next action after R0
+## Immediate next action after R1
 
-Begin R1 by auditing the existing status/run-quality/evidence-health functions and writing a bounded `research:audit` contract. If that implementation audit reveals that current surfaces already answer the integrity question completely, close R1 without redundant code and advance to the next evidence-backed item.
+Observe real operator runs for R2 continuation friction rather than assuming a generic UX problem. In parallel, the next implementation-worthy track should come from the first evidence-backed gap among R2/R3/R4; do not manufacture code merely to advance the roadmap numbering.
