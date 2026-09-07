@@ -330,7 +330,7 @@ Expansion evolves from observed failure modes rather than comparator experimenta
 
 ## R7 — First-party search-traction import
 
-**Status:** implemented in PR #160; pending normal merge gate while this PR is open.
+**Status:** complete in the current implementation baseline via `search-traction:import`.
 
 ### Why
 
@@ -425,6 +425,6 @@ Rules:
 
 ## Immediate next action after R7
 
-Finish the PR #160 cold-review/CI/merge gate. After that, use R1–R7 on real research work rather than manufacturing another implementation item.
+Use the completed R1–R7 surfaces on real research work rather than manufacturing another implementation item.
 
 R6 is analysis-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. R4 is measurement-gated: representative archives now exist, but progressive enrichment stays deferred until actual provider/module waste is quantified. Wordstat and V3 remain inactive without a new measured need.
