@@ -21,7 +21,7 @@ DISCOVERY ROOTS
   ├── raw Related observations
   └── organic SERP + source-specific Google state
         ↓
-optional Expansion Admission V1
+optional Expansion Admission V1.1
         ↓
 selected expansion children only
         ↓
@@ -164,11 +164,11 @@ Do not count ads, sponsored results, PAA, related searches, shopping widgets, lo
 
 If the rendered page yields fewer valid organic rows, preserve the observed number.
 
-## Stage 4 — Expansion Admission V1
+## Stage 4 — Expansion Admission V1.1
 
-Fresh public discovery with expansion enabled uses a **global deterministic frontier**.
+Fresh public discovery with expansion enabled stamps `expansion.admissionVersion = "v1.1"` and uses a **global deterministic frontier**.
 
-Old immediate-per-parent expansion is not the current V1 path.
+Old immediate-per-parent expansion applies only to historical no-marker runs. Persisted `v1` runs remain on the original global-admission comparator.
 
 ### Lifecycle
 
@@ -184,7 +184,9 @@ append only selected candidates
 collect primary evidence for selected children
 ```
 
-### V1 rules
+### Shared global-admission rules
+
+V1 and V1.1 share eligibility, per-parent constraints, and budget:
 
 - expansion depth is exactly 1;
 - reject candidates already present as original keywords;
@@ -192,7 +194,6 @@ collect primary evidence for selected children
 - explicit seeds may still be single-token;
 - apply configured `minOverlap`, `minVolume`, and per-parent candidate cap;
 - rank per-parent occurrences deterministically;
-- rank global candidates by non-broadening first, bucketed parent support, best overlap, bounded specificity, max volume, lexical tie-break;
 - strict lexical broadening is a ranking penalty, not a universal reject;
 - preserve directional queries as distinct;
 - cap newly added candidates at:
@@ -200,6 +201,28 @@ collect primary evidence for selected children
 ```text
 min(500, ceil(originalKeywordCount * 1.25))
 ```
+
+### Versioned global comparator
+
+```text
+v1
+  broadening
+  → parent-support tier
+  → best overlap
+  → bounded specificity
+  → max Related volume
+  → lexical tie-break
+
+v1.1
+  parent-support tier
+  → broadening
+  → best overlap
+  → bounded specificity
+  → max Related volume
+  → lexical tie-break
+```
+
+The V1.1 change is deliberately limited to moving parent support ahead of the existing broadening penalty. It does not change eligibility, thresholds, per-parent caps, expansion depth, or global budget.
 
 ### Durable/diagnostic behavior
 
@@ -212,7 +235,7 @@ expansion-admission.json
 expansion-admission.csv
 ```
 
-They expose decisions such as:
+They expose the persisted admission version and decisions such as:
 
 ```text
 selected
@@ -225,9 +248,13 @@ global_budget
 
 along with support/priority evidence.
 
-Do **not** claim omission reasons are unavailable for current V1 runs. Historical runs may lack this report and retain their historical semantics.
+`run-quality.json` version `1.2.0` replays supported global-admission accounting using the persisted version. It must not reinterpret a V1 run as V1.1.
+
+Do **not** claim omission reasons are unavailable for current global-admission runs. Historical runs may lack this report and retain their historical semantics.
 
 Unknown persisted admission versions fail closed.
+
+The read-only `npm run expansion:replay -- --run <run-id>` experiment remains pinned to persisted V1 runs only. It is historical comparator evidence, not the current V1.1 selector.
 
 ## Stage 5 — Domain normalization
 
@@ -286,6 +313,8 @@ The score is a prioritization signal, not a BUILD/KILL verdict.
 
 It reports source-specific coverage/warnings for Google, Surfer, Related, Ahrefs, geo, omissions/caps where available, and other discovery quality facts.
 
+For supported persisted global-admission runs, it also projects versioned admission accounting from durable Related evidence using that run's persisted policy marker.
+
 Quality warnings explain uncertainty. They are not negative opportunity evidence.
 
 ## Stage 9 — Discovery publication
@@ -304,7 +333,7 @@ domains.csv
 candidates.csv
 report.md
 status.json
-expansion-admission.json/.csv   # V1 expansion runs
+expansion-admission.json/.csv   # supported versioned global-admission runs
 ```
 
 SQLite remains resume truth.
@@ -326,7 +355,7 @@ Append can create a new immutable combined discovery generation when:
 
 Promotion-only append may therefore create a generation with zero genuinely new keywords.
 
-For V1 expansion forks, raw Related evidence can carry forward, but previous generation `selectedForExpansion` decisions are not current truth and are recomputed for the new frontier.
+For supported versioned global-admission forks (`v1` or `v1.1`), raw Related evidence can carry forward, but previous-generation `selectedForExpansion` decisions are not current truth. The new generation recomputes its frontier under its persisted admission version. Unsupported versions fail closed; no-marker legacy runs preserve their historical immediate-expansion behavior.
 
 See `RESEARCH_BATCHES.md`.
 
