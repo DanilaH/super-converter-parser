@@ -108,11 +108,21 @@ Query/page/country/device/search-appearance labels are preserved as supplied by 
 
 Clicks and impressions are persisted as non-negative integers. Source CTR percent values are normalized to a ratio (`0.49%` → `0.0049`); blank CTR/position cells remain `null`. Average position is preserved as the source numeric observation and is not recomputed from clicks/impressions.
 
-### Missing/hidden query coverage
+### Dimension totals vs Chart totals
 
-Search Console query rows can cover less than the chart/page totals. The importer does not invent hidden queries or turn that difference into zero evidence.
+The importer also reports the sum of clicks/impressions inside each aggregate dimension and its ratio to the `Chart.csv` total.
 
-At import time the operator result reports aggregate click/impression coverage for every dimension relative to the chart totals. The normalized SQLite rows retain all inputs needed to recompute that projection. A query impression coverage below `1.0` is explicit incomplete coverage, not an error and not a negative signal.
+Those ratios are **comparison diagnostics, not universal coverage fractions**. Real Search Console exports can legitimately produce dimension totals above or below the chart total; for example, page-grouped impressions can exceed the chart impression sum. Therefore:
+
+```text
+ratio < 1.0  != automatically missing/hidden evidence
+ratio = 1.0  != proof of complete coverage
+ratio > 1.0  != invalid data
+```
+
+For Queries specifically, a lower ratio can still be operationally useful when investigating omitted/anonymized query rows, but the importer does not generalize that interpretation to every dimension.
+
+The normalized SQLite rows retain all inputs needed to recompute the ratios. No hidden rows are invented and no difference is converted into zero evidence.
 
 ### Empty Search Appearance
 
