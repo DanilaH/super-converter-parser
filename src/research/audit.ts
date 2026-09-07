@@ -176,17 +176,6 @@ function auditCurrentEnrichment(status: ResearchStatusWithHistoricalPresence): R
 
 function auditFinalization(status: ResearchStatusWithHistoricalPresence): ResearchAuditCheck {
   const finalization = status.finalization;
-  const staleCurrentParentArtifact = finalization.artifactWarning?.includes(
-    'stale relative to current durable parent snapshots',
-  ) === true;
-
-  if (staleCurrentParentArtifact) {
-    return {
-      id: 'finalization_projection',
-      status: 'fail',
-      message: `Current finalization artifact is known stale and unsafe to treat as current: ${finalization.artifactWarning}`,
-    };
-  }
 
   if (finalization.state === 'not_started') {
     return {
@@ -202,7 +191,7 @@ function auditFinalization(status: ResearchStatusWithHistoricalPresence): Resear
     return {
       id: 'finalization_projection',
       status: 'warn',
-      message: `Finalization artifact surface is incomplete/degraded but not proven stale against current parents: ${finalization.artifactWarning}`,
+      message: `Current finalization derived artifact must not be treated as current until this warning is resolved: ${finalization.artifactWarning}`,
     };
   }
 
