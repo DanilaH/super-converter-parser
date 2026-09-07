@@ -71,7 +71,7 @@ function printUsage(): void {
   console.log('  --help, -h              Show this help.');
   console.log('');
   console.log('Read-only: selection variants use only persisted pre-SERP Related evidence.');
-  console.log('Child SERP/scoring evidence is connected only after selection; uncollected counterfactuals stay unknown.');
+  console.log('Materialized child rows and their observed SERP/scoring evidence are connected only after selection.');
 }
 
 export function renderExpansionReplay(result: ExpansionReplayResult): string {
@@ -80,6 +80,7 @@ export function renderExpansionReplay(result: ExpansionReplayResult): string {
     'Expansion Admission offline replay',
     `  Run: ${result.runId}`,
     `  Admission: ${result.admissionVersion}`,
+    '  Baseline: current V1 policy replay over durable Related evidence',
     `  Roots: ${result.originalKeywordCount}`,
     `  Related roots: ok=${related.ok}, empty=${related.empty}, error=${related.error}, notAttempted=${related.notAttempted}, total=${related.denominator}`,
     `  Raw candidates: ${result.rawCandidateCount}`,
@@ -99,8 +100,8 @@ export function renderExpansionReplay(result: ExpansionReplayResult): string {
       `  Related overlap median: ${formatNumber(variant.preSerp.medianBestOverlap)}`,
       `  Related volume: known=${variant.preSerp.knownRelatedVolumeCount}, median=${formatNumber(variant.preSerp.medianMaxRelatedVolume)}, sum=${formatNumber(variant.preSerp.sumMaxRelatedVolume)}`,
       `  vs V1: retained=${variant.versusV1.retainedCount}, added=${variant.versusV1.addedCount}, removed=${variant.versusV1.removedCount}, jaccard=${formatRatio(variant.versusV1.jaccard)}`,
-      `  Post-hoc durable children: ${postHoc.durableChildCount}/${variant.selectedCount} (${formatPercent(postHoc.durableChildCoveragePercent)})`,
-      `  Counterfactual unknown: ${postHoc.counterfactualUnknownCount}`,
+      `  Materialized child keywords: ${postHoc.durableChildKeywordCount}/${variant.selectedCount} (${formatPercent(postHoc.durableChildKeywordCoveragePercent)})`,
+      `  Counterfactual unmaterialized: ${postHoc.counterfactualUnmaterializedCount}`,
       `  Trustworthy child SERP: ${postHoc.trustworthySerpCount}/${variant.selectedCount} (${formatPercent(postHoc.trustworthySerpCoveragePercent)})`,
       `  Child scoring: scored=${postHoc.scoredChildCount}, complete=${postHoc.completeScoringCount}, median=${formatNumber(postHoc.medianCandidateScore)}`,
       `  Weak SERP observed-only: >=1 weak domain=${postHoc.weakSerpAtLeastOneCount}, >=2=${postHoc.weakSerpAtLeastTwoCount}`,
@@ -114,9 +115,10 @@ export function renderExpansionReplay(result: ExpansionReplayResult): string {
   lines.push(
     '',
     'Methodology',
+    '  Baseline is a current V1 policy replay, not a claim about historical final frontier state after repair/top-up.',
     '  Selector: pre-SERP Related evidence only.',
-    '  Evaluator: only child evidence already durably collected by the source run.',
-    '  Missing counterfactual child outcomes remain unknown; they are never scored as zero.',
+    '  Evaluator: materialized child keywords first; trustworthy SERP/scoring coverage is reported separately.',
+    '  Unmaterialized or unobserved counterfactual outcomes remain unknown; they are never scored as zero.',
     '  No automatic winner is computed.',
   );
   return `${lines.join('\n')}\n`;
@@ -162,8 +164,8 @@ async function main(): Promise<void> {
       minVolume: expansion.minVolume,
     });
 
-    // Post-hoc evidence is deliberately loaded and connected only after all
-    // replay selections are fixed. It cannot influence any comparator.
+    // Post-hoc data is deliberately loaded only after replay selections are
+    // fixed. Materialized child rows and their observations cannot influence a comparator.
     const children = expansionReplayChildKeywords(keywords);
     const serpRows = store.loadSerpRows(args.runId);
     const candidateEvidence = buildCandidates(children, serpRows, resolveDrThresholds(run.configSnapshot));
