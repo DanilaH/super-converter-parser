@@ -34,7 +34,7 @@ test('search-traction:import parses explicit source identity and output options'
   );
 });
 
-test('search-traction import text distinguishes export filters, observed range, and duplicate state', () => {
+test('search-traction import text distinguishes export filters, observed range, duplicate state, and neutral ratios', () => {
   const result: ImportGscSearchTractionResult = {
     snapshotId: 'gsc_fixture',
     changed: false,
@@ -51,12 +51,12 @@ test('search-traction import text distinguishes export filters, observed range, 
     ],
     observedRange: { startDate: '2026-09-01', endDate: '2026-09-04' },
     totals: { clicks: 1, impressions: 10 },
-    coverage: {
-      query: { clicks: 1, impressions: 6, clickCoverageRatio: 1, impressionCoverageRatio: 0.6 },
-      page: { clicks: 1, impressions: 10, clickCoverageRatio: 1, impressionCoverageRatio: 1 },
-      country: { clicks: 1, impressions: 10, clickCoverageRatio: 1, impressionCoverageRatio: 1 },
-      device: { clicks: 1, impressions: 10, clickCoverageRatio: 1, impressionCoverageRatio: 1 },
-      search_appearance: { clicks: 0, impressions: 0, clickCoverageRatio: 0, impressionCoverageRatio: 0 },
+    dimensionTotals: {
+      query: { clicks: 1, impressions: 6, clickRatioToChart: 1, impressionRatioToChart: 0.6 },
+      page: { clicks: 1, impressions: 11, clickRatioToChart: 1, impressionRatioToChart: 1.1 },
+      country: { clicks: 1, impressions: 10, clickRatioToChart: 1, impressionRatioToChart: 1 },
+      device: { clicks: 1, impressions: 10, clickRatioToChart: 1, impressionRatioToChart: 1 },
+      search_appearance: { clicks: 0, impressions: 0, clickRatioToChart: 0, impressionRatioToChart: 0 },
     },
     rowCounts: {
       chart: 4,
@@ -71,6 +71,6 @@ test('search-traction import text distinguishes export filters, observed range, 
   const text = renderSearchTractionImport(result);
   assert.match(text, /Observed chart range: 2026-09-01\.\.2026-09-04/);
   assert.match(text, /Date=Last 3 months/);
-  assert.match(text, /queries=60\.0%/);
-  assert.match(text, /duplicate source snapshot/);
+  assert.match(text, /queries=60\.0% pages=110\.0%/);
+  assert.match(text, /duplicate source\/parser snapshot/);
 });
