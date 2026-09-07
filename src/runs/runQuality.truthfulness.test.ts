@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../config/config.js';
 import type { StoredKeyword, StoredRelatedKeyword, StoredRun } from '../db/store.js';
+import { ResearchError } from '../shared/errors.js';
 import { buildRunQuality } from './runQuality.js';
 
 const CONFIG = loadConfig({});
@@ -179,4 +180,27 @@ test('persisted V1.1 diagnostics identify V1.1 policy replay separately', () => 
   assert.equal(expansion.policySelectedUniqueKeywordCount, 3);
   assert.equal(expansion.selectedUniqueKeywordCount, 3);
   assert.equal(expansion.admissionAccounting, 'v1_1_replayed_from_durable_evidence');
+});
+
+test('run-quality replay fails closed on an unknown persisted admission version', () => {
+  const unknownConfig = {
+    ...CONFIG,
+    expansion: {
+      ...CONFIG.expansion,
+      enabled: true,
+      admissionVersion: 'v999',
+    },
+  } as unknown as StoredRun['configSnapshot'];
+
+  assert.throws(
+    () => buildRunQuality({
+      run: run(unknownConfig),
+      state: 'completed',
+      keywords: [keyword(0, 'root zero')],
+      serpRows: [],
+      relatedKeywords: [],
+      domains: [],
+    }),
+    (error: unknown) => error instanceof ResearchError && error.code === 'RESUME_CONFIG_MISMATCH',
+  );
 });
