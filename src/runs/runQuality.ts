@@ -118,8 +118,8 @@ export type RunQuality = {
       eligibleUniqueCandidateCount?: number;
       policySelectedUniqueKeywordCount?: number;
       selectedUniqueKeywordCount?: number;
-      rejectedUniqueCandidateCount?: number;
-      rejectionReasonCounts?: Partial<Record<ExpansionAdmissionReason, number>>;
+      policyRejectedUniqueCandidateCount?: number;
+      policyRejectionReasonCounts?: Partial<Record<ExpansionAdmissionReason, number>>;
       admissionAccounting?: 'v1_replayed_from_durable_evidence';
       /** Historical compatibility fields; V1 detail is exposed by the explicit candidate counts above. */
       explicitOmissionCount: null;
@@ -158,8 +158,8 @@ type V1ExpansionSummary = {
   eligibleUniqueCandidateCount: number;
   policySelectedUniqueKeywordCount: number;
   selectedUniqueKeywordCount: number;
-  rejectedUniqueCandidateCount: number;
-  rejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>>;
+  policyRejectedUniqueCandidateCount: number;
+  policyRejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>>;
 };
 
 function coveragePercent(observed: number, denominator: number): number | null {
@@ -249,10 +249,10 @@ function v1ExpansionSummary(
     minOverlap: expansion.minOverlap,
     minVolume: expansion.minVolume,
   });
-  const rejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>> = {};
+  const policyRejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>> = {};
   for (const decision of admission.decisions) {
     if (decision.selected) continue;
-    rejectionReasonCounts[decision.reason] = (rejectionReasonCounts[decision.reason] ?? 0) + 1;
+    policyRejectionReasonCounts[decision.reason] = (policyRejectionReasonCounts[decision.reason] ?? 0) + 1;
   }
   const selectedUniqueKeywordCount = new Set(
     keywords
@@ -266,8 +266,8 @@ function v1ExpansionSummary(
     eligibleUniqueCandidateCount: admission.eligibleCandidateCount,
     policySelectedUniqueKeywordCount: admission.selectedCount,
     selectedUniqueKeywordCount,
-    rejectedUniqueCandidateCount: admission.decisions.filter((decision) => !decision.selected).length,
-    rejectionReasonCounts,
+    policyRejectedUniqueCandidateCount: admission.decisions.filter((decision) => !decision.selected).length,
+    policyRejectionReasonCounts,
   };
 }
 
@@ -523,8 +523,8 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
           eligibleUniqueCandidateCount: admission.eligibleUniqueCandidateCount,
           policySelectedUniqueKeywordCount: admission.policySelectedUniqueKeywordCount,
           selectedUniqueKeywordCount: admission.selectedUniqueKeywordCount,
-          rejectedUniqueCandidateCount: admission.rejectedUniqueCandidateCount,
-          rejectionReasonCounts: admission.rejectionReasonCounts,
+          policyRejectedUniqueCandidateCount: admission.policyRejectedUniqueCandidateCount,
+          policyRejectionReasonCounts: admission.policyRejectionReasonCounts,
           admissionAccounting: 'v1_replayed_from_durable_evidence' as const,
         }),
         explicitOmissionCount: null,
