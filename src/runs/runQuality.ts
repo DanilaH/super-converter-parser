@@ -516,7 +516,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
         minOverlap: expansion?.minOverlap ?? null,
         minVolume: expansion?.minVolume ?? null,
         selectedRows: selectedOccurrenceRows,
-        ...(expansion === undefined ? {} : { selectedOccurrenceRows }),
+        ...(expansion?.enabled === true || admission !== null ? { selectedOccurrenceRows } : {}),
         ...(admission === null ? {} : {
           admissionVersion: admission.admissionVersion,
           rawUniqueCandidateCount: admission.rawUniqueCandidateCount,
