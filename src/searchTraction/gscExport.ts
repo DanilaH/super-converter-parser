@@ -129,8 +129,8 @@ function parseChart(data: Buffer): SearchTractionDailyRow[] {
   const records = parseCsv(data, 'Chart.csv', ['Date', 'Clicks', 'Impressions', 'CTR', 'Position']);
   const seen = new Set<string>();
   return records.map((record, index) => {
-    const date = requiredCell(record, 'Date', 'Chart.csv', index);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    const date = requiredCell(record, 'Date', 'Chart.csv', index).trim();
+    if (!isIsoCalendarDate(date)) {
       throw rowError('Chart.csv', index, `invalid Date ${JSON.stringify(date)}`);
     }
     if (seen.has(date)) throw rowError('Chart.csv', index, `duplicate Date ${date}`);
@@ -149,6 +149,8 @@ function parseDimension(
 ): SearchTractionDimensionRow[] {
   const records = parseCsv(data, fileName, [valueColumn, 'Clicks', 'Impressions', 'CTR', 'Position']);
   return records.map((record, index) => ({
+    // Preserve the source label/query/page text verbatim. Whitespace is used
+    // only to reject an empty cell, never as hidden normalization.
     value: requiredCell(record, valueColumn, fileName, index),
     ...parseMetrics(record, fileName, index),
   }));
@@ -269,13 +271,19 @@ function requiredEntry(entries: Map<string, Buffer>, name: string): Buffer {
 }
 
 function requiredCell(record: CsvRecord, column: string, fileName: string, index: number): string {
-  const value = cell(record, column).trim();
-  if (value === '') throw rowError(fileName, index, `${column} must not be blank`);
+  const value = cell(record, column);
+  if (value.trim() === '') throw rowError(fileName, index, `${column} must not be blank`);
   return value;
 }
 
 function cell(record: CsvRecord, column: string): string {
   return String(record[column] ?? '');
+}
+
+function isIsoCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function rowError(fileName: string, index: number, message: string): ResearchError {
