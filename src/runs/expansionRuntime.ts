@@ -6,7 +6,7 @@ import {
   type ExpansionAdmissionVersion,
 } from './expansionAdmission.js';
 
-type VersionedExpansionConfig = ResearchConfig['expansion'] & {
+type VersionedExpansionConfig = NonNullable<ResearchConfig['expansion']> & {
   admissionVersion?: string;
 };
 
@@ -20,8 +20,9 @@ export function withCurrentExpansionAdmission(
 }
 
 export function expansionAdmissionVersion(
-  expansion: ResearchConfig['expansion'],
+  expansion: ResearchConfig['expansion'] | undefined,
 ): string | null {
+  if (expansion === undefined) return null;
   const value = (expansion as VersionedExpansionConfig).admissionVersion;
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
