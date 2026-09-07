@@ -11,7 +11,7 @@ export type ImportGscSearchTractionResult = PersistSearchTractionResult & {
   filters: GscSearchTractionSnapshot['filters'];
   observedRange: GscSearchTractionSnapshot['observedRange'];
   totals: GscSearchTractionSnapshot['totals'];
-  coverage: GscSearchTractionSnapshot['coverage'];
+  dimensionTotals: GscSearchTractionSnapshot['dimensionTotals'];
   rowCounts: {
     chart: number;
     queries: number;
@@ -52,7 +52,7 @@ export async function importGscSearchTraction(input: {
     filters: snapshot.filters,
     observedRange: snapshot.observedRange,
     totals: snapshot.totals,
-    coverage: snapshot.coverage,
+    dimensionTotals: snapshot.dimensionTotals,
     rowCounts: {
       chart: snapshot.chart.length,
       queries: snapshot.dimensions.query.length,
