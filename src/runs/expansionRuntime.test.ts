@@ -3,21 +3,31 @@ import test from 'node:test';
 import { loadConfig } from '../config/config.js';
 import { ResearchError } from '../shared/errors.js';
 import {
+  resolveGlobalExpansionAdmissionVersion,
   usesGlobalExpansionAdmission,
   withCurrentExpansionAdmission,
 } from './expansionRuntime.js';
 
 const BASE = loadConfig({});
 
-test('fresh expansion stamping enables V1 without mutating the caller object', () => {
+test('fresh expansion stamping enables v1.1 without mutating the caller object', () => {
   const stamped = withCurrentExpansionAdmission(BASE.expansion);
   assert.notEqual(stamped, BASE.expansion);
-  assert.equal((stamped as ResearchConfigExpansionWithVersion).admissionVersion, 'v1');
+  assert.equal((stamped as ResearchConfigExpansionWithVersion).admissionVersion, 'v1.1');
   assert.equal((BASE.expansion as ResearchConfigExpansionWithVersion).admissionVersion, undefined);
+  assert.equal(resolveGlobalExpansionAdmissionVersion({ ...BASE, expansion: stamped }), 'v1.1');
   assert.equal(usesGlobalExpansionAdmission({ ...BASE, expansion: stamped }), true);
 });
 
-test('legacy persisted expansion config remains on immediate admission semantics', () => {
+test('persisted v1 remains a supported global admission policy', () => {
+  const expansion = { ...BASE.expansion, admissionVersion: 'v1' } as typeof BASE.expansion;
+  const config = { ...BASE, expansion };
+  assert.equal(resolveGlobalExpansionAdmissionVersion(config), 'v1');
+  assert.equal(usesGlobalExpansionAdmission(config), true);
+});
+
+test('legacy unmarked persisted expansion config remains on immediate admission semantics', () => {
+  assert.equal(resolveGlobalExpansionAdmissionVersion(BASE), null);
   assert.equal(usesGlobalExpansionAdmission(BASE), false);
 });
 
