@@ -27,11 +27,13 @@ The runner already has a substantial accepted baseline:
 - immutable-generation `research:diff`;
 - durable SQLite truth, immutable discovery/enrichment generations, and explicit lineage;
 - explicit human gates for shortlist, finalist scope, and decisions;
+- canonical copy/edit continuation examples for the normal human gates;
 - repair of failed or provably incomplete primary discovery checkpoints;
-- bounded retry/rate-limit/circuit-breaker behavior in existing provider paths;
+- bounded retry/rate-limit/circuit-breaker behavior in existing provider paths, including sustained Google availability failures;
 - Expansion Admission V1.1 plus version-compatible historical behavior;
 - deep enrichment, finalization, evidence coverage, and immutable Research Library publication;
-- run-quality accounting and derived Research Library snapshot-health checks.
+- run-quality accounting and derived Research Library snapshot-health checks;
+- read-only Research Library navigation through logical research and publication lineage views.
 
 Therefore the next roadmap must **not** restart already completed V2/config-first work under new names.
 
@@ -82,7 +84,7 @@ There is one obvious answer to “what are we building next?” without weakenin
 
 ## R1 — Read-only research integrity audit surface
 
-**Status:** implemented in the current runtime baseline by `research:audit`.
+**Status:** complete; merged in PR #156 and implemented by `research:audit`.
 
 ### Why
 
@@ -159,81 +161,67 @@ Before analyzing a run or sharing its ZIP, the operator has one deterministic ch
 
 ## R2 — Operator-friction audit and targeted continuation polish
 
-**Status:** evidence-gated; do not implement a generic continuation layer by default.
+**Status:** complete; merged in PR #157.
 
 ### Why
 
-A conversational backlog previously assumed continuation was still highly manual. Current implementation evidence shows otherwise:
+A conversational backlog previously assumed continuation was still highly manual. Current implementation evidence showed otherwise:
 
 - `research:status` exposes a durable next action and command where appropriate;
 - `research:plan` validates continuation against durable state;
 - `research:run --research <id>` replans/resumes recoverable unfinished work without inventing human input;
 - shortlist/finalist/decision gates remain explicit by design.
 
-So “build continuation UX” is not currently a justified standalone project.
+The concrete remaining friction was narrower: operators still had to remember the exact continuation envelope/action shape even after the runner identified the unresolved human gate.
 
-### Means
+### Implemented means
 
-Use real operator runs after R1 and record only repeated mechanical friction that remains, for example:
+- canonical copy/edit examples for shortlist continuation;
+- canonical explicit/all finalist-scope examples;
+- canonical human-decisions continuation example;
+- declaring-file-relative path semantics documented alongside the examples;
+- tests that run the normal-gate examples through the authoritative `OperatorContinuationV1` validator.
 
-- repeatedly authoring structurally identical continuation envelopes;
-- copying an identifier/path that the runner could resolve safely from durable state;
-- unclear next-action output despite sufficient persisted context.
-
-Only then implement the smallest targeted convenience. Generated templates or a shorthand command are acceptable **only if** they preserve explicit human input and declaring-file path semantics.
+No new CLI, planner schema, durable continuation subsystem, generated human decision, or weakened gate was added.
 
 ### Result
 
-If a real repeated friction point exists, remove it without weakening the human gates. If none exists, close this track with no code.
+The runner now supplies safe canonical shapes for the normal human gates while keeping the human input itself explicit and auditable.
 
 ---
 
 ## R3 — Provider resilience consistency audit and targeted fixes
 
-**Status:** evidence-gated audit first; not a rewrite.
+**Status:** complete for the evidence-backed defect found; merged in PR #158.
 
 ### Why
 
-The runner already has retries, repairable partial checkpoints, rate limiting, circuit breakers, browser preflight, durable resume, and provider-specific error handling. A generic “resilience project” would risk rebuilding mature infrastructure.
+The runner already had retries, repairable partial checkpoints, rate limiting, circuit breakers, browser preflight, durable resume, and provider-specific error handling. A generic resilience rewrite would have rebuilt mature infrastructure.
 
-The remaining useful question is whether individual provider paths classify equivalent failures inconsistently or force unnecessary operator intervention on large runs.
+The audit found one concrete inconsistency in discovery: `GOOGLE_UNAVAILABLE` was the only retryable discovery error and exhausted its bounded per-keyword retry budget, but an exhausted availability failure did not count toward the existing run-level Google consecutive-failure breaker. A sustained navigation/availability outage could therefore repeat the full retry budget across a large remaining corpus.
 
-### Means
+### Implemented means
 
-Audit current provider paths and real run diagnostics for concrete inconsistencies around classes such as:
+- keep `GOOGLE_UNAVAILABLE` retry eligibility and retry budget unchanged;
+- after that per-keyword budget is exhausted, count it together with `GOOGLE_SERP_PARSE_ERROR` in the existing `googleConsecutiveThreshold` sequence;
+- retain one existing Google breaker setting rather than introduce a parallel threshold;
+- reset the streak on a healthy collection result as before;
+- add policy tests for availability-only, mixed Google failure sequences, and reset semantics;
+- add an engine-level regression proving the run pauses before outage fan-out reaches untouched later keywords.
 
-```text
-auth / configuration
-rate limit / quota
-timeout / transient transport
-provider 5xx
-browser preflight / CAPTCHA
-parse / schema failure
-deterministic provider rejection
-```
-
-For each proven inconsistency, define the smallest correction to:
-
-- retry-now vs retry-later semantics;
-- circuit-breaker behavior;
-- `partial` / `failed` / `unavailable` representation;
-- repair eligibility;
-- attempt-history preservation;
-- operator diagnostics.
-
-Do **not** introduce a generic provider/plugin framework merely to normalize names.
+Persisted breaker state, repair semantics, Ahrefs/RDAP/first-seen behavior, and provider abstractions were not changed.
 
 ### Result
 
-Large runs become more boring to operate: isolated provider failures remain explicit and repairable without corrupting unrelated evidence or requiring broad reruns.
+A sustained Google outage now becomes a bounded resumable pause after repeated exhausted keyword-level failures instead of multiplying retry work across the remaining corpus.
 
-If the audit finds current behavior already consistent enough, this track closes without architectural churn.
+Further R3 work requires another concrete provider inconsistency; do not keep normalizing provider code for aesthetics.
 
 ---
 
 ## R4 — Cost-aware progressive enrichment
 
-**Status:** design/evidence gate before implementation.
+**Status:** deferred; current evidence does not justify implementation.
 
 ### Why
 
@@ -241,9 +229,11 @@ The runner already bounds expensive deep work through explicit shortlists and fi
 
 A further optimization is useful only if real runs show that expensive provider/module work is still being executed for entities that cannot contribute useful downstream evidence.
 
-### Means
+The current audit did not establish that measured waste. Historical handoffs reference large real runs, but the raw representative run artifacts needed to quantify module/provider cost and skip opportunities are not currently available in the active evidence set. That is insufficient justification for scheduler complexity.
 
-First measure provider/module cost and skip opportunities on representative large runs. If material waste is demonstrated, design deterministic stage predicates such as:
+### Re-activation gate
+
+First measure provider/module cost and deterministic skip opportunities on representative real runs. Only if material waste is demonstrated should the runner consider predicates such as:
 
 ```text
 required parent evidence exists?
@@ -252,44 +242,53 @@ current human shortlist/finalist scope includes it?
 provider/module is configured for this stage?
 ```
 
-Any skip must be durably explainable (`skipped` + reason/policy provenance where appropriate), not converted into missing/zero evidence.
+Any future skip must be durably explainable (`skipped` + reason/policy provenance where appropriate), not converted into missing/zero evidence.
 
 This track must not introduce opaque opportunity scoring or automatically decide which product/niche deserves research.
 
 ### Result
 
-If justified, expensive work is concentrated on entities that can actually influence the requested evidence package, reducing runtime/provider cost without hiding omissions.
-
-If measured savings are marginal, do not implement the extra scheduler complexity.
+No speculative progressive-enrichment scheduler is being added. The track remains available only after representative run evidence proves that the additional complexity would pay for itself.
 
 ---
 
 ## R5 — Research Library navigation surfaces
 
-**Status:** planned after integrity/operational work; scope must remain read-only and local-first.
+**Status:** complete in the current implementation baseline via `library:list` and `library:inspect`.
 
 ### Why
 
-`library.sqlite` already provides cumulative durable publication truth, and `research:diff` already compares explicit immutable discovery/enrichment generations. The missing potential value is easier **navigation of accumulated research**, not another comparison engine.
+`library.sqlite` already provides cumulative durable publication truth, and `research:diff` already compares explicit immutable discovery/enrichment generations. The missing value was easier **navigation of accumulated research**, not another comparison engine.
 
-### Means
+### Implemented means
 
-Audit current Library access patterns, then consider small read-only CLI surfaces such as:
+Read-only operator commands:
 
-```text
-list published logical researches
-inspect one publication lineage
-show current/superseded publication history
-locate source research/enrichment IDs and snapshot fingerprints
+```bash
+npm run library:list
+npm run library:list -- --json
+npm run library:inspect -- --research-path <persisted-research-path>
+npm run library:inspect -- --research-path <persisted-research-path> --json
 ```
 
-Names and exact commands are implementation decisions. Reuse `library.sqlite`; do not introduce another index/database, dashboard, server, embedding store, or destructive deduplication.
+The navigation surface:
 
-`research:diff` remains the factual generation-diff surface and should not be duplicated under a new `compare` command unless a distinct Library-level use case is proven.
+- reads `research-library/library.sqlite` directly;
+- groups immutable publications by persisted `research_relative_path` rather than display name;
+- shows logical research version count and current publication;
+- exposes source run, enrichment id, publication time, fingerprint, and normalized counts;
+- inspects the full immutable publication lineage for one exact logical research;
+- uses persisted `published_at, rowid` ordering, matching Library lineage relinking including equal-timestamp ties;
+- treats an uninitialized Library as an honest empty `library:list` state;
+- fails explicitly for unsupported schema or an unknown inspect target.
+
+It does not read derived `library.json` as truth, publish/repair/regenerate snapshots, introduce another index/database, add embeddings/search infrastructure, or create a dashboard/server.
+
+`research:diff` remains the factual generation-diff surface and is not duplicated by Library navigation.
 
 ### Result
 
-The cumulative Library becomes easier to browse and reuse as the research corpus grows, while preserving its immutable publication model.
+The cumulative Library can be browsed and traced through immutable versions without leaving the local-first SQLite truth model.
 
 ---
 
@@ -414,6 +413,6 @@ Rules:
 - update active documentation in the same PR when merged behavior changes;
 - do not let roadmap wording override evidence found during implementation.
 
-## Immediate next action after R1
+## Immediate next action after R5
 
-Observe real operator runs for R2 continuation friction rather than assuming a generic UX problem. In parallel, the next implementation-worthy track should come from the first evidence-backed gap among R2/R3/R4; do not manufacture code merely to advance the roadmap numbering.
+Use the completed R1–R5 surfaces on real research work rather than manufacturing another implementation item. R6 remains observation-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. R7 remains gated on meaningful first-party Search Console data. R4 remains gated on measured provider/module waste from representative large runs.
