@@ -75,6 +75,35 @@ function related(
   };
 }
 
+function expansionConfig(admissionVersion: 'v1' | 'v1.1'): StoredRun['configSnapshot'] {
+  return {
+    ...CONFIG,
+    expansion: {
+      ...CONFIG.expansion,
+      enabled: true,
+      admissionVersion,
+    },
+  } as unknown as StoredRun['configSnapshot'];
+}
+
+function expansionFixture() {
+  const keywords = [
+    keyword(0, 'root zero'),
+    keyword(1, 'root one'),
+    keyword(2, 'shared tool', [{ type: 'surfer_related', parentKeyword: 'root zero', overlap: 80 }]),
+    keyword(3, 'alpha tool', [{ type: 'surfer_related', parentKeyword: 'root zero', overlap: 80 }]),
+    keyword(4, 'beta tool', [{ type: 'surfer_related', parentKeyword: 'root one', overlap: 80 }]),
+  ];
+  const relatedKeywords = [
+    related(0, 'root zero', 'shared tool', 100, true),
+    related(0, 'root zero', 'alpha tool', 90, true),
+    related(0, 'root zero', 'budget reject', 10, false),
+    related(1, 'root one', 'shared tool', 100, true),
+    related(1, 'root one', 'beta tool', 80, true),
+  ];
+  return { keywords, relatedKeywords };
+}
+
 test('incomplete high coverage never rounds up to a false 100 percent', () => {
   const keywords = Array.from({ length: 200 }, (_, idx) => keyword(idx, `keyword ${idx}`));
   keywords[199] = {
@@ -108,33 +137,10 @@ test('incomplete high coverage never rounds up to a false 100 percent', () => {
   assert.equal(quality.sources.surfer.coveragePercent, 99.5);
 });
 
-test('V1 expansion diagnostics distinguish occurrence rows from unique admitted keywords', () => {
-  const v1Config = {
-    ...CONFIG,
-    expansion: {
-      ...CONFIG.expansion,
-      enabled: true,
-      admissionVersion: 'v1',
-    },
-  } as unknown as StoredRun['configSnapshot'];
-
-  const keywords = [
-    keyword(0, 'root zero'),
-    keyword(1, 'root one'),
-    keyword(2, 'shared tool', [{ type: 'surfer_related', parentKeyword: 'root zero', overlap: 80 }]),
-    keyword(3, 'alpha tool', [{ type: 'surfer_related', parentKeyword: 'root zero', overlap: 80 }]),
-    keyword(4, 'beta tool', [{ type: 'surfer_related', parentKeyword: 'root one', overlap: 80 }]),
-  ];
-  const relatedKeywords = [
-    related(0, 'root zero', 'shared tool', 100, true),
-    related(0, 'root zero', 'alpha tool', 90, true),
-    related(0, 'root zero', 'budget reject', 10, false),
-    related(1, 'root one', 'shared tool', 100, true),
-    related(1, 'root one', 'beta tool', 80, true),
-  ];
-
+test('persisted V1 diagnostics keep V1 accounting after v1.1 becomes current', () => {
+  const { keywords, relatedKeywords } = expansionFixture();
   const quality = buildRunQuality({
-    run: run(v1Config),
+    run: run(expansionConfig('v1')),
     state: 'completed',
     keywords,
     serpRows: [],
@@ -143,7 +149,7 @@ test('V1 expansion diagnostics distinguish occurrence rows from unique admitted 
   });
   const expansion = quality.bounds.relatedExpansion;
 
-  assert.equal(quality.version, '1.1.0');
+  assert.equal(quality.version, '1.2.0');
   assert.equal(expansion.selectedRows, 4, 'legacy alias stays occurrence-scoped');
   assert.equal(expansion.selectedOccurrenceRows, 4);
   assert.equal(expansion.admissionVersion, 'v1');
@@ -154,4 +160,23 @@ test('V1 expansion diagnostics distinguish occurrence rows from unique admitted 
   assert.equal(expansion.policyRejectedUniqueCandidateCount, 1);
   assert.deepEqual(expansion.policyRejectionReasonCounts, { global_budget: 1 });
   assert.equal(expansion.admissionAccounting, 'v1_replayed_from_durable_evidence');
+});
+
+test('persisted V1.1 diagnostics identify V1.1 policy replay separately', () => {
+  const { keywords, relatedKeywords } = expansionFixture();
+  const quality = buildRunQuality({
+    run: run(expansionConfig('v1.1')),
+    state: 'completed',
+    keywords,
+    serpRows: [],
+    relatedKeywords,
+    domains: [],
+  });
+  const expansion = quality.bounds.relatedExpansion;
+
+  assert.equal(quality.version, '1.2.0');
+  assert.equal(expansion.admissionVersion, 'v1.1');
+  assert.equal(expansion.policySelectedUniqueKeywordCount, 3);
+  assert.equal(expansion.selectedUniqueKeywordCount, 3);
+  assert.equal(expansion.admissionAccounting, 'v1_1_replayed_from_durable_evidence');
 });
