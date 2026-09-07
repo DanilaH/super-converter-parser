@@ -6,10 +6,15 @@ import type {
 } from '../db/store.js';
 import type { SerpResult } from '../google/serp.js';
 import type { AhrefsSummary } from './engine.js';
+import {
+  buildExpansionAdmission,
+  EXPANSION_ADMISSION_VERSION,
+  type ExpansionAdmissionReason,
+} from './expansionAdmission.js';
 import { TERMINAL_RUN_STATES, type RunState } from './run.js';
 import { resolveSerpEvidence } from './serpEvidence.js';
 
-export const RUN_QUALITY_VERSION = '1.0.0';
+export const RUN_QUALITY_VERSION = '1.1.0';
 
 export type RunQualityWarning = {
   code:
@@ -105,7 +110,18 @@ export type RunQuality = {
       maxCandidatesPerKeyword: number | null;
       minOverlap: number | null;
       minVolume: number | null;
+      /** Historical compatibility alias; occurrence-level, not unique keywords. */
       selectedRows: number;
+      selectedOccurrenceRows?: number;
+      admissionVersion?: typeof EXPANSION_ADMISSION_VERSION;
+      rawUniqueCandidateCount?: number;
+      eligibleUniqueCandidateCount?: number;
+      policySelectedUniqueKeywordCount?: number;
+      selectedUniqueKeywordCount?: number;
+      policyRejectedUniqueCandidateCount?: number;
+      policyRejectionReasonCounts?: Partial<Record<ExpansionAdmissionReason, number>>;
+      admissionAccounting?: 'v1_replayed_from_durable_evidence';
+      /** Historical compatibility fields; V1 detail is exposed by the explicit candidate counts above. */
       explicitOmissionCount: null;
       omissionAccounting: 'not_persisted';
     };
@@ -132,8 +148,23 @@ type RelatedSummary = {
   notAttempted: number;
 };
 
+type ExpansionSnapshot = NonNullable<StoredRun['configSnapshot']['expansion']> & {
+  admissionVersion?: string;
+};
+
+type V1ExpansionSummary = {
+  admissionVersion: typeof EXPANSION_ADMISSION_VERSION;
+  rawUniqueCandidateCount: number;
+  eligibleUniqueCandidateCount: number;
+  policySelectedUniqueKeywordCount: number;
+  selectedUniqueKeywordCount: number;
+  policyRejectedUniqueCandidateCount: number;
+  policyRejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>>;
+};
+
 function coveragePercent(observed: number, denominator: number): number | null {
-  return denominator === 0 ? null : Math.round((observed / denominator) * 100);
+  if (denominator === 0) return null;
+  return Math.round((observed / denominator) * 10_000) / 100;
 }
 
 function surferObservation(keyword: StoredKeyword): 'ok' | 'error' | 'notFetched' | 'unknown' {
@@ -190,6 +221,53 @@ function relatedParentOutcomes(
     empty,
     error,
     notAttempted: rootKeywordIdxs.size - outcomes.size,
+  };
+}
+
+function v1ExpansionSummary(
+  run: StoredRun,
+  keywords: StoredKeyword[],
+  relatedKeywords: StoredRelatedKeyword[],
+): V1ExpansionSummary | null {
+  const expansion = run.configSnapshot.expansion as ExpansionSnapshot | undefined;
+  if (expansion?.admissionVersion !== EXPANSION_ADMISSION_VERSION) return null;
+
+  const originals = keywords.filter(
+    (keyword) => !keyword.sources.some((source) => source.type === 'surfer_related'),
+  );
+  const admission = buildExpansionAdmission({
+    originalKeywords: originals.map((keyword) => keyword.keyword),
+    related: relatedKeywords.map((row) => ({
+      parentIdx: row.parentIdx,
+      parentKeyword: row.parentKeyword,
+      relatedKeyword: row.relatedKeyword,
+      overlap: row.overlap,
+      volume: row.volume,
+      status: row.status,
+    })),
+    maxCandidatesPerKeyword: expansion.maxCandidatesPerKeyword,
+    minOverlap: expansion.minOverlap,
+    minVolume: expansion.minVolume,
+  });
+  const policyRejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>> = {};
+  for (const decision of admission.decisions) {
+    if (decision.selected) continue;
+    policyRejectionReasonCounts[decision.reason] = (policyRejectionReasonCounts[decision.reason] ?? 0) + 1;
+  }
+  const selectedUniqueKeywordCount = new Set(
+    keywords
+      .filter((keyword) => keyword.sources.some((source) => source.type === 'surfer_related'))
+      .map((keyword) => keyword.normalizedKeyword),
+  ).size;
+
+  return {
+    admissionVersion: EXPANSION_ADMISSION_VERSION,
+    rawUniqueCandidateCount: admission.rawCandidateCount,
+    eligibleUniqueCandidateCount: admission.eligibleCandidateCount,
+    policySelectedUniqueKeywordCount: admission.selectedCount,
+    selectedUniqueKeywordCount,
+    policyRejectedUniqueCandidateCount: admission.decisions.filter((decision) => !decision.selected).length,
+    policyRejectionReasonCounts,
   };
 }
 
@@ -374,7 +452,9 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
     ));
   }
 
-  const expansion = run.configSnapshot.expansion;
+  const expansion = run.configSnapshot.expansion as ExpansionSnapshot | undefined;
+  const selectedOccurrenceRows = relatedKeywords.filter((row) => row.selectedForExpansion).length;
+  const admission = v1ExpansionSummary(run, keywords, relatedKeywords);
   return {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
@@ -435,7 +515,18 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
         maxCandidatesPerKeyword: expansion?.maxCandidatesPerKeyword ?? null,
         minOverlap: expansion?.minOverlap ?? null,
         minVolume: expansion?.minVolume ?? null,
-        selectedRows: relatedKeywords.filter((row) => row.selectedForExpansion).length,
+        selectedRows: selectedOccurrenceRows,
+        ...(expansion?.enabled === true || admission !== null ? { selectedOccurrenceRows } : {}),
+        ...(admission === null ? {} : {
+          admissionVersion: admission.admissionVersion,
+          rawUniqueCandidateCount: admission.rawUniqueCandidateCount,
+          eligibleUniqueCandidateCount: admission.eligibleUniqueCandidateCount,
+          policySelectedUniqueKeywordCount: admission.policySelectedUniqueKeywordCount,
+          selectedUniqueKeywordCount: admission.selectedUniqueKeywordCount,
+          policyRejectedUniqueCandidateCount: admission.policyRejectedUniqueCandidateCount,
+          policyRejectionReasonCounts: admission.policyRejectionReasonCounts,
+          admissionAccounting: 'v1_replayed_from_durable_evidence' as const,
+        }),
         explicitOmissionCount: null,
         omissionAccounting: 'not_persisted',
       },

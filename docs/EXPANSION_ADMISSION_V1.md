@@ -44,3 +44,14 @@ After frontier materialization discovery publishes:
 - `expansion-admission.csv`
 
 They preserve the decision, reason, support, overlap, volume, broadening flag, committed state, and final selection state for every observed candidate. These artifacts are diagnostics; SQLite remains durable truth.
+
+`run-quality.json` version `1.1.0` also projects V1 admission accounting from the same durable Related evidence through the production `buildExpansionAdmission()` policy. It keeps different units explicit:
+
+- `selectedRows` is the historical compatibility field and counts selected parent→child occurrence rows;
+- `selectedOccurrenceRows` names that occurrence-level unit explicitly;
+- `rawUniqueCandidateCount` and `eligibleUniqueCandidateCount` count normalized unique candidates;
+- `policySelectedUniqueKeywordCount` is the current V1 policy selection from durable evidence;
+- `selectedUniqueKeywordCount` counts durably committed expansion keywords in the run;
+- `policyRejectedUniqueCandidateCount` and `policyRejectionReasonCounts` describe current V1 policy rejections, which can differ from durable final selection after monotonic repair/top-up history.
+
+The V1 projection is emitted only when the persisted run has `expansion.admissionVersion = "v1"`; historical runs do not receive fabricated V1 accounting. The old `explicitOmissionCount` / `omissionAccounting` fields remain compatibility-only and are not redefined.
