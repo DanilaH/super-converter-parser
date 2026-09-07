@@ -111,6 +111,18 @@ const P2: FixturePublication = {
   keywords: 12,
 };
 
+const P3_SAME_TIMESTAMP: FixturePublication = {
+  id: 'pub_alpha_v3',
+  fingerprint: 'fp_alpha_v3',
+  sourceRunId: 'run_alpha_v3',
+  enrichmentId: 'enrichment_alpha_v3',
+  researchName: 'same-display-name',
+  researchPath: '2026-09-01-alpha',
+  publishedAt: P2.publishedAt,
+  supersedes: P2.id,
+  keywords: 13,
+};
+
 const OTHER: FixturePublication = {
   id: 'pub_other',
   fingerprint: 'fp_other',
@@ -145,6 +157,24 @@ test('library:list groups versions by persisted research path rather than displa
   assert.equal(alpha.versionCount, 2);
   assert.equal(alpha.currentPublication.publicationId, P2.id);
   assert.equal(alpha.currentPublication.counts.keywords, 12);
+});
+
+test('Library publication ordering uses rowid as a deterministic tie-breaker for equal published_at timestamps', async () => {
+  const outputRoot = await createLibraryFixture([P1, P2, P3_SAME_TIMESTAMP]);
+  const listed = await listResearchLibrary(outputRoot);
+  const alpha = listed.researches.find((item) => item.researchPath === P1.researchPath);
+  assert.ok(alpha);
+  assert.equal(alpha.currentPublication.publicationId, P3_SAME_TIMESTAMP.id);
+
+  const lineage = await inspectResearchLibraryLineage({
+    outputRoot,
+    researchPath: P1.researchPath,
+  });
+  assert.deepEqual(
+    lineage.publications.map((item) => item.publicationId),
+    [P1.id, P2.id, P3_SAME_TIMESTAMP.id],
+  );
+  assert.deepEqual(lineage.publications.map((item) => item.current), [false, false, true]);
 });
 
 test('library:inspect returns ordered immutable lineage and normalizes Windows separators', async () => {
