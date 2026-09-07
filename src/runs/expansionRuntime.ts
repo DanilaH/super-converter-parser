@@ -1,8 +1,12 @@
 import type { ResearchConfig } from '../config/config.js';
 import { ResearchError } from '../shared/errors.js';
-import { EXPANSION_ADMISSION_VERSION } from './expansionAdmission.js';
+import {
+  EXPANSION_ADMISSION_VERSION,
+  isSupportedExpansionAdmissionVersion,
+  type ExpansionAdmissionVersion,
+} from './expansionAdmission.js';
 
-type VersionedExpansionConfig = ResearchConfig['expansion'] & {
+type VersionedExpansionConfig = NonNullable<ResearchConfig['expansion']> & {
   admissionVersion?: string;
 };
 
@@ -16,20 +20,27 @@ export function withCurrentExpansionAdmission(
 }
 
 export function expansionAdmissionVersion(
-  expansion: ResearchConfig['expansion'],
+  expansion: ResearchConfig['expansion'] | undefined,
 ): string | null {
+  if (expansion === undefined) return null;
   const value = (expansion as VersionedExpansionConfig).admissionVersion;
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-export function usesGlobalExpansionAdmission(config: ResearchConfig): boolean {
+export function resolveGlobalExpansionAdmissionVersion(
+  config: ResearchConfig,
+): ExpansionAdmissionVersion | null {
   const version = expansionAdmissionVersion(config.expansion);
-  if (version === null) return false;
-  if (version !== EXPANSION_ADMISSION_VERSION) {
+  if (version === null) return null;
+  if (!isSupportedExpansionAdmissionVersion(version)) {
     throw new ResearchError(
       'RESUME_CONFIG_MISMATCH',
-      `Run uses unsupported expansion admission ${version}; this build supports ${EXPANSION_ADMISSION_VERSION}. Start a new run instead of mixing expansion algorithms inside one run.`,
+      `Run uses unsupported expansion admission ${version}; this build supports v1 and ${EXPANSION_ADMISSION_VERSION}. Start a new run instead of mixing expansion algorithms inside one run.`,
     );
   }
-  return true;
+  return version;
+}
+
+export function usesGlobalExpansionAdmission(config: ResearchConfig): boolean {
+  return resolveGlobalExpansionAdmissionVersion(config) !== null;
 }

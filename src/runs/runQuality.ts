@@ -8,13 +8,15 @@ import type { SerpResult } from '../google/serp.js';
 import type { AhrefsSummary } from './engine.js';
 import {
   buildExpansionAdmission,
-  EXPANSION_ADMISSION_VERSION,
+  EXPANSION_ADMISSION_V1_VERSION,
   type ExpansionAdmissionReason,
+  type ExpansionAdmissionVersion,
 } from './expansionAdmission.js';
+import { resolveGlobalExpansionAdmissionVersion } from './expansionRuntime.js';
 import { TERMINAL_RUN_STATES, type RunState } from './run.js';
 import { resolveSerpEvidence } from './serpEvidence.js';
 
-export const RUN_QUALITY_VERSION = '1.1.0';
+export const RUN_QUALITY_VERSION = '1.2.0';
 
 export type RunQualityWarning = {
   code:
@@ -113,15 +115,17 @@ export type RunQuality = {
       /** Historical compatibility alias; occurrence-level, not unique keywords. */
       selectedRows: number;
       selectedOccurrenceRows?: number;
-      admissionVersion?: typeof EXPANSION_ADMISSION_VERSION;
+      admissionVersion?: ExpansionAdmissionVersion;
       rawUniqueCandidateCount?: number;
       eligibleUniqueCandidateCount?: number;
       policySelectedUniqueKeywordCount?: number;
       selectedUniqueKeywordCount?: number;
       policyRejectedUniqueCandidateCount?: number;
       policyRejectionReasonCounts?: Partial<Record<ExpansionAdmissionReason, number>>;
-      admissionAccounting?: 'v1_replayed_from_durable_evidence';
-      /** Historical compatibility fields; V1 detail is exposed by the explicit candidate counts above. */
+      admissionAccounting?:
+        | 'v1_replayed_from_durable_evidence'
+        | 'v1_1_replayed_from_durable_evidence';
+      /** Historical compatibility fields; versioned admission detail is exposed by the explicit candidate counts above. */
       explicitOmissionCount: null;
       omissionAccounting: 'not_persisted';
     };
@@ -152,8 +156,11 @@ type ExpansionSnapshot = NonNullable<StoredRun['configSnapshot']['expansion']> &
   admissionVersion?: string;
 };
 
-type V1ExpansionSummary = {
-  admissionVersion: typeof EXPANSION_ADMISSION_VERSION;
+type VersionedExpansionSummary = {
+  admissionVersion: ExpansionAdmissionVersion;
+  admissionAccounting:
+    | 'v1_replayed_from_durable_evidence'
+    | 'v1_1_replayed_from_durable_evidence';
   rawUniqueCandidateCount: number;
   eligibleUniqueCandidateCount: number;
   policySelectedUniqueKeywordCount: number;
@@ -224,13 +231,14 @@ function relatedParentOutcomes(
   };
 }
 
-function v1ExpansionSummary(
+function versionedExpansionSummary(
   run: StoredRun,
   keywords: StoredKeyword[],
   relatedKeywords: StoredRelatedKeyword[],
-): V1ExpansionSummary | null {
+): VersionedExpansionSummary | null {
   const expansion = run.configSnapshot.expansion as ExpansionSnapshot | undefined;
-  if (expansion?.admissionVersion !== EXPANSION_ADMISSION_VERSION) return null;
+  const version = resolveGlobalExpansionAdmissionVersion(run.configSnapshot);
+  if (version === null || expansion === undefined) return null;
 
   const originals = keywords.filter(
     (keyword) => !keyword.sources.some((source) => source.type === 'surfer_related'),
@@ -248,6 +256,7 @@ function v1ExpansionSummary(
     maxCandidatesPerKeyword: expansion.maxCandidatesPerKeyword,
     minOverlap: expansion.minOverlap,
     minVolume: expansion.minVolume,
+    version,
   });
   const policyRejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>> = {};
   for (const decision of admission.decisions) {
@@ -261,7 +270,10 @@ function v1ExpansionSummary(
   ).size;
 
   return {
-    admissionVersion: EXPANSION_ADMISSION_VERSION,
+    admissionVersion: admission.version,
+    admissionAccounting: admission.version === EXPANSION_ADMISSION_V1_VERSION
+      ? 'v1_replayed_from_durable_evidence'
+      : 'v1_1_replayed_from_durable_evidence',
     rawUniqueCandidateCount: admission.rawCandidateCount,
     eligibleUniqueCandidateCount: admission.eligibleCandidateCount,
     policySelectedUniqueKeywordCount: admission.selectedCount,
@@ -454,7 +466,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
 
   const expansion = run.configSnapshot.expansion as ExpansionSnapshot | undefined;
   const selectedOccurrenceRows = relatedKeywords.filter((row) => row.selectedForExpansion).length;
-  const admission = v1ExpansionSummary(run, keywords, relatedKeywords);
+  const admission = versionedExpansionSummary(run, keywords, relatedKeywords);
   return {
     version: RUN_QUALITY_VERSION,
     runId: run.runId,
@@ -525,7 +537,7 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
           selectedUniqueKeywordCount: admission.selectedUniqueKeywordCount,
           policyRejectedUniqueCandidateCount: admission.policyRejectedUniqueCandidateCount,
           policyRejectionReasonCounts: admission.policyRejectionReasonCounts,
-          admissionAccounting: 'v1_replayed_from_durable_evidence' as const,
+          admissionAccounting: admission.admissionAccounting,
         }),
         explicitOmissionCount: null,
         omissionAccounting: 'not_persisted',

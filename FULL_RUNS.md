@@ -90,7 +90,7 @@ npm run discovery:full -- --microsoft input/microsoft.csv --name my-research
 
 `discovery:full` is the direct discovery CLI with depth-one expansion enabled.
 
-Current fresh expansion uses **Expansion Admission V1**:
+Current fresh expansion uses **Expansion Admission V1.1**:
 
 ```text
 all roots collect primary + raw Related evidence
@@ -102,13 +102,15 @@ global deterministic admission frontier
 selected expansion children only
 ```
 
-The global additions budget is:
+The global additions budget is unchanged:
 
 ```text
 min(500, ceil(originalKeywordCount * 1.25))
 ```
 
-Current diagnostics include `expansion-admission.json` and `.csv` for V1 runs.
+V1.1 ranks parent-support tier before the strict lexical broadening penalty. Persisted `v1` generations keep the old broadening-first comparator on resume/regeneration; historical no-marker generations retain pre-global immediate-expansion behavior. Unknown persisted versions fail closed.
+
+Current diagnostics include `expansion-admission.json` and `.csv` with the persisted admission version. The read-only `expansion:replay` command remains intentionally scoped to preserved V1 runs.
 
 Ahrefs remains optional unless `--require-ahrefs` is explicitly supplied.
 
@@ -143,7 +145,7 @@ A new generation may result from:
 
 A promotion-only append can therefore have `addedKeywordCount = 0` while still creating a new generation.
 
-For V1 expansion forks, raw Related evidence may carry forward, but previous-generation selection flags are not current truth and the new generation recomputes its own frontier.
+For versioned global-admission forks (`v1` or `v1.1`), raw Related evidence may carry forward, but previous-generation selection flags are not current truth and the new generation recomputes its own frontier under the persisted policy version.
 
 See [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md).
 

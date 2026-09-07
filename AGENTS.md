@@ -43,7 +43,7 @@ If an active document conflicts with merged code/tests, first establish actual b
 The current runner includes:
 
 - durable discovery with Google + Keyword Surfer and optional Ahrefs DR;
-- bounded, versioned **Expansion Admission V1** with a global frontier for fresh V1 discovery runs;
+- bounded, versioned **Expansion Admission V1.1** with a global frontier for fresh expansion runs, while persisted V1 remains resume-compatible;
 - immutable append generations under one stable research identity;
 - deep enrichment and clustering/evidence modules;
 - representative queries and entrant cohorts;
@@ -125,9 +125,9 @@ Long-running work must keep the operator able to determine, where applicable:
 
 Discovery/enrichment must remain resilient to isolated keyword/domain/provider failures, graceful Ctrl+C, process interruption, and durable resume. Parser/systemic failure must pause or fail explicitly rather than silently publish junk. Completed expensive checkpoints must not be repeated merely because a reusable cache row changed or expired.
 
-## Expansion Admission V1
+## Expansion Admission V1.1
 
-Fresh V1 expansion does **not** append Related candidates immediately per parent.
+Fresh expansion does **not** append Related candidates immediately per parent.
 
 The accepted lifecycle is:
 
@@ -143,17 +143,22 @@ append only selected candidates
 collect SERP evidence for selected expansion children
 ```
 
-Important V1 rules include:
+Important current rules include:
 
+- fresh runs stamp `expansion.admissionVersion = "v1.1"`;
 - expansion depth remains 1;
 - single-token automatic expansion candidates are rejected; explicit seeds are unrestricted;
 - existing `minOverlap`, `minVolume`, and per-parent cap remain inputs;
+- V1.1 global ordering is parent-support tier → broadening penalty → overlap → bounded specificity → volume → lexical tie-break;
 - strict lexical broadening is deprioritized rather than universally rejected;
 - global additions are bounded by `min(500, ceil(originalKeywordCount * 1.25))`;
 - directional queries remain distinct;
-- `expansion-admission.json` / `.csv` expose deterministic decisions and reasons;
+- `expansion-admission.json` / `.csv` expose deterministic decisions, reasons, and the admission version;
+- persisted `v1` runs preserve the old broadening-first comparator on resume/regeneration;
 - unsupported persisted admission versions fail closed;
-- historical snapshots without the marker keep their historical semantics.
+- historical snapshots without the marker keep their pre-global historical semantics.
+
+The read-only expansion replay remains intentionally pinned to preserved `v1` runs. Do not update it to use the current default comparator merely because V1.1 is current.
 
 Do not add embeddings, LLM ranking, large blacklists, arbitrary new thresholds, or semantic dedupe unless real run evidence demonstrates a concrete need.
 

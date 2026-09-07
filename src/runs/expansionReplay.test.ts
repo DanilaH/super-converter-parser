@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Candidate } from '../scoring/scoring.js';
-import { buildExpansionAdmission } from './expansionAdmission.js';
+import { buildExpansionAdmission, EXPANSION_ADMISSION_V1_VERSION } from './expansionAdmission.js';
 import {
   buildExpansionReplaySelections,
   evaluateExpansionReplay,
@@ -130,17 +130,19 @@ function input(): BuildExpansionReplaySelectionsInput {
   };
 }
 
-test('V1 replay selection exactly matches the production admission selection', () => {
+test('V1 replay selection exactly matches the persisted V1 admission policy', () => {
   const production = buildExpansionAdmission({
     originalKeywords: ORIGINALS,
     related: RELATED,
     maxCandidatesPerKeyword: 20,
     minOverlap: 0,
     minVolume: 0,
+    version: EXPANSION_ADMISSION_V1_VERSION,
   });
   const replay = buildExpansionReplaySelections(input());
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
 
+  assert.equal(replay.admissionVersion, 'v1');
   assert.equal(replay.methodology.baseline, 'current_v1_policy_replay');
   assert.equal(replay.budget, 3);
   assert.deepEqual(

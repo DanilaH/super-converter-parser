@@ -95,12 +95,14 @@ seeds or Microsoft Keyword Planner export
         ↓
 Google + Keyword Surfer
         ↓
-optional bounded Expansion Admission V1
+optional bounded Expansion Admission V1.1
         ↓
 optional Ahrefs DR
         ↓
 ranked / inspectable discovery evidence
 ```
+
+Fresh global-admission runs use V1.1. Persisted V1 generations remain valid and resume under their original comparator; historical no-marker runs retain their pre-global expansion semantics.
 
 Microsoft remains a supported first-stage discovery source. It is not required for direct seed research.
 

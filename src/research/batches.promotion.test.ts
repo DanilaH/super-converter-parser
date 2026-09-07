@@ -133,7 +133,7 @@ test('append promotes an expansion-only keyword to an explicit pending root in a
     const run = promotedStore.loadRun(result.currentRunId);
     assert.ok(run);
     assert.equal(run.state, 'created');
-    assert.equal((run.configSnapshot.expansion as { admissionVersion?: string }).admissionVersion, 'v1');
+    assert.equal((run.configSnapshot.expansion as { admissionVersion?: string }).admissionVersion, 'v1.1');
 
     const keywords = promotedStore.loadKeywords(result.currentRunId);
     assert.deepEqual(

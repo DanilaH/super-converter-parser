@@ -30,8 +30,8 @@ function collected(keyword: KeywordRecord): CollectionResult {
   };
 }
 
-test('public fresh discovery stamps V1 admission into the durable config snapshot', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'discovery-stamp-v1-'));
+test('public fresh discovery stamps V1.1 admission into the durable config snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'discovery-stamp-v1-1-'));
   const seedsPath = join(root, 'seeds.csv');
   const outputRoot = join(root, 'results');
   await writeFile(seedsPath, 'keyword\njson formatter\n', 'utf8');
@@ -70,7 +70,7 @@ test('public fresh discovery stamps V1 admission into the durable config snapsho
   const run = store.loadRun(result.runId!);
   assert.equal(
     (run?.configSnapshot.expansion as { admissionVersion?: string } | undefined)?.admissionVersion,
-    'v1',
+    'v1.1',
   );
   store.close();
 });

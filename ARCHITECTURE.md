@@ -172,7 +172,7 @@ Research Chrome / Google + Keyword Surfer
         ↓
 run.sqlite primary checkpoints
         ↓
-optional Expansion Admission V1 frontier
+optional versioned Expansion Admission frontier
         ↓
 Google/Surfer collection for selected children
         ↓
@@ -218,9 +218,9 @@ Conceptually:
 
 Normalized text remains valid for semantic dedupe, cache identity where appropriate, user lookup, and display. It is not a substitute for an available durable relational key.
 
-## Expansion Admission V1
+## Expansion Admission V1.1
 
-Fresh public discovery with expansion enabled stamps the persisted admission version and uses a **global durable frontier**.
+Fresh public discovery with expansion enabled stamps `expansion.admissionVersion = "v1.1"` and uses a **global durable frontier**.
 
 Lifecycle:
 
@@ -238,14 +238,13 @@ append only selected children
 collect selected child primary evidence
 ```
 
-V1 policy includes:
+V1.1 and persisted V1 share the same eligibility gates and global budget:
 
 - depth 1 only;
 - reject existing keywords;
 - reject single-token automatic expansion candidates;
 - preserve configured `minOverlap`, `minVolume`, and per-parent cap;
-- rank non-broadening before strict lexical broadening;
-- bucket parent support so generic hubs do not dominate without bound;
+- bucket parent support at the existing support tiers;
 - use overlap, bounded specificity, volume, and lexical tie-breaks deterministically;
 - global addition budget:
 
@@ -255,9 +254,18 @@ min(500, ceil(originalKeywordCount * 1.25))
 
 - preserve directional query identity;
 - persist full decision diagnostics in `expansion-admission.json` / `.csv`;
-- recompute generation-local selection when append creates a new V1 frontier;
+- recompute generation-local selection when append creates a new global-admission frontier;
 - fail closed on unknown persisted admission versions;
-- preserve historical behavior for snapshots without the marker.
+- preserve pre-global historical behavior for snapshots without the marker.
+
+The comparator is versioned separately from eligibility:
+
+```text
+v1   : broadening → parent support → overlap → bounded specificity → volume → lexical
+v1.1 : parent support → broadening → overlap → bounded specificity → volume → lexical
+```
+
+A persisted `v1` generation must continue to use the V1 comparator during resume, frontier regeneration, and run-quality replay. Fresh runs use V1.1. The read-only expansion replay remains intentionally pinned to preserved V1 runs so the experiment is not silently redefined after the production default changes.
 
 The admission report is a derived explanation surface; SQLite Related/keyword state remains durable truth.
 
@@ -271,6 +279,8 @@ A generation may be created because:
 - a keyword that previously behaved as an expansion child is explicitly supplied as a root seed.
 
 Promotion reopens the promoted keyword in the new generation and gives the new generation truthful root provenance. The prior generation remains the immutable record of how that keyword originally entered.
+
+Versioned global-admission forks preserve their persisted admission algorithm for the generation. Raw Related evidence may carry forward, but generation-local `selectedForExpansion` state is recomputed for the new frontier. Unsupported versions fail closed rather than mixing algorithms.
 
 See `RESEARCH_BATCHES.md` for the full append contract.
 

@@ -39,19 +39,16 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   store.createRun({ runId, configSnapshot: BASE_CONFIG, parserVersions: { surfer: '1.0.0', google: '1.2.0' }, input: INPUT, keywords: KEYWORDS });
   const stored = store.loadKeywords(runId) as StoredKeyword[];
 
-  // Keyword 0: completed, high volume, two known-DR domains.
   store.commitKeyword(
     runId,
     { ...stored[0]!, status: 'completed', surfer: { volume: 49500, cpc: 7.9, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' }, google: { hl: 'en', gl: 'us', pageUrl: 'u', detectedLocation: null, geoWarning: false }, error: null, collectedAt: '2026-01-01T00:00:00.000Z' },
     [serp('compare lists', 1, 'a.com', 50, 'ok'), serp('compare lists', 2, 'b.com', 20, 'ok')],
   );
-  // Keyword 1: completed, one strong-DR domain.
   store.commitKeyword(
     runId,
     { ...stored[1]!, status: 'completed', surfer: { volume: 1000, cpc: 1.0, market: 'US', fetchedAt: '2026-01-01T00:00:00.000Z' }, google: { hl: 'en', gl: 'us', pageUrl: 'u', detectedLocation: null, geoWarning: false }, error: null, collectedAt: '2026-01-01T00:00:00.000Z' },
     [serp('best office chairs', 1, 'c.com', 80, 'ok')],
   );
-  // Keyword 2: failed (no SERP) -> still appears with a null score.
   store.commitKeyword(
     runId,
     { ...stored[2]!, status: 'failed', surfer: null, google: null, error: { code: 'SURFER_PARSE_ERROR', message: 'boom' }, collectedAt: '2026-01-01T00:00:00.000Z' },
@@ -90,12 +87,9 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   }
 
   const candidates = (await readFile(join(runDirectory, 'candidates.csv'), 'utf8')).slice(1).split('\r\n').filter((l) => l.length > 0);
-  // header + 3 keywords (failed keyword still listed last with a null score)
   assert.equal(candidates.length, 4);
   assert.ok(candidates[0]!.startsWith('keyword,normalized_keyword,status'));
-  // compare lists has volume 49500 and known DR -> highest score -> first data row
   assert.ok(candidates[1]!.startsWith('compare lists,'), `unexpected first candidate: ${candidates[1]}`);
-  // failed keyword appears last with empty score/tier
   assert.ok(candidates[3]!.startsWith('standing desk,'), `unexpected failed row: ${candidates[3]}`);
 
   const related = (await readFile(join(runDirectory, 'related-keywords.csv'), 'utf8')).slice(1).split('\r\n').filter((l) => l.length > 0);
@@ -104,7 +98,7 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.ok(related[1]!.includes('list compare'));
 
   const domains = (await readFile(join(runDirectory, 'domains.csv'), 'utf8')).slice(1).split('\r\n').filter((l) => l.length > 0);
-  assert.equal(domains.length, 4); // a.com, b.com, c.com + header
+  assert.equal(domains.length, 4);
   assert.ok(domains[0]!.startsWith('domain,dr,status,error,source'));
 
   const status = JSON.parse(await readFile(join(runDirectory, 'status.json'), 'utf8'));
@@ -120,7 +114,7 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.equal(status.counts.relatedKeywords, 1);
 
   const quality = JSON.parse(await readFile(join(runDirectory, 'run-quality.json'), 'utf8'));
-  assert.equal(quality.version, '1.1.0');
+  assert.equal(quality.version, '1.2.0');
   assert.equal(quality.runId, runId);
   assert.equal(quality.sources.googleSerp.denominator, 3);
   assert.equal(quality.sources.googleSerp.trustworthy, 2);
@@ -129,7 +123,6 @@ test('writeSnapshots emits aggregation artifacts (candidates, related, domains, 
   assert.equal(quality.geo.grade, 'logical_only');
   assert.equal(quality.bounds.relatedExpansion.explicitOmissionCount, null);
 
-  // first_seen_keyword carries the real keyword text, not its index.
   assert.ok(domains.join('\n').includes('compare lists'));
 
   const report = await readFile(join(runDirectory, 'report.md'), 'utf8');

@@ -98,7 +98,7 @@ function relatedFor(keyword: string): SurferRelatedKeyword[] {
   return [];
 }
 
-test('V1 collects every root before materializing and collecting the global expansion frontier', async () => {
+test('V1.1 collects every root before materializing and collecting the global expansion frontier', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();
   const runDirectory = await mkdtemp(join(tmpdir(), 'engine-global-expand-'));
@@ -141,12 +141,12 @@ test('V1 collects every root before materializing and collecting the global expa
     version: string;
     finalSelectedCount: number;
   };
-  assert.equal(report.version, 'v1');
+  assert.equal(report.version, 'v1.1');
   assert.equal(report.finalSelectedCount, 1);
   store.close();
 });
 
-test('V1 pause after the last root resumes from durable Related evidence before collecting children', async () => {
+test('V1.1 pause after the last root resumes from durable Related evidence before collecting children', async () => {
   const store = RunStore.openInMemory();
   const runId = createRunId();
   const runDirectory = await mkdtemp(join(tmpdir(), 'engine-global-resume-'));
