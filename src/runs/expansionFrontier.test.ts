@@ -7,6 +7,7 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { materializeExpansionFrontier } from './expansionFrontier.js';
+import { withCurrentExpansionAdmission } from './expansionRuntime.js';
 
 function createStore(seedKeywords: string[]): { store: RunStore; runId: string } {
   const store = RunStore.openInMemory();
@@ -19,6 +20,14 @@ function createStore(seedKeywords: string[]): { store: RunStore; runId: string }
     keywords: buildSeedKeywords(seedKeywords.map((keyword, index) => ({ keyword, rowNumber: index + 1 }))),
   });
   return { store, runId };
+}
+
+function currentExpansionConfig() {
+  const base = loadConfig({});
+  return {
+    ...base,
+    expansion: withCurrentExpansionAdmission({ ...base.expansion, enabled: true }),
+  };
 }
 
 function recordRelated(
@@ -41,10 +50,7 @@ test('frontier rejects generic single-token heads, enforces the global budget, a
   const originals = Array.from({ length: 20 }, (_, index) => `seed utility ${index}`);
   const { store, runId } = createStore(originals);
   const runDirectory = await mkdtemp(join(tmpdir(), 'expansion-frontier-'));
-  const config = {
-    ...loadConfig({}),
-    expansion: { ...loadConfig({}).expansion, enabled: true },
-  };
+  const config = currentExpansionConfig();
 
   for (let parentIdx = 0; parentIdx < originals.length; parentIdx += 1) {
     const rows = [
@@ -62,6 +68,7 @@ test('frontier rejects generic single-token heads, enforces the global budget, a
   }
 
   const first = await materializeExpansionFrontier({ store, runId, runDirectory, config });
+  assert.equal(first.admission.version, 'v1.1');
   assert.equal(first.admission.budget, 25);
   assert.equal(first.addedKeywords.length, 25);
   assert.ok(!store.loadKeywords(runId).some((keyword) => keyword.normalizedKeyword === 'sheets'));
@@ -71,6 +78,7 @@ test('frontier rejects generic single-token heads, enforces the global budget, a
   );
 
   const second = await materializeExpansionFrontier({ store, runId, runDirectory, config });
+  assert.equal(second.admission.version, 'v1.1');
   assert.equal(second.committedBeforeCount, 25);
   assert.equal(second.addedKeywords.length, 0);
   assert.equal(
@@ -79,10 +87,12 @@ test('frontier rejects generic single-token heads, enforces the global budget, a
   );
 
   const report = JSON.parse(await readFile(join(runDirectory, 'expansion-admission.json'), 'utf8')) as {
+    version: string;
     budget: number;
     finalSelectedCount: number;
     decisions: Array<{ normalizedKeyword: string; selectedFinal: boolean; reason: string }>;
   };
+  assert.equal(report.version, 'v1.1');
   assert.equal(report.budget, 25);
   assert.equal(report.finalSelectedCount, 25);
   const sheets = report.decisions.find((decision) => decision.normalizedKeyword === 'sheets');
@@ -95,10 +105,7 @@ test('frontier preserves committed expansion and only fills remaining budget slo
   const originals = ['alpha utility seed', 'beta utility seed'];
   const { store, runId } = createStore(originals);
   const runDirectory = await mkdtemp(join(tmpdir(), 'expansion-frontier-monotonic-'));
-  const config = {
-    ...loadConfig({}),
-    expansion: { ...loadConfig({}).expansion, enabled: true },
-  };
+  const config = currentExpansionConfig();
 
   store.addKeyword(runId, {
     keyword: 'committed old utility',
@@ -114,6 +121,7 @@ test('frontier preserves committed expansion and only fills remaining budget slo
   ]);
 
   const result = await materializeExpansionFrontier({ store, runId, runDirectory, config });
+  assert.equal(result.admission.version, 'v1.1');
   assert.equal(result.admission.budget, 3);
   assert.equal(result.committedBeforeCount, 1);
   assert.equal(result.addedKeywords.length, 2);
