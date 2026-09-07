@@ -38,11 +38,11 @@ export type SearchTractionFilter = {
   value: string;
 };
 
-export type SearchTractionCoverage = {
+export type SearchTractionDimensionTotals = {
   clicks: number;
   impressions: number;
-  clickCoverageRatio: number | null;
-  impressionCoverageRatio: number | null;
+  clickRatioToChart: number | null;
+  impressionRatioToChart: number | null;
 };
 
 export type GscSearchTractionSnapshot = {
@@ -64,7 +64,7 @@ export type GscSearchTractionSnapshot = {
   };
   chart: SearchTractionDailyRow[];
   dimensions: Record<SearchTractionDimension, SearchTractionDimensionRow[]>;
-  coverage: Record<SearchTractionDimension, SearchTractionCoverage>;
+  dimensionTotals: Record<SearchTractionDimension, SearchTractionDimensionTotals>;
 };
 
 type CsvRecord = Record<string, string>;
@@ -99,12 +99,12 @@ export function parseGscSearchTractionExport(input: {
     { clicks: 0, impressions: 0 },
   );
   const dates = chart.map((row) => row.date).sort();
-  const coverage = Object.fromEntries(
+  const dimensionTotals = Object.fromEntries(
     (Object.keys(dimensions) as SearchTractionDimension[]).map((dimension) => [
       dimension,
-      coverageFor(dimensions[dimension], totals),
+      totalsForDimension(dimensions[dimension], totals),
     ]),
-  ) as Record<SearchTractionDimension, SearchTractionCoverage>;
+  ) as Record<SearchTractionDimension, SearchTractionDimensionTotals>;
 
   return {
     version: 1,
@@ -121,7 +121,7 @@ export function parseGscSearchTractionExport(input: {
     totals,
     chart,
     dimensions,
-    coverage,
+    dimensionTotals,
   };
 }
 
@@ -249,18 +249,21 @@ function parseOptionalNonNegativeNumber(
   return numeric;
 }
 
-function coverageFor(
+function totalsForDimension(
   rows: SearchTractionDimensionRow[],
-  totals: { clicks: number; impressions: number },
-): SearchTractionCoverage {
+  chartTotals: { clicks: number; impressions: number },
+): SearchTractionDimensionTotals {
   const sums = rows.reduce(
     (acc, row) => ({ clicks: acc.clicks + row.clicks, impressions: acc.impressions + row.impressions }),
     { clicks: 0, impressions: 0 },
   );
   return {
     ...sums,
-    clickCoverageRatio: totals.clicks === 0 ? null : sums.clicks / totals.clicks,
-    impressionCoverageRatio: totals.impressions === 0 ? null : sums.impressions / totals.impressions,
+    // These are comparison ratios, not universal coverage fractions. Search
+    // Console aggregate dimensions are not guaranteed to be additive relative
+    // to Chart; real page exports can legitimately exceed the chart total.
+    clickRatioToChart: chartTotals.clicks === 0 ? null : sums.clicks / chartTotals.clicks,
+    impressionRatioToChart: chartTotals.impressions === 0 ? null : sums.impressions / chartTotals.impressions,
   };
 }
 
