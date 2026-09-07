@@ -9,11 +9,10 @@ import type { AhrefsSummary } from './engine.js';
 import {
   buildExpansionAdmission,
   EXPANSION_ADMISSION_V1_VERSION,
-  EXPANSION_ADMISSION_VERSION,
-  isSupportedExpansionAdmissionVersion,
   type ExpansionAdmissionReason,
   type ExpansionAdmissionVersion,
 } from './expansionAdmission.js';
+import { resolveGlobalExpansionAdmissionVersion } from './expansionRuntime.js';
 import { TERMINAL_RUN_STATES, type RunState } from './run.js';
 import { resolveSerpEvidence } from './serpEvidence.js';
 
@@ -238,8 +237,8 @@ function versionedExpansionSummary(
   relatedKeywords: StoredRelatedKeyword[],
 ): VersionedExpansionSummary | null {
   const expansion = run.configSnapshot.expansion as ExpansionSnapshot | undefined;
-  const version = expansion?.admissionVersion;
-  if (typeof version !== 'string' || !isSupportedExpansionAdmissionVersion(version)) return null;
+  const version = resolveGlobalExpansionAdmissionVersion(run.configSnapshot);
+  if (version === null || expansion === undefined) return null;
 
   const originals = keywords.filter(
     (keyword) => !keyword.sources.some((source) => source.type === 'surfer_related'),
