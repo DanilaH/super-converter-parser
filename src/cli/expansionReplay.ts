@@ -6,7 +6,8 @@ import { resolveOutputRoot, resolveRunLocation } from '../outputs/researchLayout
 import { buildCandidates, resolveDrThresholds } from '../scoring/scoring.js';
 import { EXPANSION_ADMISSION_VERSION } from '../runs/expansionAdmission.js';
 import {
-  buildExpansionReplay,
+  buildExpansionReplaySelections,
+  evaluateExpansionReplay,
   expansionReplayChildKeywords,
   expansionReplayOriginalKeywords,
   type ExpansionReplayResult,
@@ -64,21 +65,23 @@ function printUsage(): void {
   console.log('  npm run expansion:replay -- --run <run-id> --json');
   console.log('');
   console.log('Options:');
-  console.log('  --run <run-id>          Completed or preserved V1 discovery run to replay.');
+  console.log('  --run <run-id>          Preserved V1 discovery run to replay.');
   console.log('  --output-root <path>    Durable research output root.');
   console.log('  --json                  Print the full deterministic machine-readable replay.');
   console.log('  --help, -h              Show this help.');
   console.log('');
   console.log('Read-only: selection variants use only persisted pre-SERP Related evidence.');
-  console.log('Child SERP/scoring evidence is evaluator-only; uncollected counterfactuals stay unknown.');
+  console.log('Child SERP/scoring evidence is connected only after selection; uncollected counterfactuals stay unknown.');
 }
 
 export function renderExpansionReplay(result: ExpansionReplayResult): string {
+  const related = result.relatedEvidence;
   const lines = [
     'Expansion Admission offline replay',
     `  Run: ${result.runId}`,
     `  Admission: ${result.admissionVersion}`,
     `  Roots: ${result.originalKeywordCount}`,
+    `  Related roots: ok=${related.ok}, empty=${related.empty}, error=${related.error}, notAttempted=${related.notAttempted}, total=${related.denominator}`,
     `  Raw candidates: ${result.rawCandidateCount}`,
     `  Eligible candidates: ${result.eligibleCandidateCount}`,
     `  Budget: ${result.budget}`,
@@ -149,19 +152,22 @@ async function main(): Promise<void> {
 
     const keywords = store.loadKeywords(args.runId);
     const related = store.loadRelatedKeywords(args.runId);
-    const serpRows = store.loadSerpRows(args.runId);
     const originals = expansionReplayOriginalKeywords(keywords);
-    const children = expansionReplayChildKeywords(keywords);
-    const candidateEvidence = buildCandidates(children, serpRows, resolveDrThresholds(run.configSnapshot));
-    const replay = buildExpansionReplay({
+    const selections = buildExpansionReplaySelections({
       runId: args.runId,
       originalKeywords: originals,
       related,
       maxCandidatesPerKeyword: expansion.maxCandidatesPerKeyword,
       minOverlap: expansion.minOverlap,
       minVolume: expansion.minVolume,
-      candidateEvidence,
     });
+
+    // Post-hoc evidence is deliberately loaded and connected only after all
+    // replay selections are fixed. It cannot influence any comparator.
+    const children = expansionReplayChildKeywords(keywords);
+    const serpRows = store.loadSerpRows(args.runId);
+    const candidateEvidence = buildCandidates(children, serpRows, resolveDrThresholds(run.configSnapshot));
+    const replay = evaluateExpansionReplay(selections, candidateEvidence);
 
     process.stdout.write(args.json ? `${JSON.stringify(replay, null, 2)}\n` : renderExpansionReplay(replay));
   } catch (error) {
