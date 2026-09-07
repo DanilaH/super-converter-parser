@@ -24,6 +24,16 @@ const SURFER_PARSER_ERROR_CODES: ReadonlySet<ResearchErrorCode> = new Set([
   'SURFER_PARSE_ERROR',
 ]);
 
+// The Google breaker is broader than retry eligibility. GOOGLE_UNAVAILABLE is
+// recorded only after the per-keyword retry budget is exhausted; parser errors
+// are non-retryable but still indicate that the current Google collection path
+// is unhealthy. Consecutive failures of either kind therefore share one bounded
+// run-level stop condition.
+const GOOGLE_BREAKER_ERROR_CODES: ReadonlySet<ResearchErrorCode> = new Set([
+  'GOOGLE_UNAVAILABLE',
+  'GOOGLE_SERP_PARSE_ERROR',
+]);
+
 export function isTransientErrorCode(code: ResearchErrorCode): boolean {
   return TRANSIENT_ERROR_CODES.has(code);
 }
@@ -65,7 +75,7 @@ export class CircuitBreaker {
       this.recordSurfer(false);
     }
 
-    if (errorCode === 'GOOGLE_SERP_PARSE_ERROR') {
+    if (GOOGLE_BREAKER_ERROR_CODES.has(errorCode)) {
       this.consecutiveGoogleFailures += 1;
     } else {
       this.recordGoogle(false);
@@ -91,7 +101,7 @@ export class CircuitBreaker {
       }
     }
     if (this.consecutiveGoogleFailures >= this.settings.googleConsecutiveThreshold) {
-      return `Circuit breaker: ${this.consecutiveGoogleFailures} consecutive Google SERP parser failures (threshold ${this.settings.googleConsecutiveThreshold}).`;
+      return `Circuit breaker: ${this.consecutiveGoogleFailures} consecutive Google collection failures (threshold ${this.settings.googleConsecutiveThreshold}).`;
     }
     return null;
   }
