@@ -188,12 +188,12 @@ test('unmaterialized counterfactual children remain unknown instead of becoming 
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
   const afterSupport = replay.variants.find((variant) => variant.id === 'broadening_after_support')!;
 
-  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCount, 3);
-  assert.equal(baseline.postHocObservedOnly.counterfactualUnmaterializedCount, 0);
-  assert.equal(afterSupport.postHocObservedOnly.durableChildKeywordCount, 2);
-  assert.equal(afterSupport.postHocObservedOnly.counterfactualUnmaterializedCount, 1);
-  assert.equal(afterSupport.postHocObservedOnly.durableChildKeywordCoveragePercent, 66.67);
-  assert.equal(afterSupport.postHocObservedOnly.trustworthySerpCount, 2);
+  assert.equal(baseline.postHocEvidence.durableChildKeywordCount, 3);
+  assert.equal(baseline.postHocEvidence.counterfactualUnmaterializedCount, 0);
+  assert.equal(afterSupport.postHocEvidence.durableChildKeywordCount, 2);
+  assert.equal(afterSupport.postHocEvidence.counterfactualUnmaterializedCount, 1);
+  assert.equal(afterSupport.postHocEvidence.durableChildKeywordCoveragePercent, 66.67);
+  assert.equal(afterSupport.postHocEvidence.trustworthySerpCount, 2);
 });
 
 test('materialized child presence is distinct from trustworthy SERP observation', () => {
@@ -205,11 +205,11 @@ test('materialized child presence is distinct from trustworthy SERP observation'
   ]);
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
 
-  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCount, 3);
-  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCoveragePercent, 100);
-  assert.equal(baseline.postHocObservedOnly.trustworthySerpCount, 2);
-  assert.equal(baseline.postHocObservedOnly.trustworthySerpCoveragePercent, 66.67);
-  assert.equal(baseline.postHocObservedOnly.scoredChildCount, 2);
+  assert.equal(baseline.postHocEvidence.durableChildKeywordCount, 3);
+  assert.equal(baseline.postHocEvidence.durableChildKeywordCoveragePercent, 100);
+  assert.equal(baseline.postHocEvidence.trustworthySerpCount, 2);
+  assert.equal(baseline.postHocEvidence.trustworthySerpCoveragePercent, 66.67);
+  assert.equal(baseline.postHocEvidence.scoredChildCount, 2);
 });
 
 test('related root completeness is explicit and missing roots are not treated as empty', () => {
