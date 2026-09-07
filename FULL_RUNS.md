@@ -56,7 +56,7 @@ npm run research:run -- --research <research-id>
 
 The executor acquires the relevant execution boundary, re-reads durable state, and replans before continuing. It does not infer the target from folder order or label.
 
-## 2. Plan/status before mutation
+## 2. Plan/status/audit before mutation or analysis
 
 Read-only planning:
 
@@ -70,9 +70,20 @@ Read-only status:
 npm run research:status -- --research <research-id> --json
 ```
 
-Use these to determine current discovery/enrichment/finalization/publication state and the next explicit operator input.
+Use plan/status to determine current discovery/enrichment/finalization/publication state and the next explicit operator input.
 
-Neither surface should invent a product/business recommendation.
+Read-only integrity/degradation audit:
+
+```bash
+npm run research:audit -- --research <research-id>
+npm run research:audit -- --research <research-id> --json
+```
+
+Use `research:audit` when you need a compact pre-analysis/pre-sharing gate over the existing durable/status projections. It classifies applicable checks as `PASS`, `WARN`, `FAIL`, `NOT_APPLICABLE`, or `UNKNOWN` without calling providers or mutating/repairing state.
+
+`PASS` means no degradation was observed among currently applicable checks; it does **not** imply that every downstream stage has run. `WARN` preserves incomplete/optional/derived-artifact uncertainty without turning it into corruption. `FAIL` is reserved for a failed durable/status projection or an internally contradictory projected relationship. Use `research:status` rather than audit to determine the next workflow action.
+
+None of these read-only surfaces should invent a product/business recommendation.
 
 ## 3. Direct full discovery
 
@@ -337,6 +348,7 @@ For normal new work:
 6. provide only the requested continuation input
 7. research:run --research ... --continue ...
 8. repeat until completed/published or intentionally stopped
+9. research:audit before interpreting/sharing a completed or intentionally stopped research package
 ```
 
 Use direct stage CLIs when you specifically need lower-level control, debugging, repair, or an existing legacy workflow.

@@ -12,6 +12,7 @@
     "research:append": "tsx src/cli/appendResearch.ts",
     "research:plan": "tsx src/cli/researchPlan.ts",
     "research:status": "tsx src/cli/researchStatus.ts",
+    "research:audit": "tsx src/cli/researchAudit.ts",
     "research:diff": "tsx src/cli/researchDiff.ts",
     "expansion:replay": "tsx src/cli/expansionReplay.ts",
     "enrich": "tsx src/cli/enrich.ts",

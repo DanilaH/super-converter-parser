@@ -225,6 +225,27 @@ npm run research:status -- --research <research-id-or-any-run-id> --json
 
 `research:status` is read-only. It resolves the current logical research, reports current discovery/enrichment/finalization/publication state, projects evidence gaps truthfully, and exposes workflow navigation without making a product/business recommendation.
 
+## Audit current research integrity
+
+```bash
+npm run research:audit -- --research <research-id-or-any-run-id>
+npm run research:audit -- --research <research-id-or-any-run-id> --json
+```
+
+`research:audit` is a separate read-only integrity/checklist projection built from the existing status, run-quality, evidence-coverage, sampled-history, and Research Library health surfaces. It does not call providers, repair state, publish artifacts, or create another durable quality store.
+
+Audit states are intentionally conservative:
+
+- `PASS` — no degradation was observed among the checks that are applicable to the current workflow stage;
+- `WARN` — evidence is incomplete/degraded/unknown, or a derived artifact is not current; durable truth may still be valid;
+- `FAIL` — the durable/status projection itself failed or the projected current-state relationship is internally contradictory;
+- `NOT_APPLICABLE` — the downstream check does not apply to the current stage;
+- `UNKNOWN` — the relevant integrity fact could not be established.
+
+A top-level `PASS` does **not** mean every downstream stage has run. `NOT_APPLICABLE` checks do not make an otherwise clean current stage fail. Use `research:status` for workflow progress and next action; use `research:audit` before interpreting/sharing a run when you want one compact integrity/degradation gate.
+
+Warnings do not produce a failing process exit code. Audit failures exit non-zero; invalid input/unknown target is reported separately as invalid input.
+
 ## Compare immutable generations
 
 ```bash
