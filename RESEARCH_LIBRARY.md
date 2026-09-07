@@ -39,6 +39,30 @@ Publication is explicit. A research is not automatically merged into the library
 
 When a top-level research has been extended through `research:append`, only an enrichment whose `sourceRunId` equals that research container's `currentRunId` may be published. Historical enrichments stay available inside the research folder but cannot accidentally become the newest library version.
 
+## Read-only navigation
+
+List logical researches currently present in durable Library truth:
+
+```bash
+npm run library:list
+npm run library:list -- --json
+```
+
+`library:list` groups immutable publications by their persisted `research_relative_path`. The relative path is the logical Library identity; the human-readable research name is display metadata and is not used to merge similarly named researches.
+
+The list reports each logical research's version count and current publication together with the source run, enrichment id, publication time, and normalized counts.
+
+Inspect the full immutable publication lineage for one exact path returned by `library:list`:
+
+```bash
+npm run library:inspect -- --research-path 2026-09-02-pdf-tools
+npm run library:inspect -- --research-path 2026-09-02-pdf-tools --json
+```
+
+Both commands are read-only and query `library.sqlite` directly. They do not use `library.json` as current truth, regenerate snapshots, publish, repair, call providers, or infer identity from timestamps/directories outside the persisted Library rows.
+
+If the Library has not been initialized yet, `library:list` returns an honest empty/uninitialized projection. `library:inspect` requires an existing exact logical research path and fails explicitly otherwise.
+
 ## Publication identity and history
 
 A publication fingerprint is SHA-256 over the current public discovery artifacts plus the artifacts advertised by the current enrichment manifest.
