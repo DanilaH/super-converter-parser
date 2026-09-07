@@ -29,7 +29,11 @@ export async function persistGscSearchTractionSnapshot(input: {
 }): Promise<PersistSearchTractionResult> {
   const root = resolve(input.outputRoot, SEARCH_TRACTION_DIRECTORY);
   const databasePath = join(root, 'search-traction.sqlite');
-  const snapshotId = searchTractionSnapshotId(input.snapshot.property, input.snapshot.source.sha256);
+  const snapshotId = searchTractionSnapshotId(
+    input.snapshot.property,
+    input.snapshot.source.sha256,
+    input.snapshot.source.parserVersion,
+  );
   const sourceArchivePath = join(root, 'sources', `${snapshotId}.zip`);
   const importedAt = (input.now?.() ?? new Date()).toISOString();
 
@@ -44,11 +48,20 @@ export async function persistGscSearchTractionSnapshot(input: {
     applySchema(db);
 
     const existing = db.prepare(
-      'SELECT snapshot_id, property, source_sha256 FROM snapshots WHERE snapshot_id = ?',
-    ).get(snapshotId) as { snapshot_id: string; property: string; source_sha256: string } | undefined;
+      'SELECT snapshot_id, property, source_sha256, parser_version FROM snapshots WHERE snapshot_id = ?',
+    ).get(snapshotId) as {
+      snapshot_id: string;
+      property: string;
+      source_sha256: string;
+      parser_version: string;
+    } | undefined;
 
     if (existing) {
-      if (existing.property !== input.snapshot.property || existing.source_sha256 !== input.snapshot.source.sha256) {
+      if (
+        existing.property !== input.snapshot.property
+        || existing.source_sha256 !== input.snapshot.source.sha256
+        || existing.parser_version !== input.snapshot.source.parserVersion
+      ) {
         throw new ResearchError('DB_ERROR', `Search traction snapshot identity collision: ${snapshotId}.`);
       }
       sourceArchiveRestored = await ensureSourceArchive(
@@ -160,11 +173,17 @@ export async function persistGscSearchTractionSnapshot(input: {
   }
 }
 
-export function searchTractionSnapshotId(property: string, sourceSha256: string): string {
+export function searchTractionSnapshotId(
+  property: string,
+  sourceSha256: string,
+  parserVersion: string,
+): string {
   const fingerprint = createHash('sha256')
     .update(property, 'utf8')
     .update('\0')
     .update(sourceSha256, 'utf8')
+    .update('\0')
+    .update(parserVersion, 'utf8')
     .digest('hex');
   return `gsc_${fingerprint}`;
 }
@@ -204,7 +223,7 @@ function applySchema(db: Database.Database): void {
       observed_end_date TEXT,
       total_clicks INTEGER NOT NULL,
       total_impressions INTEGER NOT NULL,
-      UNIQUE(property, source_sha256)
+      UNIQUE(property, source_sha256, parser_version)
     );
     CREATE INDEX IF NOT EXISTS snapshots_property_idx
       ON snapshots(property, imported_at);
