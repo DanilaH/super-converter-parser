@@ -110,17 +110,17 @@ export type RunQuality = {
       maxCandidatesPerKeyword: number | null;
       minOverlap: number | null;
       minVolume: number | null;
-      /** Compatibility alias for selectedOccurrenceRows. */
+      /** Historical compatibility alias; occurrence-level, not unique keywords. */
       selectedRows: number;
-      selectedOccurrenceRows: number;
-      admissionVersion: typeof EXPANSION_ADMISSION_VERSION | null;
-      rawUniqueCandidateCount: number | null;
-      eligibleUniqueCandidateCount: number | null;
-      policySelectedUniqueKeywordCount: number | null;
-      selectedUniqueKeywordCount: number | null;
-      rejectedUniqueCandidateCount: number | null;
-      rejectionReasonCounts: Partial<Record<ExpansionAdmissionReason, number>> | null;
-      admissionAccounting: 'v1_replayed_from_durable_evidence' | 'not_applicable';
+      selectedOccurrenceRows?: number;
+      admissionVersion?: typeof EXPANSION_ADMISSION_VERSION;
+      rawUniqueCandidateCount?: number;
+      eligibleUniqueCandidateCount?: number;
+      policySelectedUniqueKeywordCount?: number;
+      selectedUniqueKeywordCount?: number;
+      rejectedUniqueCandidateCount?: number;
+      rejectionReasonCounts?: Partial<Record<ExpansionAdmissionReason, number>>;
+      admissionAccounting?: 'v1_replayed_from_durable_evidence';
       /** Historical compatibility fields; V1 detail is exposed by the explicit candidate counts above. */
       explicitOmissionCount: null;
       omissionAccounting: 'not_persisted';
@@ -516,15 +516,17 @@ export function buildRunQuality(input: BuildRunQualityInput): RunQuality {
         minOverlap: expansion?.minOverlap ?? null,
         minVolume: expansion?.minVolume ?? null,
         selectedRows: selectedOccurrenceRows,
-        selectedOccurrenceRows,
-        admissionVersion: admission?.admissionVersion ?? null,
-        rawUniqueCandidateCount: admission?.rawUniqueCandidateCount ?? null,
-        eligibleUniqueCandidateCount: admission?.eligibleUniqueCandidateCount ?? null,
-        policySelectedUniqueKeywordCount: admission?.policySelectedUniqueKeywordCount ?? null,
-        selectedUniqueKeywordCount: admission?.selectedUniqueKeywordCount ?? null,
-        rejectedUniqueCandidateCount: admission?.rejectedUniqueCandidateCount ?? null,
-        rejectionReasonCounts: admission?.rejectionReasonCounts ?? null,
-        admissionAccounting: admission === null ? 'not_applicable' : 'v1_replayed_from_durable_evidence',
+        ...(expansion === undefined ? {} : { selectedOccurrenceRows }),
+        ...(admission === null ? {} : {
+          admissionVersion: admission.admissionVersion,
+          rawUniqueCandidateCount: admission.rawUniqueCandidateCount,
+          eligibleUniqueCandidateCount: admission.eligibleUniqueCandidateCount,
+          policySelectedUniqueKeywordCount: admission.policySelectedUniqueKeywordCount,
+          selectedUniqueKeywordCount: admission.selectedUniqueKeywordCount,
+          rejectedUniqueCandidateCount: admission.rejectedUniqueCandidateCount,
+          rejectionReasonCounts: admission.rejectionReasonCounts,
+          admissionAccounting: 'v1_replayed_from_durable_evidence' as const,
+        }),
         explicitOmissionCount: null,
         omissionAccounting: 'not_persisted',
       },
