@@ -151,7 +151,7 @@ test('V1 expansion diagnostics distinguish occurrence rows from unique admitted 
   assert.equal(expansion.eligibleUniqueCandidateCount, 4);
   assert.equal(expansion.policySelectedUniqueKeywordCount, 3);
   assert.equal(expansion.selectedUniqueKeywordCount, 3);
-  assert.equal(expansion.rejectedUniqueCandidateCount, 1);
-  assert.deepEqual(expansion.rejectionReasonCounts, { global_budget: 1 });
+  assert.equal(expansion.policyRejectedUniqueCandidateCount, 1);
+  assert.deepEqual(expansion.policyRejectionReasonCounts, { global_budget: 1 });
   assert.equal(expansion.admissionAccounting, 'v1_replayed_from_durable_evidence');
 });
