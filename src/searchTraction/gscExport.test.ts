@@ -105,6 +105,25 @@ test('GSC export rejects calendar-invalid chart dates', () => {
   );
 });
 
+test('GSC export fails closed when aggregate counts exceed safe-integer precision', () => {
+  const max = Number.MAX_SAFE_INTEGER;
+  const archive = buildZip([
+    { name: 'Chart.csv', data: csv(`Date,Clicks,Impressions,CTR,Position\n2026-09-01,${max},0,0%,1\n2026-09-02,1,0,0%,1\n`) },
+    { name: 'Queries.csv', data: csv('Top queries,Clicks,Impressions,CTR,Position\nq,0,0,,\n') },
+    { name: 'Pages.csv', data: csv('Top pages,Clicks,Impressions,CTR,Position\nhttps://example.com/,0,0,,\n') },
+    { name: 'Countries.csv', data: csv('Country,Clicks,Impressions,CTR,Position\nUS,0,0,,\n') },
+    { name: 'Devices.csv', data: csv('Device,Clicks,Impressions,CTR,Position\nDesktop,0,0,,\n') },
+    { name: 'Search appearance.csv', data: csv('Search Appearance,Clicks,Impressions,CTR,Position\n') },
+    { name: 'Filters.csv', data: csv('Filter,Value\nSearch type,Web\n') },
+  ]);
+  assert.throws(
+    () => parseGscSearchTractionExport({ archive, property: 'sc-domain:example.com' }),
+    (error: unknown) => error instanceof ResearchError
+      && error.code === 'INPUT_SCHEMA_ERROR'
+      && /safe-integer precision/.test(error.message),
+  );
+});
+
 test('GSC export requires explicit property identity', () => {
   assert.throws(
     () => parseGscSearchTractionExport({ archive: gscFixture(), property: '  ' }),
