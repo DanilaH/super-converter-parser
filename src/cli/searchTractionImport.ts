@@ -67,19 +67,19 @@ export function renderSearchTractionImport(result: ImportGscSearchTractionResult
   const filterText = result.filters.length === 0
     ? 'none'
     : result.filters.map((filter) => `${filter.name}=${filter.value}`).join('; ');
-  const queryCoverage = formatRatio(result.coverage.query.impressionCoverageRatio);
-  const pageCoverage = formatRatio(result.coverage.page.impressionCoverageRatio);
+  const queryRatio = formatRatio(result.dimensionTotals.query.impressionRatioToChart);
+  const pageRatio = formatRatio(result.dimensionTotals.page.impressionRatioToChart);
 
   return [
     'First-party Search Traction — GSC import',
     `  Snapshot: ${result.snapshotId}`,
     `  Property: ${result.property}`,
-    `  Changed: ${result.changed ? 'yes' : 'no (duplicate source snapshot)'}`,
+    `  Changed: ${result.changed ? 'yes' : 'no (duplicate source/parser snapshot)'}`,
     `  Observed chart range: ${observed}`,
     `  Export filters: ${filterText}`,
-    `  Totals: ${result.totals.clicks} clicks / ${result.totals.impressions} impressions`,
+    `  Chart totals: ${result.totals.clicks} clicks / ${result.totals.impressions} impressions`,
     `  Rows: chart=${result.rowCounts.chart} queries=${result.rowCounts.queries} pages=${result.rowCounts.pages} countries=${result.rowCounts.countries} devices=${result.rowCounts.devices} searchAppearance=${result.rowCounts.searchAppearance}`,
-    `  Impression coverage: queries=${queryCoverage} pages=${pageCoverage}`,
+    `  Dimension/chart impression ratios: queries=${queryRatio} pages=${pageRatio}`,
     `  SQLite: ${result.databasePath}`,
     `  Source archive: ${result.sourceArchivePath}`,
     `  Stored snapshots: ${result.snapshotCount}`,
@@ -100,7 +100,7 @@ function printUsage(): void {
   console.log('  --json               Print import result as JSON.');
   console.log('  --help, -h           Show this help.');
   console.log('');
-  console.log('The import keeps Chart/query/page/country/device/search-appearance aggregates separate; it never fabricates cross-dimensional rows.');
+  console.log('The import keeps Chart/query/page/country/device/search-appearance aggregates separate; dimension/chart totals are comparison ratios and may exceed 100%.');
 }
 
 async function main(): Promise<void> {
