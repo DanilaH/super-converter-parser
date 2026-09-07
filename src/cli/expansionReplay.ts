@@ -4,7 +4,7 @@ import { loadDotEnv } from '../config/env.js';
 import { RunStore, type StoredRun } from '../db/store.js';
 import { resolveOutputRoot, resolveRunLocation } from '../outputs/researchLayout.js';
 import { buildCandidates, resolveDrThresholds } from '../scoring/scoring.js';
-import { EXPANSION_ADMISSION_VERSION } from '../runs/expansionAdmission.js';
+import { EXPANSION_ADMISSION_V1_VERSION } from '../runs/expansionAdmission.js';
 import {
   buildExpansionReplaySelections,
   evaluateExpansionReplay,
@@ -145,10 +145,10 @@ async function main(): Promise<void> {
     if (expansion?.enabled !== true) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Run ${args.runId} does not have expansion enabled.`);
     }
-    if (expansion.admissionVersion !== EXPANSION_ADMISSION_VERSION) {
+    if (expansion.admissionVersion !== EXPANSION_ADMISSION_V1_VERSION) {
       throw new ResearchError(
         'INPUT_SCHEMA_ERROR',
-        `Run ${args.runId} uses expansion admission ${expansion.admissionVersion ?? 'legacy/unmarked'}; offline replay requires persisted ${EXPANSION_ADMISSION_VERSION}.`,
+        `Run ${args.runId} uses expansion admission ${expansion.admissionVersion ?? 'legacy/unmarked'}; offline replay requires persisted ${EXPANSION_ADMISSION_V1_VERSION}.`,
       );
     }
 
