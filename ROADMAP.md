@@ -33,7 +33,8 @@ The runner already has a substantial accepted baseline:
 - Expansion Admission V1.1 plus version-compatible historical behavior;
 - deep enrichment, finalization, evidence coverage, and immutable Research Library publication;
 - run-quality accounting and derived Research Library snapshot-health checks;
-- read-only Research Library navigation through logical research and publication lineage views.
+- read-only Research Library navigation through logical research and publication lineage views;
+- bounded first-party Search Console ZIP import into a separate immutable search-traction evidence store.
 
 Therefore the next roadmap must **not** restart already completed V2/config-first work under new names.
 
@@ -229,7 +230,7 @@ The runner already bounds expensive deep work through explicit shortlists and fi
 
 A further optimization is useful only if real runs show that expensive provider/module work is still being executed for entities that cannot contribute useful downstream evidence.
 
-The current audit did not establish that measured waste. Historical handoffs reference large real runs, but the raw representative run artifacts needed to quantify module/provider cost and skip opportunities are not currently available in the active evidence set. That is insufficient justification for scheduler complexity.
+Representative large run archives are now available for analysis, so lack of artifacts is no longer the blocker. What is still missing is the **measurement**: no current analysis has quantified provider/module cost, avoidable work, or deterministic skip opportunities strongly enough to justify a new scheduler.
 
 ### Re-activation gate
 
@@ -254,7 +255,7 @@ No speculative progressive-enrichment scheduler is being added. The track remain
 
 ## R5 — Research Library navigation surfaces
 
-**Status:** complete in the current implementation baseline via `library:list` and `library:inspect`.
+**Status:** complete; merged in PR #159 and implemented via `library:list` and `library:inspect`.
 
 ### Why
 
@@ -294,13 +295,15 @@ The cumulative Library can be browsed and traced through immutable versions with
 
 ## R6 — Expansion quality evaluation telemetry
 
-**Status:** future evidence-gated observation track. **Do not change V1.1 now.**
+**Status:** observation/analysis track; no implementation change currently justified. **Do not change V1.1 now.**
 
 ### Why
 
 Expansion V1.1 was adopted from preserved evidence through offline replay and deliberately made the minimal comparator change. There is currently no evidence-backed reason to invent V1.2.
 
-Future real runs can, however, tell us whether the admitted frontier is actually useful downstream.
+A fresh persistence audit established that the required linkage already exists without adding telemetry plumbing: expansion admission preserves candidate/parent/support/overlap/broadening/selection facts, discovery preserves normalized keyword/provenance, enrichment preserves shortlist keywords and cluster keyword membership, and finalist evidence is cluster-scoped.
+
+The missing input is therefore a representative downstream corpus, not another runtime subsystem.
 
 ### Means
 
@@ -315,52 +318,59 @@ entered a human shortlist?
 contributed to a finalist cluster?
 ```
 
-Keep this as evaluation/telemetry. Do not use post-SERP evidence to retroactively rewrite historical admission decisions, and do not silently change fresh-run policy.
+Keep this as evaluation/analysis. Do not use post-SERP evidence to retroactively rewrite historical admission decisions, and do not silently change fresh-run policy.
 
 Only a repeated, quantified defect across representative corpora can justify proposing another admission version.
 
 ### Result
 
-Expansion evolves from observed failure modes rather than comparator experimentation for its own sake.
+Expansion evolves from observed failure modes rather than comparator experimentation for its own sake. No extra telemetry implementation is currently needed.
 
 ---
 
 ## R7 — First-party search-traction import
 
-**Status:** later, when real project data is sufficient to justify it.
+**Status:** implemented in PR #160; pending normal merge gate while this PR is open.
 
 ### Why
 
 Existing `traffic evidence` is competitor/domain-or-URL traffic evidence around finalist cohorts. It is **not** the same thing as first-party search-query traction from our own launched tools.
 
-Once projects accumulate useful Search Console data, real queries and landing pages can provide stronger feedback than only estimated keyword demand:
+Real Search Console ZIP exports from two live projects now provide enough first-party evidence to establish the import contract from observed files rather than guesses.
 
-```text
-Google actually showed/clicked our page for this problem
+### Implemented means
+
+The bounded V1 surface is:
+
+```bash
+npm run search-traction:import -- \
+  --input <gsc-performance-export.zip> \
+  --property <explicit-search-console-property>
 ```
 
-### Means
+It:
 
-Start free and explicit with CSV/JSON import rather than a live connector. Preserve source semantics such as:
+- accepts the observed English Search Console Performance ZIP contract (`Chart`, `Queries`, `Pages`, `Countries`, `Devices`, `Search appearance`, `Filters`);
+- requires explicit property identity rather than inferring it from filenames;
+- keeps daily/query/page/country/device/search-appearance aggregates separate rather than fabricating joint rows;
+- preserves export filter descriptors separately from the actual date range present in `Chart.csv`;
+- retains source labels and null numeric states without silent semantic normalization;
+- exposes neutral per-dimension totals/ratios to Chart totals, explicitly allowing ratios above or below 100% rather than mislabelling them as universal coverage;
+- persists immutable normalized snapshots in a dedicated `first-party-search/search-traction.sqlite`;
+- retains/restores the exact source ZIP for auditability;
+- identities snapshots by explicit property + source SHA-256 + parser semantics version, so later parser semantics cannot silently reinterpret old evidence.
 
-```text
-query
-landing page
-country
-device
-period
-impressions
-clicks
-position
-```
+See `SEARCH_TRACTION.md` for the runtime contract.
 
-Do not force this into the existing competitor `TrafficSnapshot` schema simply because both involve “traffic”. Link first-party facts to research keywords/clusters only where the relation is explicit and auditable.
+### Non-goals retained
 
-A direct GSC integration is a later convenience decision after the import contract proves useful.
+No live GSC connector/OAuth, automatic research attachment, automatic cluster matching, cross-dimensional synthesis, scoring, or expansion-policy change is included.
+
+A direct GSC integration remains a later convenience decision only if repeated manual ZIP export/import becomes a measured problem.
 
 ### Result
 
-Research can be triggered or enriched by problems that demonstrably bring our own projects impressions/clicks, while keeping first-party observations distinct from third-party estimates.
+The Runner can accumulate first-party Search Console evidence from real launched projects while keeping it semantically and durably separate from competitor traffic estimates.
 
 ---
 
@@ -413,6 +423,8 @@ Rules:
 - update active documentation in the same PR when merged behavior changes;
 - do not let roadmap wording override evidence found during implementation.
 
-## Immediate next action after R5
+## Immediate next action after R7
 
-Use the completed R1–R5 surfaces on real research work rather than manufacturing another implementation item. R6 remains observation-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. R7 remains gated on meaningful first-party Search Console data. R4 remains gated on measured provider/module waste from representative large runs.
+Finish the PR #160 cold-review/CI/merge gate. After that, use R1–R7 on real research work rather than manufacturing another implementation item.
+
+R6 is analysis-only until representative persisted expansion decisions can be evaluated against later human shortlist/finalist outcomes. R4 is measurement-gated: representative archives now exist, but progressive enrichment stays deferred until actual provider/module waste is quantified. Wordstat and V3 remain inactive without a new measured need.
