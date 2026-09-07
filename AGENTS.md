@@ -54,7 +54,7 @@ The current runner includes:
 - finalist evidence with explicit human decisions;
 - immutable Research Library publication;
 - config-first planning/execution through stable `researchId` continuation;
-- read-only `research:status` and immutable-generation `research:diff`;
+- read-only `research:status`, `research:audit`, and immutable-generation `research:diff`;
 - explicit repair of failed or provably incomplete primary discovery checkpoints.
 
 Do not restart completed V2.1/V2.2/V2.3/config-first roadmap work merely because a historical plan still contains unchecked prose.
@@ -126,6 +126,8 @@ Long-running work must keep the operator able to determine, where applicable:
 - useful timing/ETA information when it can be estimated honestly.
 
 Discovery/enrichment must remain resilient to isolated keyword/domain/provider failures, graceful Ctrl+C, process interruption, and durable resume. Parser/systemic failure must pause or fail explicitly rather than silently publish junk. Completed expensive checkpoints must not be repeated merely because a reusable cache row changed or expired.
+
+`research:status` remains the workflow/navigation surface. `research:audit` is a separate read-only checklist over already available durable/status/run-quality/evidence-health projections; it must not become a second durable truth store or a second workflow planner. `PASS` means no observed degradation among applicable checks, not that every stage has run. Incomplete/optional/unknown evidence remains `WARN`/`NOT_APPLICABLE`/`UNKNOWN`; do not promote it to corruption merely to make the audit stricter. Hard `FAIL` is reserved for a durable/status projection failure or an internally contradictory projected current-state relationship.
 
 ## Expansion Admission V1.1
 
