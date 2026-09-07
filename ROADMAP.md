@@ -228,7 +228,7 @@ Further R3 work requires another concrete provider inconsistency; do not keep no
 
 The runner already bounds expensive deep work through explicit shortlists, explicit configured modules, finalist scope, and bounded domain allocation. That is already a real form of progressive enrichment.
 
-The available completed 30-keyword deep-enrichment/finalization corpus was inspected against durable SQLite and derived operator artifacts rather than inferred from ZIP size or later intuition. The full enrichment generation took about 16.4 minutes wall-clock, so the modules are expensive enough that a deterministic skip would matter if one existed.
+The available completed 30-keyword deep-enrichment/finalization corpus was inspected against durable SQLite and derived operator artifacts rather than inferred from ZIP size or later intuition. The full enrichment generation took about 16.4 minutes wall-clock, so additional deterministic skips could matter operationally if a valid pre-call predicate existed; this measurement does not attribute that duration to individual modules.
 
 The measured downstream relationships did **not** expose such a skip:
 
@@ -237,7 +237,7 @@ The measured downstream relationships did **not** expose such a skip:
 - all 87 fetched page targets were present in entrant-cohort ranking URLs;
 - all 30 domains actually selected for `domain_age` were present in entrant cohorts;
 - all 30 domains actually selected for `site_structure` were present in entrant cohorts;
-- 194 candidate domains were observed for bounded domain evidence, but the 164 beyond the cap were persisted as explicit `domain_cap` omissions / `not_attempted` evidence rather than provider fan-out.
+- 194 candidate domains were observed for bounded domain evidence; the 164 beyond the cap were persisted as explicit omissions without provider work (`domain_age`: `not_attempted` / `domain_cap`; `site_structure`: omitted `maxDomains` checkpoints), rather than provider fan-out.
 
 `query_suggestions`, `pages`, and `domain_age` are also explicit standalone enrichment evidence surfaces with their own durable/exported artifacts. The fact that a later finalist-matrix projection does not directly consume every field is therefore not a valid pre-call skip predicate. Treating later non-consumption as waste would be hindsight and would silently change configured enrichment semantics.
 
