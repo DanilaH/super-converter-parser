@@ -10,6 +10,7 @@ import {
   type ExpansionAdmissionResult,
   type ExpansionRelatedOccurrence,
 } from './expansionAdmission.js';
+import { resolveGlobalExpansionAdmissionVersion } from './expansionRuntime.js';
 
 export type ExpansionFrontierDecision = ExpansionAdmissionDecision & {
   selectedFinal: boolean;
@@ -34,18 +35,26 @@ export async function materializeExpansionFrontier(input: {
   const committedKeywords = keywords.filter(isExpansionKeyword);
   const committed = new Set(committedKeywords.map((keyword) => keyword.normalizedKeyword));
   const related = input.store.loadRelatedKeywords(input.runId);
+  const admissionVersion = resolveGlobalExpansionAdmissionVersion(input.config);
+  if (admissionVersion === null) {
+    throw new ResearchError(
+      'RESUME_CONFIG_MISMATCH',
+      `Run ${input.runId} reached global expansion frontier materialization without a persisted admission version.`,
+    );
+  }
   const admission = buildExpansionAdmission({
     originalKeywords: originals.map((keyword) => keyword.keyword),
     related: related.map(toAdmissionOccurrence),
     maxCandidatesPerKeyword: input.config.expansion.maxCandidatesPerKeyword,
     minOverlap: input.config.expansion.minOverlap,
     minVolume: input.config.expansion.minVolume,
+    version: admissionVersion,
   });
 
   if (committed.size > admission.budget) {
     throw new ResearchError(
       'DB_ERROR',
-      `Run ${input.runId} already contains ${committed.size} expansion keyword(s), exceeding the V1 admission budget ${admission.budget}. Refusing to silently rewrite the committed frontier.`,
+      `Run ${input.runId} already contains ${committed.size} expansion keyword(s), exceeding the ${admission.version} admission budget ${admission.budget}. Refusing to silently rewrite the committed frontier.`,
     );
   }
 
