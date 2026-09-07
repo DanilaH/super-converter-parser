@@ -267,9 +267,11 @@ function applySchema(db: Database.Database): void {
 }
 
 async function ensureSourceArchive(path: string, archive: Buffer, expectedSha256: string): Promise<boolean> {
+  let existingNeedsReplacement = false;
   try {
     const existing = await readFile(path);
     if (sha256(existing) === expectedSha256) return false;
+    existingNeedsReplacement = true;
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
       throw new ResearchError('OUTPUT_WRITE_ERROR', `Cannot inspect first-party source archive ${path}.`, { cause: error });
@@ -282,7 +284,13 @@ async function ensureSourceArchive(path: string, archive: Buffer, expectedSha256
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${randomUUID()}`;
   try {
+    // Write the complete replacement before touching an existing target. Windows
+    // does not reliably allow rename() to replace an existing file, so remove the
+    // known-bad target only after the temp file is safely written.
     await writeFile(temp, archive);
+    if (existingNeedsReplacement) {
+      await rm(path, { force: true });
+    }
     await rename(temp, path);
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined);
