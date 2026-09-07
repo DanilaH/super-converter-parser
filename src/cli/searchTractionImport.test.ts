@@ -34,11 +34,11 @@ test('search-traction:import parses explicit source identity and output options'
   );
 });
 
-test('search-traction import text distinguishes export filters from observed chart range', () => {
+test('search-traction import text distinguishes export filters, observed range, and duplicate state', () => {
   const result: ImportGscSearchTractionResult = {
     snapshotId: 'gsc_fixture',
-    changed: true,
-    sourceArchiveRestored: true,
+    changed: false,
+    sourceArchiveRestored: false,
     databasePath: '/tmp/search-traction.sqlite',
     sourceArchivePath: '/tmp/gsc_fixture.zip',
     snapshotCount: 1,
