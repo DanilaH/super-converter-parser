@@ -332,6 +332,30 @@ npm run library:publish -- --enrichment <completed-enrichment-id>
 
 See [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md).
 
+## First-party Search Console traction
+
+Search Console evidence from our own launched sites is a separate evidence family from competitor/domain traffic evidence.
+
+Import an English **Performance on Search results** ZIP explicitly:
+
+```bash
+npm run search-traction:import -- \
+  --input ./example.com-Performance-on-Search-2026-09-06.zip \
+  --property sc-domain:example.com
+```
+
+The import keeps `Chart`, query, page, country, device, search-appearance, and filter aggregates separate. It does not fabricate cross-dimensional rows. The explicit property, source ZIP hash, and parser semantics version form immutable snapshot identity.
+
+Durable first-party truth lives under:
+
+```text
+<RESEARCH_OUTPUT_ROOT>/first-party-search/search-traction.sqlite
+```
+
+with exact source ZIP copies retained under `first-party-search/sources/` for auditability. This V1 is manual ZIP import only; there is no live GSC/OAuth connector or automatic attachment to a research.
+
+See [`SEARCH_TRACTION.md`](./SEARCH_TRACTION.md).
+
 ## Durable layout
 
 A logical research may contain multiple immutable discovery and enrichment generations:
@@ -352,7 +376,7 @@ A logical research may contain multiple immutable discovery and enrichment gener
 
 Each discovery generation owns `run.sqlite`; each enrichment generation owns `enrichment.sqlite`. Old generations are retained and are not rewritten merely because a newer generation becomes current.
 
-The output root also contains the run/enrichment locator index and `research-library/`.
+The output root also contains the run/enrichment locator index, `research-library/`, and the independent `first-party-search/` evidence store when Search Console snapshots have been imported.
 
 ## Core truth and safety contracts
 
@@ -378,10 +402,11 @@ For current behavior, use these documents by role:
 5. [`FULL_RUNS.md`](./FULL_RUNS.md) — operator orchestration and direct stage commands.
 6. [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md) — append lineage/provenance/locking.
 7. [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md) — publication/version lineage.
-8. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
-9. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
-10. [`ROADMAP.md`](./ROADMAP.md) — current development sequencing; planning only, not runtime authority.
-11. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
+8. [`SEARCH_TRACTION.md`](./SEARCH_TRACTION.md) — first-party Search Console import/storage semantics.
+9. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
+10. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
+11. [`ROADMAP.md`](./ROADMAP.md) — current development sequencing; planning only, not runtime authority.
+12. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
 
 Versioned release roadmaps, acceptance files, methodology reports, and PR-specific plans are archived under `docs/history/`. They preserve historical context and do not override merged runtime behavior. The root `ROADMAP.md` is the explicit current-development exception and likewise does not override runtime contracts.
 

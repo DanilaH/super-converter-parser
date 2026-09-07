@@ -20,6 +20,7 @@ For **implemented/current behavior**, read in this order:
    - `SCORING.md`
    - `RESEARCH_BATCHES.md`
    - `RESEARCH_LIBRARY.md`
+   - `SEARCH_TRACTION.md`
    - `FULL_RUNS.md`
 6. Code, schemas, tests, and current CLI help are the final implementation evidence when documentation is ambiguous.
 
@@ -55,7 +56,8 @@ The current runner includes:
 - immutable Research Library publication;
 - config-first planning/execution through stable `researchId` continuation;
 - read-only `research:status`, `research:audit`, and immutable-generation `research:diff`;
-- explicit repair of failed or provably incomplete primary discovery checkpoints.
+- explicit repair of failed or provably incomplete primary discovery checkpoints;
+- bounded first-party Google Search Console ZIP import into a separate immutable search-traction evidence store.
 
 Do not restart completed V2.1/V2.2/V2.3/config-first roadmap work merely because a historical plan still contains unchecked prose.
 
@@ -100,6 +102,8 @@ error != empty
 A numeric zero is valid only when the corresponding provider/source actually observed zero.
 
 Google `gl/hl`, Keyword Surfer market, and detected physical Google location are separate facts.
+
+First-party Search Console evidence is a separate fact family from competitor/domain traffic estimates. Search Console export dimensions are independent aggregates: do not fabricate query × page × country × device rows. Dimension totals relative to `Chart.csv` are neutral comparison ratios and may legitimately be below or above 100%; do not reinterpret them as universal coverage. Preserve explicit property identity, source ZIP provenance, and parser semantics version so old evidence is not silently reinterpreted.
 
 ### Human decisions
 
