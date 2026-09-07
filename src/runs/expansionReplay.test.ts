@@ -88,6 +88,37 @@ function evidence(normalizedKeyword: string, score = 60, volume = 1_000): Candid
   };
 }
 
+function materializedWithoutSerp(normalizedKeyword: string): Candidate {
+  return {
+    ...evidence(normalizedKeyword),
+    status: 'failed',
+    errorCode: 'GOOGLE_UNAVAILABLE',
+    errorMessage: 'no trustworthy SERP',
+    serpStatus: 'fetch_error',
+    serpErrorCode: 'GOOGLE_UNAVAILABLE',
+    serpErrorMessage: 'no trustworthy SERP',
+    organicResultCount: null,
+    uniqueDomains: null,
+    knownUniqueDomains: null,
+    minDr: null,
+    maxDr: null,
+    medianDr: null,
+    top3MedianDr: null,
+    top5MedianDr: null,
+    veryWeakDomainsCount: null,
+    weakDomainsCount: null,
+    strongDomainsCount: null,
+    veryStrongDomainsCount: null,
+    missingDrCount: null,
+    exactMatchDomainCount: null,
+    nicheDomainCount: null,
+    serpDiversity: null,
+    score: null,
+    tier: null,
+    scoringCompleteness: 'degraded',
+  };
+}
+
 function input(): BuildExpansionReplaySelectionsInput {
   return {
     runId: 'replay-test',
@@ -110,6 +141,7 @@ test('V1 replay selection exactly matches the production admission selection', (
   const replay = buildExpansionReplaySelections(input());
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
 
+  assert.equal(replay.methodology.baseline, 'current_v1_policy_replay');
   assert.equal(replay.budget, 3);
   assert.deepEqual(
     [...baseline.selectedKeywords].sort(),
@@ -146,7 +178,7 @@ test('selector API is fixed before any post-hoc child evidence is connected', ()
   );
 });
 
-test('uncollected counterfactual children remain unknown instead of becoming zero-quality evidence', () => {
+test('unmaterialized counterfactual children remain unknown instead of becoming zero-quality evidence', () => {
   const selections = buildExpansionReplaySelections(input());
   const replay = evaluateExpansionReplay(selections, [
     evidence('roof pitch angle'),
@@ -156,12 +188,28 @@ test('uncollected counterfactual children remain unknown instead of becoming zer
   const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
   const afterSupport = replay.variants.find((variant) => variant.id === 'broadening_after_support')!;
 
-  assert.equal(baseline.postHocObservedOnly.durableChildCount, 3);
-  assert.equal(baseline.postHocObservedOnly.counterfactualUnknownCount, 0);
-  assert.equal(afterSupport.postHocObservedOnly.durableChildCount, 2);
-  assert.equal(afterSupport.postHocObservedOnly.counterfactualUnknownCount, 1);
-  assert.equal(afterSupport.postHocObservedOnly.durableChildCoveragePercent, 66.67);
+  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCount, 3);
+  assert.equal(baseline.postHocObservedOnly.counterfactualUnmaterializedCount, 0);
+  assert.equal(afterSupport.postHocObservedOnly.durableChildKeywordCount, 2);
+  assert.equal(afterSupport.postHocObservedOnly.counterfactualUnmaterializedCount, 1);
+  assert.equal(afterSupport.postHocObservedOnly.durableChildKeywordCoveragePercent, 66.67);
   assert.equal(afterSupport.postHocObservedOnly.trustworthySerpCount, 2);
+});
+
+test('materialized child presence is distinct from trustworthy SERP observation', () => {
+  const selections = buildExpansionReplaySelections(input());
+  const replay = evaluateExpansionReplay(selections, [
+    materializedWithoutSerp('roof pitch angle'),
+    evidence('roof pitch degrees'),
+    evidence('roof slope angle'),
+  ]);
+  const baseline = replay.variants.find((variant) => variant.id === 'v1')!;
+
+  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCount, 3);
+  assert.equal(baseline.postHocObservedOnly.durableChildKeywordCoveragePercent, 100);
+  assert.equal(baseline.postHocObservedOnly.trustworthySerpCount, 2);
+  assert.equal(baseline.postHocObservedOnly.trustworthySerpCoveragePercent, 66.67);
+  assert.equal(baseline.postHocObservedOnly.scoredChildCount, 2);
 });
 
 test('related root completeness is explicit and missing roots are not treated as empty', () => {
