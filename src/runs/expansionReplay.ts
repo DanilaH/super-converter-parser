@@ -1,7 +1,7 @@
 import type { Candidate } from '../scoring/scoring.js';
 import {
   buildExpansionAdmission,
-  EXPANSION_ADMISSION_VERSION,
+  EXPANSION_ADMISSION_V1_VERSION,
   type ExpansionAdmissionDecision,
   type ExpansionRelatedOccurrence,
 } from './expansionAdmission.js';
@@ -63,7 +63,7 @@ export type ExpansionReplayVariant = ExpansionReplaySelectionVariant & {
 export type ExpansionReplaySelectionSet = {
   version: typeof EXPANSION_REPLAY_VERSION;
   runId: string;
-  admissionVersion: typeof EXPANSION_ADMISSION_VERSION;
+  admissionVersion: typeof EXPANSION_ADMISSION_V1_VERSION;
   originalKeywordCount: number;
   rawCandidateCount: number;
   eligibleCandidateCount: number;
@@ -118,6 +118,7 @@ export function buildExpansionReplaySelections(
     maxCandidatesPerKeyword: input.maxCandidatesPerKeyword,
     minOverlap: input.minOverlap,
     minVolume: input.minVolume,
+    version: EXPANSION_ADMISSION_V1_VERSION,
   });
   const eligible = admission.decisions.filter(
     (decision) => decision.reason === 'selected' || decision.reason === 'global_budget',
