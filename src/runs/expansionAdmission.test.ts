@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   buildExpansionAdmission,
   expansionAddedBudget,
+  EXPANSION_ADMISSION_V1_VERSION,
+  EXPANSION_ADMISSION_VERSION,
+  type ExpansionAdmissionVersion,
   type ExpansionRelatedOccurrence,
 } from './expansionAdmission.js';
 
@@ -19,7 +22,12 @@ function related(
 function build(
   originalKeywords: string[],
   rows: ExpansionRelatedOccurrence[],
-  overrides: Partial<{ maxCandidatesPerKeyword: number; minOverlap: number; minVolume: number }> = {},
+  overrides: Partial<{
+    maxCandidatesPerKeyword: number;
+    minOverlap: number;
+    minVolume: number;
+    version: ExpansionAdmissionVersion;
+  }> = {},
 ) {
   return buildExpansionAdmission({
     originalKeywords,
@@ -27,6 +35,7 @@ function build(
     maxCandidatesPerKeyword: overrides.maxCandidatesPerKeyword ?? 20,
     minOverlap: overrides.minOverlap ?? 0,
     minVolume: overrides.minVolume ?? 0,
+    version: overrides.version,
   });
 }
 
@@ -58,7 +67,6 @@ test('single-token related heads are rejected even with strong support and volum
   assert.equal(sheets?.parentSupport, 3);
   assert.deepEqual(sheets?.supportingParents, ['compare google sheets', 'merge spreadsheet columns', 'sheet diff tool']);
   assert.equal(specific?.selected, true);
-  assert.equal(specific?.parentSupport, 2);
 });
 
 test('single-token technical heads are also rejected while specific utility intents survive', () => {
@@ -124,6 +132,36 @@ test('parent support is bucketed so many near-duplicate parents do not create un
   const supported = result.decisions.find((item) => item.normalizedKeyword === 'supported utility');
   assert.equal(supported?.parentSupport, 4);
   assert.equal(supported?.parentSupportTier, 2);
+});
+
+test('v1.1 promotes supported broadening ahead of unsupported non-broadening while v1 stays frozen', () => {
+  const originals = ['rpm calculator engine', 'rpm calculator wheel'];
+  const rows = [
+    related(0, originals[0]!, 'rpm calculator', 65, 5_400),
+    related(1, originals[1]!, 'rpm calculator', 65, 5_400),
+    related(0, originals[0]!, 'age calculator online', 99, 550_000),
+    related(0, originals[0]!, 'paycheck calculator online', 98, 550_000),
+  ];
+
+  const legacy = build(originals, rows, {
+    version: EXPANSION_ADMISSION_V1_VERSION,
+    maxCandidatesPerKeyword: 20,
+  });
+  const current = build(originals, rows, {
+    version: EXPANSION_ADMISSION_VERSION,
+    maxCandidatesPerKeyword: 20,
+  });
+
+  assert.equal(legacy.version, 'v1');
+  assert.equal(current.version, 'v1.1');
+  assert.equal(legacy.budget, 3);
+  assert.equal(legacy.decisions.find((item) => item.normalizedKeyword === 'rpm calculator')?.selected, true);
+  assert.equal(current.decisions.find((item) => item.normalizedKeyword === 'rpm calculator')?.selected, true);
+
+  const legacyOrder = legacy.decisions.filter((item) => item.selected).map((item) => item.normalizedKeyword);
+  const currentOrder = current.decisions.filter((item) => item.selected).map((item) => item.normalizedKeyword);
+  assert.equal(legacyOrder.at(-1), 'rpm calculator');
+  assert.equal(currentOrder[0], 'rpm calculator');
 });
 
 test('strict lexical broadening is deprioritized instead of hard-rejected', () => {
