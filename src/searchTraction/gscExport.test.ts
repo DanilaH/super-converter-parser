@@ -72,6 +72,38 @@ test('GSC export keeps filters, observed chart range, and independent dimension 
   assert.equal(snapshot.dimensions.page[0]?.value, 'https://example.com/keyboard-tester');
 });
 
+test('GSC export preserves dimension label text rather than trimming it silently', () => {
+  const archive = buildZip([
+    { name: 'Chart.csv', data: csv('Date,Clicks,Impressions,CTR,Position\n2026-09-01,0,1,0%,1\n') },
+    { name: 'Queries.csv', data: csv('Top queries,Clicks,Impressions,CTR,Position\n"  spaced query  ",0,1,0%,1\n') },
+    { name: 'Pages.csv', data: csv('Top pages,Clicks,Impressions,CTR,Position\nhttps://example.com/,0,1,0%,1\n') },
+    { name: 'Countries.csv', data: csv('Country,Clicks,Impressions,CTR,Position\nUS,0,1,0%,1\n') },
+    { name: 'Devices.csv', data: csv('Device,Clicks,Impressions,CTR,Position\nDesktop,0,1,0%,1\n') },
+    { name: 'Search appearance.csv', data: csv('Search Appearance,Clicks,Impressions,CTR,Position\n') },
+    { name: 'Filters.csv', data: csv('Filter,Value\nSearch type,Web\n') },
+  ]);
+  const snapshot = parseGscSearchTractionExport({ archive, property: 'sc-domain:example.com' });
+  assert.equal(snapshot.dimensions.query[0]?.value, '  spaced query  ');
+});
+
+test('GSC export rejects calendar-invalid chart dates', () => {
+  const archive = buildZip([
+    { name: 'Chart.csv', data: csv('Date,Clicks,Impressions,CTR,Position\n2026-02-31,0,1,0%,1\n') },
+    { name: 'Queries.csv', data: csv('Top queries,Clicks,Impressions,CTR,Position\nq,0,1,0%,1\n') },
+    { name: 'Pages.csv', data: csv('Top pages,Clicks,Impressions,CTR,Position\nhttps://example.com/,0,1,0%,1\n') },
+    { name: 'Countries.csv', data: csv('Country,Clicks,Impressions,CTR,Position\nUS,0,1,0%,1\n') },
+    { name: 'Devices.csv', data: csv('Device,Clicks,Impressions,CTR,Position\nDesktop,0,1,0%,1\n') },
+    { name: 'Search appearance.csv', data: csv('Search Appearance,Clicks,Impressions,CTR,Position\n') },
+    { name: 'Filters.csv', data: csv('Filter,Value\nSearch type,Web\n') },
+  ]);
+  assert.throws(
+    () => parseGscSearchTractionExport({ archive, property: 'sc-domain:example.com' }),
+    (error: unknown) => error instanceof ResearchError
+      && error.code === 'INPUT_SCHEMA_ERROR'
+      && /invalid Date/.test(error.message),
+  );
+});
+
 test('GSC export requires explicit property identity', () => {
   assert.throws(
     () => parseGscSearchTractionExport({ archive: gscFixture(), property: '  ' }),
@@ -91,6 +123,37 @@ test('GSC export fails closed when a required aggregate file is missing', () => 
       && error.code === 'INPUT_SCHEMA_ERROR'
       && /Queries\.csv/.test(error.message),
   );
+});
+
+test('bounded ZIP reader accepts central-directory sizes when Google-style data descriptors are flagged', () => {
+  const original = buildZip([{ name: 'Chart.csv', data: csv('Date,Clicks\n2026-09-01,0\n') }]);
+  const eocdOffset = original.length - 22;
+  const centralOffset = original.readUInt32LE(eocdOffset + 16);
+  const expectedCrc = original.readUInt32LE(centralOffset + 16);
+  const compressedSize = original.readUInt32LE(centralOffset + 20);
+  const uncompressedSize = original.readUInt32LE(centralOffset + 24);
+  const descriptor = Buffer.alloc(16);
+  descriptor.writeUInt32LE(0x08074b50, 0);
+  descriptor.writeUInt32LE(expectedCrc, 4);
+  descriptor.writeUInt32LE(compressedSize, 8);
+  descriptor.writeUInt32LE(uncompressedSize, 12);
+
+  const archive = Buffer.concat([
+    original.subarray(0, centralOffset),
+    descriptor,
+    original.subarray(centralOffset),
+  ]);
+  archive.writeUInt16LE(original.readUInt16LE(6) | 0x0008, 6);
+  archive.writeUInt32LE(0, 14);
+  archive.writeUInt32LE(0, 18);
+  archive.writeUInt32LE(0, 22);
+  const shiftedCentralOffset = centralOffset + descriptor.length;
+  archive.writeUInt16LE(original.readUInt16LE(centralOffset + 8) | 0x0008, shiftedCentralOffset + 8);
+  const shiftedEocdOffset = eocdOffset + descriptor.length;
+  archive.writeUInt32LE(shiftedCentralOffset, shiftedEocdOffset + 16);
+
+  const entries = readFlatZipEntries(archive);
+  assert.equal(entries.get('Chart.csv')?.toString('utf8'), 'Date,Clicks\n2026-09-01,0\n');
 });
 
 test('bounded ZIP reader rejects nested entries rather than extracting paths', () => {
