@@ -134,13 +134,14 @@ test('parent support is bucketed so many near-duplicate parents do not create un
   assert.equal(supported?.parentSupportTier, 2);
 });
 
-test('v1.1 promotes supported broadening ahead of unsupported non-broadening while v1 stays frozen', () => {
+test('v1.1 admits supported broadening over one-parent non-broadening noise while v1 stays frozen', () => {
   const originals = ['rpm calculator engine', 'rpm calculator wheel'];
   const rows = [
     related(0, originals[0]!, 'rpm calculator', 65, 5_400),
     related(1, originals[1]!, 'rpm calculator', 65, 5_400),
     related(0, originals[0]!, 'age calculator online', 99, 550_000),
-    related(0, originals[0]!, 'paycheck calculator online', 98, 550_000),
+    related(0, originals[0]!, 'paycheck calculator online', 98, 500_000),
+    related(0, originals[0]!, 'fuel cost calculator online', 97, 450_000),
   ];
 
   const legacy = build(originals, rows, {
@@ -154,14 +155,28 @@ test('v1.1 promotes supported broadening ahead of unsupported non-broadening whi
 
   assert.equal(legacy.version, 'v1');
   assert.equal(current.version, 'v1.1');
+  assert.equal(legacy.rawCandidateCount, current.rawCandidateCount);
+  assert.equal(legacy.eligibleCandidateCount, current.eligibleCandidateCount);
+  assert.equal(legacy.budget, current.budget);
   assert.equal(legacy.budget, 3);
-  assert.equal(legacy.decisions.find((item) => item.normalizedKeyword === 'rpm calculator')?.selected, true);
-  assert.equal(current.decisions.find((item) => item.normalizedKeyword === 'rpm calculator')?.selected, true);
 
-  const legacyOrder = legacy.decisions.filter((item) => item.selected).map((item) => item.normalizedKeyword);
-  const currentOrder = current.decisions.filter((item) => item.selected).map((item) => item.normalizedKeyword);
-  assert.equal(legacyOrder.at(-1), 'rpm calculator');
-  assert.equal(currentOrder[0], 'rpm calculator');
+  const legacyBroadening = legacy.decisions.find((item) => item.normalizedKeyword === 'rpm calculator');
+  const currentBroadening = current.decisions.find((item) => item.normalizedKeyword === 'rpm calculator');
+  assert.equal(legacyBroadening?.broadeningOnly, true);
+  assert.equal(legacyBroadening?.parentSupportTier, 1);
+  assert.equal(legacyBroadening?.selected, false);
+  assert.equal(legacyBroadening?.reason, 'global_budget');
+  assert.equal(currentBroadening?.selected, true);
+  assert.equal(currentBroadening?.reason, 'selected');
+
+  assert.equal(
+    legacy.decisions.find((item) => item.normalizedKeyword === 'fuel cost calculator online')?.selected,
+    true,
+  );
+  assert.equal(
+    current.decisions.find((item) => item.normalizedKeyword === 'fuel cost calculator online')?.selected,
+    false,
+  );
 });
 
 test('strict lexical broadening is deprioritized instead of hard-rejected', () => {
