@@ -125,7 +125,7 @@ test('missing current enrichment projection is a hard audit failure', () => {
   assert.equal(audit.overall, 'fail');
 });
 
-test('stale finalist artifact is a hard failure while an unfinished finalization is only warning-level', () => {
+test('stale or unfinished finalization artifacts are warnings because durable evidence remains authoritative', () => {
   const stale = baseStatus();
   stale.finalization = {
     ...stale.finalization,
@@ -133,8 +133,10 @@ test('stale finalist artifact is a hard failure while an unfinished finalization
     enrichmentId: 'enrichment_1',
     artifactWarning: 'finalist evidence matrix is stale relative to current durable parent snapshots',
   };
-  assert.equal(check(stale, 'finalization_projection').result.status, 'fail');
-  assert.equal(buildResearchAudit(stale).overall, 'fail');
+  const staleCheck = check(stale, 'finalization_projection');
+  assert.equal(staleCheck.result.status, 'warn');
+  assert.equal(staleCheck.audit.overall, 'warn');
+  assert.match(staleCheck.result.message, /must not be treated as current/);
 
   const unfinished = baseStatus();
   unfinished.finalization = {
