@@ -204,7 +204,7 @@ test('create starts one ephemeral job and publishes the canonical workflow resul
     assert.equal(accepted.plan.workflowTarget, 'discovery');
 
     const job = await waitForFinishedJob(started.url, accepted.job.jobId);
-    assert.equal(job.state, 'completed');
+    assert.equal(job.state, 'finished');
     assert.equal(job.researchId, 'research-new');
     assert.equal(job.result?.workflowState, 'completed');
     assert.equal(executionCalls, 1);
