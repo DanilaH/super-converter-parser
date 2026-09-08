@@ -118,6 +118,7 @@ test('shortlist execution materializes the existing keyword CSV continuation and
         await readFile(shortlistPath, 'utf8'),
         'keyword\n"keyword 1"\n"keyword 2"\n"keyword 3"\n"keyword 4"\n"keyword 5"\n',
       );
+      assert.ok(options);
       assert.equal(options.manageProcessSignals, false);
       return execution;
     },
@@ -151,7 +152,8 @@ test('shortlist execution rejects a stale discovery generation through the workf
   } as unknown as ResearchRunDeps;
   const deps = serviceDeps({
     executeExistingResearch: async (_researchId, _continuation, options) => {
-      await options.deps?.buildStatus({ outputRoot: '/tmp/shortlist-output', targetRunId: 'research-1' });
+      assert.ok(options?.deps);
+      await options.deps.buildStatus({ outputRoot: '/tmp/shortlist-output', targetRunId: 'research-1' });
       return execution;
     },
   });
