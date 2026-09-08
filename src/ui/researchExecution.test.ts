@@ -41,15 +41,16 @@ const DRAFT = {
   version: 1,
   label: 'UI tools',
   preset: 'standard',
-  keywords: 'alpha tool\nbeta, tool\nalpha tool\n',
+  keywords: 'alpha tool\nbeta, tool\nalpha   tool\n',
   market: 'US',
   googleHl: 'en',
   googleGl: 'us',
 } as const;
 
-test('preview validates through the real OperatorConfig resolver and returns only portable plan semantics', async () => {
+test('preview validates through the real OperatorConfig resolver and reports discovery-normalized keyword counts', async () => {
   const preview = await previewUiResearchDraft(DRAFT);
-  assert.equal(preview.keywordCount, 3);
+  assert.equal(preview.inputLineCount, 3);
+  assert.equal(preview.uniqueKeywordCount, 2);
   assert.deepEqual(preview.preset, { id: 'standard', revision: 1 });
   assert.equal(preview.workflowTarget, 'enrichment');
   assert.deepEqual(preview.semantics.enrichmentModules, ['clusters']);
@@ -74,7 +75,7 @@ test('draft execution materializes a temporary valid seed CSV and disables proce
   const result = await executeUiResearchDraft(DRAFT, { env: {}, outputRoot: '/tmp/output' }, deps);
   assert.equal(result, EXECUTION);
   assert.equal(observedSignals, false);
-  assert.equal(observedCsv, 'keyword\n"alpha tool"\n"beta, tool"\n"alpha tool"\n');
+  assert.equal(observedCsv, 'keyword\n"alpha tool"\n"beta, tool"\n"alpha   tool"\n');
 });
 
 test('resume uses the same application workflow with process-level signal ownership disabled', async () => {
