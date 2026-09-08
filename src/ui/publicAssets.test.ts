@@ -3,28 +3,34 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata UX', async () => {
+test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata/batch UX', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [appSource, metadataSource, repairSource, html, css, metadataCss, repairCss] = await Promise.all([
+  const [appSource, metadataSource, batchSource, repairSource, html, css, metadataCss, batchCss, repairCss] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.js', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('batches.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('batches.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
   assert.doesNotThrow(() => new Function(metadataSource));
+  assert.doesNotThrow(() => new Function(batchSource));
   assert.doesNotThrow(() => new Function(repairSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/metadata\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/batches\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
   assert.match(html, /id="metadata-action-root" class="metadata-action-shell hidden"/);
+  assert.match(html, /id="batch-action-root" class="batch-action-shell hidden"/);
   assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/metadata\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/batches\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
@@ -43,6 +49,16 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.doesNotMatch(metadataSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}`/);
   assert.doesNotMatch(metadataSource, /innerHTML\s*=/);
 
+  assert.match(batchSource, /\/api\/researches\?q=/);
+  assert.match(batchSource, /candidate\.knownRunIds/);
+  assert.match(batchSource, /!item\?\.managed/);
+  assert.match(batchSource, /\/batches\/plan`/);
+  assert.match(batchSource, /\/batches`/);
+  assert.match(batchSource, /previewedText = null/);
+  assert.match(batchSource, /active\?\.kind === 'append_batch'/);
+  assert.match(batchSource, /commit recomputes counts under the research lock/i);
+  assert.doesNotMatch(batchSource, /innerHTML\s*=/);
+
   assert.match(repairSource, /nextAction\?\.code !== 'repair_discovery'/);
   assert.match(repairSource, /keywordCounts\?\.repairable/);
   assert.match(repairSource, /\/repair-discovery`/);
@@ -53,6 +69,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(css, /font-size:\s*14px/);
   assert.match(metadataCss, /\.metadata-action-shell/);
   assert.match(metadataCss, /\.metadata-form/);
+  assert.match(batchCss, /\.batch-action-shell/);
+  assert.match(batchCss, /\.batch-preview/);
   assert.match(repairCss, /\.repair-action/);
   assert.match(repairCss, /\.repair-action-shell/);
 });
