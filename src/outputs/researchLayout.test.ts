@@ -36,12 +36,19 @@ test('resolveOutputRoot uses one canonical root and rejects ad-hoc CLI roots by 
   const envRoot = join(tmpdir(), 'output-root-env');
   const otherRoot = join(tmpdir(), 'output-root-other');
   const userHome = join(tmpdir(), 'output-root-home');
+  const strictEnv = {
+    RESEARCH_OUTPUT_ROOT: envRoot,
+    RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'false',
+  };
 
-  assert.equal(resolveOutputRoot(null, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), envRoot);
-  assert.equal(resolveOutputRoot(envRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), envRoot);
-  assert.equal(resolveOutputRoot(null, {}, userHome), join(userHome, 'super-converter-parser-output'));
+  assert.equal(resolveOutputRoot(null, strictEnv, userHome), envRoot);
+  assert.equal(resolveOutputRoot(envRoot, strictEnv, userHome), envRoot);
+  assert.equal(
+    resolveOutputRoot(null, { RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'false' }, userHome),
+    join(userHome, 'super-converter-parser-output'),
+  );
   assert.throws(
-    () => resolveOutputRoot(otherRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome),
+    () => resolveOutputRoot(otherRoot, strictEnv, userHome),
     (error: unknown) => error instanceof ResearchError
       && error.code === 'INPUT_SCHEMA_ERROR'
       && /Ad-hoc --output-root is disabled/.test(error.message),
@@ -68,7 +75,7 @@ test('resolveOutputRoot rejects relative configured and override roots', () => {
       && /RESEARCH_OUTPUT_ROOT must be an absolute path/.test(error.message),
   );
   assert.throws(
-    () => resolveOutputRoot('relative-output', {}),
+    () => resolveOutputRoot('relative-output', { RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'false' }),
     (error: unknown) => error instanceof ResearchError
       && error.code === 'INPUT_SCHEMA_ERROR'
       && /Output root override must be an absolute path/.test(error.message),
