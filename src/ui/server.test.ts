@@ -103,7 +103,7 @@ test('research detail route passes the stable identifier to the canonical detail
   const serverDeps = deps({
     inspectResearchConsole: async (researchId, options) => {
       observedId = researchId;
-      observedRoot = options.outputRoot ?? null;
+      observedRoot = options?.outputRoot ?? null;
       return detail;
     },
   });
