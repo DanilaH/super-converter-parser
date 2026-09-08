@@ -12,6 +12,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
     repairSource,
     shortlistSource,
     finalistSource,
+    decisionSource,
     html,
     css,
     batchCss,
@@ -19,6 +20,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
     repairCss,
     shortlistCss,
     finalistCss,
+    decisionCss,
   ] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.js', base)), 'utf8'),
@@ -26,6 +28,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('shortlist.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('finalists.js', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('decisions.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.css', base)), 'utf8'),
@@ -33,6 +36,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
     readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('shortlist.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('finalists.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('decisions.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
@@ -41,23 +45,27 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.doesNotThrow(() => new Function(repairSource));
   assert.doesNotThrow(() => new Function(shortlistSource));
   assert.doesNotThrow(() => new Function(finalistSource));
+  assert.doesNotThrow(() => new Function(decisionSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/batches\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/metadata\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/shortlist\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/finalists\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/decisions\.js"><\/script>/);
   assert.match(html, /id="batch-action-root" class="batch-action-shell hidden"/);
   assert.match(html, /id="metadata-action-root" class="metadata-action-shell hidden"/);
   assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
   assert.match(html, /id="shortlist-action-root" class="shortlist-action-shell hidden"/);
   assert.match(html, /id="finalist-action-root" class="finalist-action-shell hidden"/);
+  assert.match(html, /id="decision-action-root" class="decision-action-shell hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/batches\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/metadata\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/shortlist\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/finalists\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/decisions\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
 
@@ -107,6 +115,16 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(finalistSource, /not recommendation order/);
   assert.doesNotMatch(finalistSource, /innerHTML\s*=/);
 
+  assert.match(decisionSource, /\/api\/researches\/\$\{encodeURIComponent\(researchId\)\}\/decisions/);
+  assert.match(decisionSource, /representativeRevision:\s*gate\.representativeRevision/);
+  assert.match(decisionSource, /entrantFingerprint:\s*gate\.entrantFingerprint/);
+  assert.match(decisionSource, /decisionStateUpdatedAt:\s*gate\.decisionStateUpdatedAt/);
+  assert.match(decisionSource, /buildDecision:\s*current\.buildDecision/);
+  assert.match(decisionSource, /seoProductRole:\s*current\.seoProductRole/);
+  assert.match(decisionSource, /both empty keeps that finalist unresolved/);
+  assert.match(decisionSource, /Save & continue to Library/);
+  assert.doesNotMatch(decisionSource, /innerHTML\s*=/);
+
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
   assert.match(batchCss, /\.batch-action-shell/);
@@ -119,6 +137,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(shortlistCss, /\.shortlist-table/);
   assert.match(finalistCss, /\.finalist-action-shell/);
   assert.match(finalistCss, /\.finalist-card/);
+  assert.match(decisionCss, /\.decision-action-shell/);
+  assert.match(decisionCss, /\.decision-card/);
 });
 
 test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {
