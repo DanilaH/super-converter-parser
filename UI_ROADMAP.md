@@ -62,6 +62,8 @@ Make the existing Runner workflow callable safely by non-CLI adapters without du
 
 U1 can build a local server without spawning CLI processes, parsing stdout, inventing durable state, or cloning workflow logic.
 
+The moved workflow intentionally still retains the existing console output and process-level SIGINT/SIGTERM behavior used by the CLI. U1 is read-only and does not depend on that behavior. Before U2 runs long-lived work in-process from the local server, explicitly separate or parameterize process-signal ownership if needed; do not silently let a server adapter redefine cancellation semantics.
+
 ---
 
 ## U1 — Read-only Research Console
