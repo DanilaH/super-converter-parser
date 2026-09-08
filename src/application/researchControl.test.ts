@@ -117,3 +117,43 @@ test('executeExistingResearch resumes without inventing a continuation loader wh
 
   await executeExistingResearch('research-1', null, { deps, runtime, env: {} });
 });
+
+test('application adapters can disable discovery process-signal ownership without changing workflow orchestration', async () => {
+  const loaded = { plan: { effectiveConfigFingerprint: 'typed-config' } } as LoadedOperatorResearchConfig;
+  let observedPolicy: boolean | undefined;
+  const deps: ResearchRunDeps = {
+    ...DEFAULT_RESEARCH_RUN_DEPS,
+    runDiscovery: async (request) => {
+      observedPolicy = request.manageProcessSignals;
+      return {
+        exitCode: 0,
+        researchId: 'research-1',
+        runId: 'run-1',
+        researchDirectory: '/research',
+        discoveryDirectory: '/research/discovery',
+        state: 'completed',
+      };
+    },
+  };
+  const runtime: ResearchControlRuntime = {
+    runFromConfig: async (_path, _outputRoot, receivedDeps) => {
+      assert.ok(receivedDeps);
+      await receivedDeps.runDiscovery(
+        { input: { kind: 'resume', runId: 'run-1' } },
+        receivedDeps.cliDeps,
+        {},
+      );
+      return EXECUTION;
+    },
+    runFromExisting: async () => EXECUTION,
+  };
+
+  await executeNewResearch(loaded, {
+    deps,
+    runtime,
+    env: {},
+    manageProcessSignals: false,
+  });
+
+  assert.equal(observedPolicy, false);
+});
