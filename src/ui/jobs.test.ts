@@ -51,11 +51,36 @@ test('job registry exposes running work, blocks a second execution, then publish
   resolveTask(EXECUTION);
   await flushPromises();
 
-  const completed = registry.get('job-1');
-  assert.equal(completed?.state, 'completed');
-  assert.equal(completed?.researchId, 'research-1');
-  assert.equal(completed?.result?.workflowState, 'completed');
+  const finished = registry.get('job-1');
+  assert.equal(finished?.state, 'finished');
+  assert.equal(finished?.researchId, 'research-1');
+  assert.equal(finished?.result?.workflowState, 'completed');
   assert.equal(registry.active(), null);
+});
+
+test('resolved non-zero workflow execution is a finished job, not a fabricated job failure', async () => {
+  const blocked: ResearchRunExecution = {
+    exitCode: 2,
+    result: {
+      ...EXECUTION.result,
+      exitCode: 2,
+      workflowState: 'blocked',
+      stopPoint: 'discovery',
+    },
+  };
+  const registry = new UiJobRegistry({
+    createId: () => 'job-blocked',
+    now: () => new Date('2026-09-08T10:00:00.000Z'),
+  });
+
+  registry.start('resume_research', 'research-1', async () => blocked);
+  await flushPromises();
+
+  const finished = registry.get('job-blocked');
+  assert.equal(finished?.state, 'finished');
+  assert.equal(finished?.result?.exitCode, 2);
+  assert.equal(finished?.result?.workflowState, 'blocked');
+  assert.equal(finished?.error, null);
 });
 
 test('job registry records thrown ResearchError without converting it into durable runner state', async () => {
