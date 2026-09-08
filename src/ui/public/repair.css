@@ -1,0 +1,49 @@
+.repair-action-shell {
+  width: min(1180px, calc(100% - 64px));
+  margin: 30px auto -18px;
+}
+
+.repair-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid #5a4728;
+  border-radius: 12px;
+  background: #1d1811;
+}
+
+.repair-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.repair-copy strong {
+  color: #f0d6a0;
+  font-size: 14px;
+}
+
+.repair-copy span {
+  color: #b9a47c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.repair-eyebrow {
+  margin-bottom: 0;
+  color: #ad9363;
+}
+
+.repair-button {
+  flex: 0 0 auto;
+  border-color: #8b6c35;
+  background: #d8b66f;
+  color: #17120b;
+}
+
+.repair-button:hover:not(:disabled) {
+  border-color: #a38244;
+  background: #e3c27a;
+}
