@@ -30,18 +30,15 @@ async function route() {
     await renderSystem(epoch);
     return;
   }
-
   if (hash === '#/new') {
     await renderNewResearch(epoch);
     return;
   }
-
   if (hash.startsWith('#/research/')) {
     const id = decodeURIComponent(hash.slice('#/research/'.length));
     await renderResearchDetail(id, epoch);
     return;
   }
-
   if (hash !== '#/researches') window.location.hash = '#/researches';
   await renderResearchList(epoch);
 }
@@ -80,7 +77,6 @@ async function renderResearchList(epoch) {
       if (epoch === routeEpoch) renderError(list, error);
     }
   };
-
   search.addEventListener('input', () => {
     if (timer !== null) window.clearTimeout(timer);
     timer = window.setTimeout(() => void load(), 160);
@@ -103,25 +99,21 @@ function renderResearchRows(container, researches) {
 
   for (const research of researches) {
     const row = node('div', { className: 'research-row' });
-
     const identity = node('div');
     identity.append(
       node('div', { className: 'research-title', text: research.label }),
       node('div', { className: 'research-meta', text: research.researchId }),
     );
-
     const current = cell('Current run', research.currentRunId);
     const batches = cell('Batches', String(research.batchCount));
     const updated = cell('Updated', research.updatedAt ? formatDate(research.updatedAt) : 'legacy');
     updated.classList.add('updated-cell');
-
     const actions = node('div');
     const open = node('button', { className: 'button compact', type: 'button', text: 'Open' });
     open.addEventListener('click', () => {
       window.location.hash = `#/research/${encodeURIComponent(research.researchId)}`;
     });
     actions.append(open);
-
     row.append(identity, current, batches, updated, actions);
     container.append(row);
   }
@@ -177,14 +169,12 @@ async function renderNewResearch(epoch) {
   const startButton = node('button', { className: 'button primary', type: 'button', text: 'Start research', disabled: true });
   const formState = node('div', { className: 'form-state muted', text: 'Preview the current draft before starting.' });
   actions.append(previewButton, startButton, formState);
-
   form.append(label.wrapper, preset.wrapper, keywords.wrapper, advanced, actions);
   renderPreviewPlaceholder(previewHolder);
 
   let previewKey = null;
   let busy = false;
   const inputs = [label.control, preset.control, keywords.control, market.control, googleHl.control, googleGl.control];
-
   const setBusy = (value) => {
     busy = value;
     for (const control of inputs) control.disabled = value;
@@ -192,7 +182,6 @@ async function renderNewResearch(epoch) {
     startButton.disabled = value || previewKey === null;
     form.classList.toggle('is-busy', value);
   };
-
   const invalidatePreview = () => {
     if (busy) return;
     previewKey = null;
@@ -371,6 +360,7 @@ async function renderResearchDetail(researchId, epoch) {
     );
     header.append(titleBlock);
 
+    const operationHolder = node('section', { className: `panel create-panel job-panel ${activeForThisResearch ? '' : 'hidden'}`.trim() });
     const continueInfo = continuableAction(status, operatorConfig);
     if (continueInfo) {
       const continueButton = node('button', {
@@ -406,32 +396,27 @@ async function renderResearchDetail(researchId, epoch) {
     ids.append(idPill('researchId', status.researchId));
     ids.append(idPill('currentRunId', status.discovery.runId));
     if (status.currentEnrichmentId) ids.append(idPill('enrichmentId', status.currentEnrichmentId));
-    app.append(ids, spacer(18));
-
-    const operationHolder = node('section', { className: `panel create-panel job-panel ${activeForThisResearch ? '' : 'hidden'}`.trim() });
-    app.append(operationHolder);
-    if (activeForThisResearch) {
-      await pollJob(activeForThisResearch.jobId, operationHolder, epoch, {
-        onTerminal: async () => {
-          if (epoch === routeEpoch) await renderResearchDetail(status.researchId, epoch);
-        },
-      });
-      if (epoch !== routeEpoch) return;
-    }
+    app.append(ids, spacer(18), operationHolder);
 
     const grid = node('div', { className: 'grid' });
     const left = node('div', { className: 'stack' });
     const right = node('div', { className: 'stack' });
-
     left.append(renderPipeline(status));
     left.append(renderDiscovery(status));
     left.append(renderBatches(container, status));
     right.append(renderNextAction(status));
     right.append(renderResearchFacts(status, container, operatorConfig));
     right.append(renderConfig(operatorConfig));
-
     grid.append(left, right);
     app.append(grid);
+
+    if (activeForThisResearch) {
+      void pollJob(activeForThisResearch.jobId, operationHolder, epoch, {
+        onTerminal: async () => {
+          if (epoch === routeEpoch) await renderResearchDetail(status.researchId, epoch);
+        },
+      });
+    }
   } catch (error) {
     if (epoch !== routeEpoch) return;
     app.replaceChildren();
@@ -449,7 +434,7 @@ function continuableAction(status, operatorConfig) {
     run_enrichment: 'Run enrichment',
     resume_enrichment: 'Resume enrichment',
     run_finalization: 'Continue finalization',
-    publish_library: 'Publish library',
+    publish_library: 'Continue library step',
   };
   return { code: status.nextAction.code, label: labels[status.nextAction.code] ?? 'Continue research' };
 }
@@ -514,7 +499,7 @@ function renderJobSnapshot(container, job, detail) {
     const live = node('div', { className: 'job-live' });
     live.append(
       kvRow('Discovery', displayState(status.discovery?.state)),
-      kvRow('Current stage', job.result?.stopPoint ? humanize(job.result.stopPoint) : humanize(status.nextAction?.code ?? 'running')),
+      kvRow('Next durable action', humanize(status.nextAction?.code ?? 'unknown')),
     );
     if (counts) {
       live.append(kvRow('Keywords', `${counts.completed + counts.partial + counts.failed}/${counts.total} terminal · ${counts.pending} pending`));
@@ -543,7 +528,6 @@ function renderJobSnapshot(container, job, detail) {
 function renderPipeline(status) {
   const section = panelSection('Pipeline', 'Current durable stage projection.');
   const pipeline = node('div', { className: 'pipeline' });
-
   pipeline.append(
     pipelineStep('Discovery', displayState(status.discovery.state), discoveryClass(status.discovery.state)),
     pipelineStep(
@@ -571,7 +555,6 @@ function renderDiscovery(status) {
     metric(counts.repairable, 'Repairable'),
   );
   section.append(metrics);
-
   if (status.discovery.qualityWarnings?.length) {
     const details = node('details');
     const summary = node('summary', { text: `${status.discovery.qualityWarnings.length} quality warning(s)` });
@@ -604,7 +587,6 @@ function renderBatches(container, status) {
     section.append(node('div', { className: 'muted small', text: 'No managed research container is available for this historical layout.' }));
     return section;
   }
-
   const timeline = node('div', { className: 'timeline' });
   for (const batch of container.batches) {
     const item = node('div', { className: 'timeline-item' });
@@ -651,7 +633,6 @@ function renderConfig(operatorConfig) {
     section.append(node('div', { className: 'muted small', text: 'No persisted OperatorConfig provenance is available.' }));
     return section;
   }
-
   const semantics = operatorConfig.semantics;
   const kv = node('div', { className: 'kv' });
   kv.append(
@@ -663,7 +644,6 @@ function renderConfig(operatorConfig) {
     kvRow('Config fingerprint', operatorConfig.effectiveConfigFingerprint),
   );
   section.append(kv);
-
   const details = node('details');
   details.append(
     node('summary', { text: 'Raw immutable provenance' }),
@@ -682,7 +662,6 @@ async function renderSystem(epoch) {
     if (epoch !== routeEpoch) return;
     const outputs = payload.outputs;
     const grid = node('div', { className: 'system-grid' });
-
     const storage = node('div', { className: 'panel system-card' });
     storage.append(
       node('h2', { text: 'Canonical storage' }),
@@ -693,7 +672,6 @@ async function renderSystem(epoch) {
       kvRow('Configured by', outputs.configuredBy),
       kvRow('Researches namespace', outputs.researchesDirectoryExists ? 'present' : 'not initialized'),
     );
-
     const policy = node('div', { className: 'panel system-card' });
     policy.append(
       node('h2', { text: 'Output policy' }),
@@ -704,7 +682,6 @@ async function renderSystem(epoch) {
       kvRow('Library', outputs.layout.researchLibrary),
       kvRow('First-party search', outputs.layout.firstPartySearch),
     );
-
     const legacy = node('div', { className: 'panel system-card' });
     legacy.append(node('h2', { text: 'Repo-local legacy outputs' }));
     if (outputs.repoLocalLegacyDirectories?.length) {
@@ -713,7 +690,6 @@ async function renderSystem(epoch) {
     } else {
       legacy.append(badge('None detected', 'good'));
     }
-
     grid.append(storage, policy, legacy);
     holder.replaceWith(grid);
   } catch (error) {
@@ -788,40 +764,32 @@ function idPill(label, value) {
 function badge(text, tone = '') {
   return node('span', { className: `badge ${tone}`.trim(), text });
 }
-
 function spacer(height) {
   return node('div', { style: `height:${height}px` });
 }
-
 function currentEnrichment(status) {
   return status.enrichments?.find((item) => item.enrichmentId === status.currentEnrichmentId) ?? null;
 }
-
 function discoveryClass(state) {
   if (state === 'completed') return 'done';
   if (state === 'completed_with_errors' || state === 'paused' || state === 'failed') return 'attention';
   return '';
 }
-
 function genericStageClass(state) {
   if (state === 'completed' || state === 'published') return 'done';
   if (state === 'paused' || state === 'failed' || state === 'awaiting_decisions') return 'attention';
   return '';
 }
-
 function summaryLine(status, container) {
   const batches = container ? `${container.batches.length} batch${container.batches.length === 1 ? '' : 'es'}` : 'historical run';
   return `${batches} · current discovery ${displayState(status.discovery.state)}`;
 }
-
 function displayState(value) {
   return humanize(String(value ?? 'unknown'));
 }
-
 function humanize(value) {
   return String(value).replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
-
 function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -831,18 +799,13 @@ function formatDate(value) {
 async function api(path) {
   return requestJson(path, { headers: { Accept: 'application/json' } });
 }
-
 async function apiMutation(path, value) {
   return requestJson(path, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify(value),
   });
 }
-
 async function requestJson(path, options) {
   const response = await fetch(path, options);
   let payload = null;
@@ -866,7 +829,6 @@ function renderError(container, error) {
   state.append(node('strong', { text: 'Could not load data' }), node('div', { text: error instanceof Error ? error.message : String(error) }));
   container.append(state);
 }
-
 function renderPanelError(container, title, error) {
   container.classList.remove('hidden');
   container.replaceChildren(
@@ -874,11 +836,9 @@ function renderPanelError(container, title, error) {
     node('div', { className: 'plan-note error-note', text: `${error?.code ? `${error.code}: ` : ''}${error instanceof Error ? error.message : String(error)}` }),
   );
 }
-
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-
 function node(tag, options = {}) {
   const element = document.createElement(tag);
   if (options.className) element.className = options.className;
