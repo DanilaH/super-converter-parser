@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import type { ResearchDiscoveryRepairResultV1 } from '../application/researchRepair.js';
 import type {
   ResearchRunExecution,
   ResearchRunMachineResultV1,
 } from '../application/researchWorkflow.js';
 import { ResearchError } from '../shared/errors.js';
 
-export type UiJobKind = 'create_research' | 'resume_research';
+export type UiJobKind = 'create_research' | 'resume_research' | 'repair_discovery';
 export type UiJobState = 'running' | 'finished' | 'failed';
 
 export type UiJobSnapshotV1 = {
@@ -18,6 +19,7 @@ export type UiJobSnapshotV1 = {
   startedAt: string;
   finishedAt: string | null;
   result: ResearchRunMachineResultV1 | null;
+  repairResult: ResearchDiscoveryRepairResultV1 | null;
   error: { code: string; message: string } | null;
 };
 
@@ -41,6 +43,8 @@ export type UiJobRegistryOptions = {
   retainFinished?: number;
 };
 
+type WorkflowJobKind = Exclude<UiJobKind, 'repair_discovery'>;
+
 export class UiJobRegistry {
   private readonly jobs = new Map<string, UiJobSnapshotV1>();
   private readonly now: () => Date;
@@ -58,30 +62,11 @@ export class UiJobRegistry {
   }
 
   start(
-    kind: UiJobKind,
+    kind: WorkflowJobKind,
     researchId: string | null,
     task: (control: UiJobControl) => Promise<ResearchRunExecution>,
   ): UiJobSnapshotV1 {
-    const active = this.activeJobId === null ? null : this.jobs.get(this.activeJobId) ?? null;
-    if (active?.state === 'running') throw new UiJobBusyError(snapshot(active));
-
-    this.trimFinished();
-    const startedAt = this.now().toISOString();
-    const job: UiJobSnapshotV1 = {
-      version: 1,
-      jobId: this.createId(),
-      kind,
-      state: 'running',
-      researchId,
-      createdAt: startedAt,
-      startedAt,
-      finishedAt: null,
-      result: null,
-      error: null,
-    };
-    this.jobs.set(job.jobId, job);
-    this.activeJobId = job.jobId;
-
+    const job = this.begin(kind, researchId);
     const control: UiJobControl = {
       setResearchId: (nextResearchId) => {
         const normalized = nextResearchId.trim();
@@ -95,20 +80,31 @@ export class UiJobRegistry {
     void Promise.resolve()
       .then(() => task(control))
       .then((execution) => {
-        job.state = 'finished';
         job.result = execution.result;
         job.researchId = execution.result.researchId ?? job.researchId;
-        job.finishedAt = this.now().toISOString();
-        if (this.activeJobId === job.jobId) this.activeJobId = null;
-        this.trimFinished();
+        this.finish(job);
       })
-      .catch((error: unknown) => {
-        job.state = 'failed';
-        job.error = errorSnapshot(error);
-        job.finishedAt = this.now().toISOString();
-        if (this.activeJobId === job.jobId) this.activeJobId = null;
-        this.trimFinished();
-      });
+      .catch((error: unknown) => this.fail(job, error));
+
+    return snapshot(job);
+  }
+
+  startRepair(
+    researchId: string,
+    task: () => Promise<ResearchDiscoveryRepairResultV1>,
+  ): UiJobSnapshotV1 {
+    const normalizedId = researchId.trim();
+    if (normalizedId === '') throw new ResearchError('INPUT_SCHEMA_ERROR', 'Repair job research id must not be empty.');
+    const job = this.begin('repair_discovery', normalizedId);
+
+    void Promise.resolve()
+      .then(task)
+      .then((result) => {
+        job.repairResult = { ...result };
+        job.researchId = result.researchId;
+        this.finish(job);
+      })
+      .catch((error: unknown) => this.fail(job, error));
 
     return snapshot(job);
   }
@@ -130,6 +126,45 @@ export class UiJobRegistry {
     return job ? snapshot(job) : null;
   }
 
+  private begin(kind: UiJobKind, researchId: string | null): UiJobSnapshotV1 {
+    const active = this.activeJobId === null ? null : this.jobs.get(this.activeJobId) ?? null;
+    if (active?.state === 'running') throw new UiJobBusyError(snapshot(active));
+
+    this.trimFinished();
+    const startedAt = this.now().toISOString();
+    const job: UiJobSnapshotV1 = {
+      version: 1,
+      jobId: this.createId(),
+      kind,
+      state: 'running',
+      researchId,
+      createdAt: startedAt,
+      startedAt,
+      finishedAt: null,
+      result: null,
+      repairResult: null,
+      error: null,
+    };
+    this.jobs.set(job.jobId, job);
+    this.activeJobId = job.jobId;
+    return job;
+  }
+
+  private finish(job: UiJobSnapshotV1): void {
+    job.state = 'finished';
+    job.finishedAt = this.now().toISOString();
+    if (this.activeJobId === job.jobId) this.activeJobId = null;
+    this.trimFinished();
+  }
+
+  private fail(job: UiJobSnapshotV1, error: unknown): void {
+    job.state = 'failed';
+    job.error = errorSnapshot(error);
+    job.finishedAt = this.now().toISOString();
+    if (this.activeJobId === job.jobId) this.activeJobId = null;
+    this.trimFinished();
+  }
+
   private trimFinished(): void {
     const finished = [...this.jobs.values()]
       .filter((job) => job.state !== 'running')
@@ -142,6 +177,7 @@ function snapshot(job: UiJobSnapshotV1): UiJobSnapshotV1 {
   return {
     ...job,
     result: job.result === null ? null : cloneResult(job.result),
+    repairResult: job.repairResult === null ? null : { ...job.repairResult },
     error: job.error === null ? null : { ...job.error },
   };
 }
