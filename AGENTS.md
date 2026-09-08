@@ -21,6 +21,7 @@ For **implemented/current behavior**, read in this order:
    - `RESEARCH_BATCHES.md`
    - `RESEARCH_LIBRARY.md`
    - `SEARCH_TRACTION.md`
+   - `OUTPUTS.md`
    - `FULL_RUNS.md`
 6. Code, schemas, tests, and current CLI help are the final implementation evidence when documentation is ambiguous.
 
@@ -57,7 +58,8 @@ The current runner includes:
 - config-first planning/execution through stable `researchId` continuation;
 - read-only `research:status`, `research:audit`, and immutable-generation `research:diff`;
 - explicit repair of failed or provably incomplete primary discovery checkpoints;
-- bounded first-party Google Search Console ZIP import into a separate immutable search-traction evidence store.
+- bounded first-party Google Search Console ZIP import into a separate immutable search-traction evidence store;
+- one canonical durable output root shared across agents/worktrees, with new research containers under its `researches/` namespace.
 
 Do not restart completed V2.1/V2.2/V2.3/config-first roadmap work merely because a historical plan still contains unchecked prose.
 
@@ -209,6 +211,33 @@ Key rules:
 - legacy specialist CLIs remain supported and should share the same underlying services/semantics where implemented.
 
 Do not resurrect the closed local GUI work unless the user explicitly asks for it.
+
+## Canonical output location
+
+`OUTPUTS.md` is authoritative for durable output placement.
+
+For ordinary work there is exactly one canonical Runner output root:
+
+```text
+RESEARCH_OUTPUT_ROOT (when configured once)
+        ↓
+<user-home>/super-converter-parser-output
+```
+
+New research containers are allocated only under `<canonical-root>/researches/`. Indexes, Research Library, and first-party Search Console evidence stay under the same canonical root.
+
+**Agents must not choose output paths.** In particular:
+
+- never invent per-task `runs/`, `enrichments/`, `output/`, `results/`, or similar worktree folders;
+- never set or rewrite `RESEARCH_OUTPUT_ROOT` merely for one task/agent/worktree;
+- never pass an ad-hoc `--output-root` to make a command convenient;
+- never enable `RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE` unless the user explicitly requests an intentional migration/test override;
+- use `npm run outputs:where` to discover/report the effective location instead of guessing it;
+- use stable `researchId` / persisted indexes rather than constructing paths by convention.
+
+Runtime enforces this: an `--output-root` different from the canonical root fails closed unless the explicit migration/test escape hatch is enabled.
+
+Existing indexed and supported legacy output locations remain readable. Do not move/delete them automatically.
 
 ## Locking and concurrency
 
