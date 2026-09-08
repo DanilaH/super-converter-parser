@@ -12,6 +12,10 @@ import { buildOutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { ResearchError } from '../shared/errors.js';
 import { listResearchCatalog } from '../application/researchCatalog.js';
 import { inspectResearchConsole } from '../application/researchConsole.js';
+import {
+  executeResearchDecisionSelection,
+  inspectResearchDecisions,
+} from '../application/researchDecisions.js';
 import { renameResearchLabel } from '../application/researchMetadata.js';
 import { repairResearchDiscovery } from '../application/researchRepair.js';
 import {
@@ -59,6 +63,8 @@ export type UiServerDeps = {
   executeResearchShortlistSelection: typeof executeResearchShortlistSelection;
   inspectResearchFinalistScope: typeof inspectResearchFinalistScope;
   executeResearchFinalistScopeSelection: typeof executeResearchFinalistScopeSelection;
+  inspectResearchDecisions: typeof inspectResearchDecisions;
+  executeResearchDecisionSelection: typeof executeResearchDecisionSelection;
   previewUiResearchDraft: typeof previewUiResearchDraft;
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
@@ -78,6 +84,8 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   executeResearchShortlistSelection,
   inspectResearchFinalistScope,
   executeResearchFinalistScopeSelection,
+  inspectResearchDecisions,
+  executeResearchDecisionSelection,
   previewUiResearchDraft,
   executeUiResearchDraft,
   executeUiResearchResume,
@@ -215,6 +223,17 @@ async function handleGet(
     return;
   }
 
+  const decisionsMatch = /^\/api\/researches\/([^/]+)\/decisions$/.exec(requestUrl.pathname);
+  if (decisionsMatch) {
+    const researchId = decodeRouteId(decisionsMatch[1] ?? '', 'research');
+    const decisions = await context.deps.inspectResearchDecisions(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    sendJson(response, 200, { version: 1, decisions });
+    return;
+  }
+
   if (requestUrl.pathname.startsWith('/api/researches/')) {
     const researchId = decodeRouteId(requestUrl.pathname.slice('/api/researches/'.length), 'research');
     const detail = await context.deps.inspectResearchConsole(researchId, {
@@ -298,6 +317,22 @@ async function handlePost(
         env: context.env,
       }));
     sendJson(response, 202, { version: 1, job, finalistScope: gate });
+    return;
+  }
+
+  const decisionsMatch = /^\/api\/researches\/([^/]+)\/decisions$/.exec(requestUrl.pathname);
+  if (decisionsMatch) {
+    const researchId = decodeRouteId(decisionsMatch[1] ?? '', 'research');
+    const gate = await context.deps.inspectResearchDecisions(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    const job = context.jobs.start('decisions_research', gate.researchId, () =>
+      context.deps.executeResearchDecisionSelection(gate.researchId, body, {
+        outputRoot: context.outputRoot,
+        env: context.env,
+      }));
+    sendJson(response, 202, { version: 1, job, decisions: gate });
     return;
   }
 
@@ -395,12 +430,14 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/shortlist.js', 'shortlist.js', 'text/javascript; charset=utf-8'],
     ['/finalists.js', 'finalists.js', 'text/javascript; charset=utf-8'],
+    ['/decisions.js', 'decisions.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
     ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
     ['/shortlist.css', 'shortlist.css', 'text/css; charset=utf-8'],
     ['/finalists.css', 'finalists.css', 'text/css; charset=utf-8'],
+    ['/decisions.css', 'decisions.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
     route,
