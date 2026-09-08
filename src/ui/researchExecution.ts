@@ -7,7 +7,11 @@ import {
   executeNewResearch,
   type ResearchControlOptions,
 } from '../application/researchControl.js';
-import type { ResearchRunExecution } from '../application/researchWorkflow.js';
+import {
+  DEFAULT_RESEARCH_RUN_DEPS,
+  type ResearchRunDeps,
+  type ResearchRunExecution,
+} from '../application/researchWorkflow.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import type { OperatorResearchConfigSourceV1 } from '../operatorConfig/contracts.js';
 import { ResearchError } from '../shared/errors.js';
@@ -49,6 +53,12 @@ export type UiResearchPlanPreviewV1 = {
   };
 };
 
+export type UiResearchInitializedContext = {
+  researchId: string;
+  researchDirectory: string;
+  discoveryDirectory: string;
+};
+
 export type UiResearchExecutionDeps = {
   resolveOperatorResearchConfigInput: typeof resolveOperatorResearchConfigInput;
   executeNewResearch: typeof executeNewResearch;
@@ -61,7 +71,9 @@ export const DEFAULT_UI_RESEARCH_EXECUTION_DEPS: UiResearchExecutionDeps = {
   executeExistingResearch,
 };
 
-type UiResearchExecutionOptions = Omit<ResearchControlOptions, 'manageProcessSignals'>;
+type UiResearchExecutionOptions = Omit<ResearchControlOptions, 'manageProcessSignals'> & {
+  onResearchInitialized?: ((context: UiResearchInitializedContext) => void | Promise<void>) | null;
+};
 
 export async function previewUiResearchDraft(
   value: unknown,
@@ -123,8 +135,14 @@ export async function executeUiResearchDraft(
       buildOperatorSource(draft),
       join(workspace, 'operator-config.json'),
     );
+    const { onResearchInitialized, ...controlOptions } = options;
+    const baseDeps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
+    const controlDeps = onResearchInitialized
+      ? withResearchInitializedCallback(baseDeps, onResearchInitialized)
+      : options.deps;
     return deps.executeNewResearch(loaded, {
-      ...options,
+      ...controlOptions,
+      ...(controlDeps === undefined ? {} : { deps: controlDeps }),
       manageProcessSignals: false,
     });
   } finally {
@@ -141,8 +159,9 @@ export async function executeUiResearchResume(
   if (normalizedId === '') {
     throw new ResearchError('INPUT_SCHEMA_ERROR', 'Research id is required for resume.');
   }
+  const { onResearchInitialized: _unused, ...controlOptions } = options;
   return deps.executeExistingResearch(normalizedId, null, {
-    ...options,
+    ...controlOptions,
     manageProcessSignals: false,
   });
 }
@@ -176,6 +195,30 @@ export function validateUiCreateResearchDraft(value: unknown): UiCreateResearchD
   if (googleHl !== undefined) result.googleHl = googleHl;
   if (googleGl !== undefined) result.googleGl = googleGl;
   return result;
+}
+
+function withResearchInitializedCallback(
+  deps: ResearchRunDeps,
+  callback: (context: UiResearchInitializedContext) => void | Promise<void>,
+): ResearchRunDeps {
+  return {
+    ...deps,
+    runDiscovery: (request, cliDeps, env) => deps.runDiscovery(
+      {
+        ...request,
+        onFreshResearchInitialized: async (context) => {
+          await request.onFreshResearchInitialized?.(context);
+          await callback({
+            researchId: context.runId,
+            researchDirectory: context.researchDirectory,
+            discoveryDirectory: context.discoveryDirectory,
+          });
+        },
+      },
+      cliDeps,
+      env,
+    ),
+  };
 }
 
 function buildOperatorSource(draft: UiCreateResearchDraftV1): OperatorResearchConfigSourceV1 {
