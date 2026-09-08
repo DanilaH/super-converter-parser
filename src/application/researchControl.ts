@@ -33,6 +33,11 @@ export type ResearchControlOptions = {
   signal?: CancellationSignal;
   deps?: ResearchRunDeps;
   runtime?: ResearchControlRuntime;
+  /**
+   * CLI adapters own process-level signal handling by default. Long-lived hosts
+   * such as the local UI server can opt out without changing discovery semantics.
+   */
+  manageProcessSignals?: boolean;
 };
 
 /** Execute a new research from an already validated/resolved config object. */
@@ -42,7 +47,8 @@ export async function executeNewResearch(
 ): Promise<ResearchRunExecution> {
   const env = options.env ?? process.env;
   const signal = options.signal ?? { cancelled: false };
-  const deps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
+  const baseDeps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
+  const deps = withDiscoverySignalPolicy(baseDeps, options.manageProcessSignals);
   const runtime = options.runtime ?? DEFAULT_RESEARCH_CONTROL_RUNTIME;
   const injectedDeps: ResearchRunDeps = {
     ...deps,
@@ -65,7 +71,8 @@ export async function executeExistingResearch(
 ): Promise<ResearchRunExecution> {
   const env = options.env ?? process.env;
   const signal = options.signal ?? { cancelled: false };
-  const deps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
+  const baseDeps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
+  const deps = withDiscoverySignalPolicy(baseDeps, options.manageProcessSignals);
   const runtime = options.runtime ?? DEFAULT_RESEARCH_CONTROL_RUNTIME;
   const injectedDeps: ResearchRunDeps = continuation === null
     ? deps
@@ -92,4 +99,19 @@ export async function inspectResearch(
   const deps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
   const outputRoot = resolveOutputRoot(options.outputRoot ?? null, env);
   return deps.buildStatus({ outputRoot, targetRunId: researchId });
+}
+
+function withDiscoverySignalPolicy(
+  deps: ResearchRunDeps,
+  manageProcessSignals: boolean | undefined,
+): ResearchRunDeps {
+  if (manageProcessSignals === undefined) return deps;
+  return {
+    ...deps,
+    runDiscovery: (request, cliDeps, env) => deps.runDiscovery(
+      { ...request, manageProcessSignals },
+      cliDeps,
+      env,
+    ),
+  };
 }
