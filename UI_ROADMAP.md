@@ -80,7 +80,7 @@ Non-CLI adapters can reuse the canonical workflow without spawning CLI processes
 - System page with canonical output-root diagnostics;
 - historical indexed runs without a durable research container remain independent instead of receiving invented lineage.
 
-A React/Vite dependency surface was deliberately not required for these read-only screens. Re-evaluate the browser framework only when actual UI interaction complexity justifies it.
+A React/Vite dependency surface was deliberately not required for these screens. Re-evaluate the browser framework only when actual UI interaction complexity justifies it.
 
 Attention/running/completed list filters remain deferred until a cheap truthful catalog-level state projection exists. Do not obtain them by running full deep status for every row and do not infer them from timestamps or directory names.
 
@@ -96,11 +96,13 @@ The operator can browse, search, open, and understand existing researches withou
 
 ### U2.1 — safe execution boundary
 
-Current implementation slice:
+**Status:** complete; merged in PR #166.
+
+Implemented scope:
 
 - require same-origin loopback `Origin` validation for mutation endpoints;
 - require bounded JSON POST bodies for mutations;
-- parameterize inherited discovery process-signal ownership so the long-lived UI host does not register per-job CLI SIGINT handlers;
+- parameterize inherited discovery/enrichment process-signal ownership so the long-lived UI host does not register per-job CLI signal handlers while CLI defaults remain unchanged;
 - preview a new-research draft through existing OperatorConfig/preset contracts;
 - accept pasted seed keywords through a temporary workspace and the normal seed loader rather than inventing a UI input format downstream;
 - execute new research and resume existing configured research through the exact application workflow;
@@ -108,33 +110,36 @@ Current implementation slice:
 - admit one UI execution at a time while existing Runner locks remain authoritative;
 - lose job convenience state safely on server restart while durable research state remains recoverable from canonical status/index/SQLite truth.
 
-Explicit non-goals for U2.1:
-
-- no browser create/resume form yet;
-- no repair action yet;
-- no durable job database, queue, daemon, or background-service state;
-- no config semantics beyond existing built-in presets plus explicit research locale overrides;
-- no human continuation actions.
-
 ### U2.2 — operator create/resume screens
 
-After U2.1 is merged and proven:
+**Status:** complete in PR #167.
 
-- New Research form backed by the U2.1 draft contract;
-- preset selection with plan preview before execution;
-- pasted seed input and truthful input-line vs normalized-unique counts;
-- start one research job and poll its ephemeral state;
-- refresh canonical research detail as soon as a durable `researchId` exists;
-- expose resume only where the existing application workflow/status makes it meaningful;
-- recover after browser/server restart from durable research status rather than depending on remembered job state.
+Implemented scope:
+
+- New Research route/form backed by the U2.1 draft contract;
+- built-in preset selection plus optional research locale overrides, without new configuration semantics;
+- mandatory plan preview before execution and invalidation after every draft change;
+- pasted seed input with truthful supplied-line versus discovery-normalized-unique counts;
+- resolved workflow/stage/preset/discovery/enrichment/external-work/human-stop preview;
+- start one in-process research job and poll bounded ephemeral job state;
+- surface the durable research identity during long-running creation while canonical detail is polled independently;
+- keep ordinary Research Detail panels usable during an active job rather than blocking the page behind job completion;
+- expose ordinary config-first continuation only from the canonical executable `nextAction` projection;
+- keep repair and human-input gates explicitly unavailable rather than reinterpreting them as ordinary resume;
+- recover after browser/server restart from durable research status rather than depending on remembered job state;
+- regression-check the browser preset selector against canonical `configs/presets/*.json` files.
+
+The dependency-free browser shell remains sufficient for this scope; adding React/Vite here would add maintenance surface without solving a demonstrated problem.
 
 ### U2.3 — repair
+
+**Status:** next.
 
 Repair remains a separate bounded capability because discovery `retryFailed` is not an OperatorContinuation action and has distinct mutation semantics. Expose it only where current Runner rules mark checkpoints repairable; do not reinterpret ordinary resume as repair.
 
 ### Result
 
-When all U2 slices close, new and interrupted research can be operated without CLI commands while repair remains explicit rather than implicit.
+When U2.3 closes, new and interrupted research plus explicit discovery repair can be operated without CLI commands while repair remains explicit rather than implicit.
 
 ---
 
