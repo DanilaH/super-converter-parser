@@ -64,7 +64,7 @@ test('create endpoint exposes durable researchId while the UI job is still runni
     inspectResearchConsole: async () => { throw new Error('detail not expected'); },
     previewUiResearchDraft,
     executeUiResearchDraft: async (_value, options) => {
-      await options.onResearchInitialized?.({
+      await options?.onResearchInitialized?.({
         researchId: 'research-live',
         researchDirectory: '/output/research-live',
         discoveryDirectory: '/output/research-live/discovery',
