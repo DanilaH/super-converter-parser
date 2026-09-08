@@ -117,3 +117,73 @@ test('executeExistingResearch resumes without inventing a continuation loader wh
 
   await executeExistingResearch('research-1', null, { deps, runtime, env: {} });
 });
+
+test('application adapters can disable discovery process-signal ownership without changing workflow orchestration', async () => {
+  const loaded = { plan: { effectiveConfigFingerprint: 'typed-config' } } as LoadedOperatorResearchConfig;
+  let observedPolicy: boolean | undefined;
+  const deps: ResearchRunDeps = {
+    ...DEFAULT_RESEARCH_RUN_DEPS,
+    runDiscovery: async (request) => {
+      observedPolicy = request.manageProcessSignals;
+      return {
+        exitCode: 0,
+        researchId: 'research-1',
+        runId: 'run-1',
+        researchDirectory: '/research',
+        discoveryDirectory: '/research/discovery',
+        state: 'completed',
+      };
+    },
+  };
+  const runtime: ResearchControlRuntime = {
+    runFromConfig: async (_path, _outputRoot, receivedDeps) => {
+      assert.ok(receivedDeps);
+      await receivedDeps.runDiscovery(
+        { input: { kind: 'resume', runId: 'run-1' } },
+        receivedDeps.cliDeps,
+        {},
+      );
+      return EXECUTION;
+    },
+    runFromExisting: async () => EXECUTION,
+  };
+
+  await executeNewResearch(loaded, {
+    deps,
+    runtime,
+    env: {},
+    manageProcessSignals: false,
+  });
+
+  assert.equal(observedPolicy, false);
+});
+
+test('host cancellation policy preserves a live cancellation signal in both directions', async () => {
+  const loaded = { plan: { effectiveConfigFingerprint: 'typed-config' } } as LoadedOperatorResearchConfig;
+  const sourceSignal = { cancelled: false };
+  let observedPolicy: boolean | undefined;
+  const runtime: ResearchControlRuntime = {
+    runFromConfig: async (_path, _outputRoot, _deps, _env, signal) => {
+      const hostSignal = signal as typeof signal & { manageProcessSignals?: boolean };
+      observedPolicy = hostSignal.manageProcessSignals;
+      assert.equal(hostSignal.cancelled, false);
+      sourceSignal.cancelled = true;
+      assert.equal(hostSignal.cancelled, true);
+      hostSignal.cancelled = false;
+      assert.equal(sourceSignal.cancelled, false);
+      return EXECUTION;
+    },
+    runFromExisting: async () => EXECUTION,
+  };
+
+  await executeNewResearch(loaded, {
+    deps: BASE_DEPS,
+    runtime,
+    env: {},
+    signal: sourceSignal,
+    manageProcessSignals: false,
+  });
+
+  assert.equal(observedPolicy, false);
+  assert.equal(sourceSignal.cancelled, false);
+});

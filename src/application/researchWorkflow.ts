@@ -698,6 +698,9 @@ async function withEnrichmentCancellation<T>(
   signal: CancellationSignal,
   task: () => Promise<T>,
 ): Promise<T> {
+  const hostSignal = signal as CancellationSignal & { manageProcessSignals?: boolean };
+  if (hostSignal.manageProcessSignals === false) return task();
+
   let sigintCount = 0;
   const onSigint = (): void => {
     sigintCount += 1;

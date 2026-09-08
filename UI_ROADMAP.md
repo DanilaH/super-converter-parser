@@ -60,15 +60,13 @@ Make the existing Runner workflow callable safely by non-CLI adapters without du
 
 ### Result
 
-U1 can build a local server without spawning CLI processes, parsing stdout, inventing durable state, or cloning workflow logic.
-
-The moved workflow intentionally still retains the existing console output and process-level SIGINT/SIGTERM behavior used by the CLI. U1 is read-only and does not depend on that behavior. Before U2 runs long-lived work in-process from the local server, explicitly separate or parameterize process-signal ownership if needed; do not silently let a server adapter redefine cancellation semantics.
+Non-CLI adapters can reuse the canonical workflow without spawning CLI processes or inventing durable state.
 
 ---
 
 ## U1 — Read-only Research Console
 
-**Status:** complete in PR #165 pending merge.
+**Status:** complete; merged in PR #165.
 
 ### Implemented scope
 
@@ -80,12 +78,11 @@ The moved workflow intentionally still retains the existing console output and p
 - read-only current immutable OperatorConfig provenance;
 - full expensive status projection only for an opened research, never for every list row;
 - System page with canonical output-root diagnostics;
-- strict GET-only API in U1;
 - historical indexed runs without a durable research container remain independent instead of receiving invented lineage.
 
-A React/Vite dependency surface is deliberately not required for these read-only screens. Re-evaluate the browser framework before U2, when forms and longer-lived interaction become real complexity.
+A React/Vite dependency surface was deliberately not required for these read-only screens. Re-evaluate the browser framework only when actual UI interaction complexity justifies it.
 
-Attention/running/completed list filters are also deferred until a cheap truthful catalog-level state projection exists. Do not obtain them by running full deep status for every row and do not infer them from timestamps or directory names.
+Attention/running/completed list filters remain deferred until a cheap truthful catalog-level state projection exists. Do not obtain them by running full deep status for every row and do not infer them from timestamps or directory names.
 
 ### Result
 
@@ -95,22 +92,49 @@ The operator can browse, search, open, and understand existing researches withou
 
 ## U2 — Create, execute, resume, repair
 
-### Scope
+**Status:** active, delivered as bounded slices rather than one oversized mutation PR.
 
-- before adding mutations, require same-origin/Origin validation for write endpoints so an unrelated browser page cannot drive localhost research operations;
-- explicitly separate/parameterize process-signal ownership before long-lived server-side workflow execution if the inherited CLI signal policy would interfere with server jobs;
-- New Research form backed by existing OperatorConfig contracts/presets;
-- paste/upload research input;
-- plan preview before execution;
-- create/run from typed config;
-- in-process job registry for currently executing operations only;
-- durable status polling for progress/restart recovery;
-- resume configured discovery/enrichment/finalization through stable `researchId`;
-- expose existing explicit repair action only where current Runner rules mark checkpoints repairable.
+### U2.1 — safe execution boundary
+
+Current implementation slice:
+
+- require same-origin loopback `Origin` validation for mutation endpoints;
+- require bounded JSON POST bodies for mutations;
+- parameterize inherited discovery process-signal ownership so the long-lived UI host does not register per-job CLI SIGINT handlers;
+- preview a new-research draft through existing OperatorConfig/preset contracts;
+- accept pasted seed keywords through a temporary workspace and the normal seed loader rather than inventing a UI input format downstream;
+- execute new research and resume existing configured research through the exact application workflow;
+- keep an in-memory, bounded job registry for active/recent UI execution only;
+- admit one UI execution at a time while existing Runner locks remain authoritative;
+- lose job convenience state safely on server restart while durable research state remains recoverable from canonical status/index/SQLite truth.
+
+Explicit non-goals for U2.1:
+
+- no browser create/resume form yet;
+- no repair action yet;
+- no durable job database, queue, daemon, or background-service state;
+- no config semantics beyond existing built-in presets plus explicit research locale overrides;
+- no human continuation actions.
+
+### U2.2 — operator create/resume screens
+
+After U2.1 is merged and proven:
+
+- New Research form backed by the U2.1 draft contract;
+- preset selection with plan preview before execution;
+- pasted seed input and truthful input-line vs normalized-unique counts;
+- start one research job and poll its ephemeral state;
+- refresh canonical research detail as soon as a durable `researchId` exists;
+- expose resume only where the existing application workflow/status makes it meaningful;
+- recover after browser/server restart from durable research status rather than depending on remembered job state.
+
+### U2.3 — repair
+
+Repair remains a separate bounded capability because discovery `retryFailed` is not an OperatorContinuation action and has distinct mutation semantics. Expose it only where current Runner rules mark checkpoints repairable; do not reinterpret ordinary resume as repair.
 
 ### Result
 
-New and interrupted research can be operated without CLI commands.
+When all U2 slices close, new and interrupted research can be operated without CLI commands while repair remains explicit rather than implicit.
 
 ---
 

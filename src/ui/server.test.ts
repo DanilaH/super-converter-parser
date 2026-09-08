@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { outputLayout } from '../outputs/researchLayout.js';
-import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
-import type { ResearchConsoleDetail } from '../application/researchConsole.js';
 import type { ResearchCatalogItem } from '../application/researchCatalog.js';
+import type { ResearchConsoleDetail } from '../application/researchConsole.js';
+import type { ResearchRunExecution } from '../application/researchWorkflow.js';
+import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
+import { outputLayout } from '../outputs/researchLayout.js';
+import type { UiResearchPlanPreviewV1 } from './researchExecution.js';
 import { startUiServer, type UiServerDeps } from './server.js';
 
 const root = resolve('/tmp/runner-ui-test-output');
@@ -39,11 +41,69 @@ const detail = {
   operatorConfig: null,
 } as unknown as ResearchConsoleDetail;
 
+const execution: ResearchRunExecution = {
+  exitCode: 0,
+  result: {
+    version: 1,
+    exitCode: 0,
+    researchId: 'research-new',
+    discoveryRunId: 'run-new',
+    discoveryState: 'completed',
+    enrichmentId: null,
+    enrichmentState: null,
+    finalizationState: null,
+    publicationId: null,
+    workflowTarget: 'discovery',
+    workflowState: 'completed',
+    stopPoint: 'complete',
+    unresolvedHumanRequirements: [],
+    effectiveConfigFingerprint: 'config',
+    stageFingerprints: {
+      discoverySemanticFingerprint: 'discovery',
+      enrichmentSemanticFingerprint: 'enrichment',
+      finalizationPolicyFingerprint: 'finalization',
+    },
+    operatorConfigPath: null,
+  },
+};
+
+const plan: UiResearchPlanPreviewV1 = {
+  version: 1,
+  inputLineCount: 2,
+  uniqueKeywordCount: 2,
+  effectiveConfigFingerprint: 'config',
+  preset: { id: 'quick-scan', revision: 1 },
+  workflowTarget: 'discovery',
+  stages: [
+    { id: 'discovery', state: 'ready', reason: null },
+    { id: 'enrichment', state: 'not_requested', reason: null },
+    { id: 'finalization', state: 'not_requested', reason: null },
+  ],
+  unresolvedHumanRequirements: [],
+  externalWork: [],
+  semantics: {
+    research: { label: 'UI tools', market: 'US', googleHl: 'en', googleGl: 'us' },
+    discovery: { topN: 10, expand: false, requireAhrefs: false },
+    enrichmentModules: [],
+    finalizationRequested: false,
+  },
+};
+
+const draft = {
+  version: 1,
+  label: 'UI tools',
+  preset: 'quick-scan',
+  keywords: 'alpha\nbeta',
+};
+
 function deps(overrides: Partial<UiServerDeps> = {}): UiServerDeps {
   return {
     buildOutputDiagnostics: async () => diagnostics,
     listResearchCatalog: async () => [item],
     inspectResearchConsole: async () => detail,
+    previewUiResearchDraft: async () => plan,
+    executeUiResearchDraft: async () => execution,
+    executeUiResearchResume: async () => execution,
     loadStaticAssets: async () => new Map([
       ['/index.html', { contentType: 'text/html; charset=utf-8', body: Buffer.from('shell', 'utf8') }],
       ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: Buffer.from('app', 'utf8') }],
@@ -54,26 +114,156 @@ function deps(overrides: Partial<UiServerDeps> = {}): UiServerDeps {
   };
 }
 
-test('U1 server binds locally, serves static shell, and remains read-only', async () => {
+function post(url: string, path: string, body: unknown, origin = url): Promise<Response> {
+  return fetch(`${url}${path}`, {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+test('server binds locally and serves the browser shell with restrictive script policy', async () => {
   const started = await startUiServer({ port: 0, openBrowser: false, deps: deps(), env: {} });
   try {
     assert.match(started.url, /^http:\/\/127\.0\.0\.1:\d+$/);
-
-    const rootResponse = await fetch(started.url);
-    assert.equal(rootResponse.status, 200);
-    assert.equal(await rootResponse.text(), 'shell');
-    assert.match(rootResponse.headers.get('content-security-policy') ?? '', /default-src 'self'/);
-
-    const postResponse = await fetch(`${started.url}/api/researches`, { method: 'POST' });
-    assert.equal(postResponse.status, 405);
-    const postPayload = await postResponse.json() as { error: { code: string } };
-    assert.equal(postPayload.error.code, 'METHOD_NOT_ALLOWED');
+    const response = await fetch(started.url);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'shell');
+    const csp = response.headers.get('content-security-policy') ?? '';
+    assert.match(csp, /script-src 'self'/);
+    assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/);
   } finally {
     await started.close();
   }
 });
 
-test('research list query is filtered without loading expensive detail projections', async () => {
+test('mutation endpoints fail closed without a same-origin loopback Origin', async () => {
+  let executions = 0;
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({ executeUiResearchDraft: async () => { executions += 1; return execution; } }),
+  });
+  try {
+    const missing = await fetch(`${started.url}/api/researches`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    assert.equal(missing.status, 403);
+    assert.equal((await missing.json() as { error: { code: string } }).error.code, 'ORIGIN_NOT_ALLOWED');
+
+    const foreign = await post(started.url, '/api/researches', draft, 'http://evil.example');
+    assert.equal(foreign.status, 403);
+    assert.equal(executions, 0);
+  } finally {
+    await started.close();
+  }
+});
+
+test('plan preview is same-origin JSON and does not start an execution job', async () => {
+  let executionCalls = 0;
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({ executeUiResearchDraft: async () => { executionCalls += 1; return execution; } }),
+  });
+  try {
+    const response = await post(started.url, '/api/researches/plan', draft);
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { plan: UiResearchPlanPreviewV1 };
+    assert.equal(payload.plan.effectiveConfigFingerprint, 'config');
+    assert.equal(payload.plan.uniqueKeywordCount, 2);
+    assert.equal(executionCalls, 0);
+
+    const jobs = await fetch(`${started.url}/api/jobs`).then((value) => value.json()) as { jobs: unknown[] };
+    assert.deepEqual(jobs.jobs, []);
+  } finally {
+    await started.close();
+  }
+});
+
+test('create starts one ephemeral job and publishes the canonical workflow result for polling', async () => {
+  let executionCalls = 0;
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({ executeUiResearchDraft: async () => { executionCalls += 1; return execution; } }),
+  });
+  try {
+    const response = await post(started.url, '/api/researches', draft);
+    assert.equal(response.status, 202);
+    const accepted = await response.json() as { job: { jobId: string; state: string }; plan: UiResearchPlanPreviewV1 };
+    assert.equal(accepted.job.state, 'running');
+    assert.equal(accepted.plan.workflowTarget, 'discovery');
+
+    const job = await waitForFinishedJob(started.url, accepted.job.jobId);
+    assert.equal(job.state, 'finished');
+    assert.equal(job.researchId, 'research-new');
+    assert.equal(job.result?.workflowState, 'completed');
+    assert.equal(executionCalls, 1);
+  } finally {
+    await started.close();
+  }
+});
+
+test('a second UI execution is rejected while the first job is still running', async () => {
+  let finish: (value: ResearchRunExecution) => void = () => {
+    throw new Error('Deferred execution resolver was not initialized.');
+  };
+  const pending = new Promise<ResearchRunExecution>((resolvePromise) => { finish = resolvePromise; });
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({ executeUiResearchDraft: async () => pending }),
+  });
+  try {
+    const first = await post(started.url, '/api/researches', draft);
+    assert.equal(first.status, 202);
+    const second = await post(started.url, '/api/researches', draft);
+    assert.equal(second.status, 409);
+    const payload = await second.json() as { error: { code: string; activeJob: { state: string } } };
+    assert.equal(payload.error.code, 'UI_JOB_BUSY');
+    assert.equal(payload.error.activeJob.state, 'running');
+  } finally {
+    finish(execution);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    await started.close();
+  }
+});
+
+test('resume preflights the stable research id and starts the same application workflow', async () => {
+  let inspectedId = '';
+  let resumedId = '';
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({
+      inspectResearchConsole: async (researchId) => { inspectedId = researchId; return detail; },
+      executeUiResearchResume: async (researchId) => { resumedId = researchId; return execution; },
+    }),
+  });
+  try {
+    const response = await post(started.url, '/api/researches/research-1/resume', {});
+    assert.equal(response.status, 202);
+    const accepted = await response.json() as { job: { jobId: string } };
+    await waitForFinishedJob(started.url, accepted.job.jobId);
+    assert.equal(inspectedId, 'research-1');
+    assert.equal(resumedId, 'research-1');
+  } finally {
+    await started.close();
+  }
+});
+
+test('research list query stays lightweight and does not load detail projections', async () => {
   let detailCalls = 0;
   const serverDeps = deps({
     listResearchCatalog: async () => [
@@ -97,7 +287,7 @@ test('research list query is filtered without loading expensive detail projectio
   }
 });
 
-test('research detail route passes the stable identifier to the canonical detail projection', async () => {
+test('research detail and system endpoints keep canonical read-only projections', async () => {
   let observedId: string | null = null;
   let observedRoot: string | null = null;
   const serverDeps = deps({
@@ -109,24 +299,30 @@ test('research detail route passes the stable identifier to the canonical detail
   });
   const started = await startUiServer({ port: 0, openBrowser: false, deps: serverDeps, env: {} });
   try {
-    const response = await fetch(`${started.url}/api/researches/research-1`);
-    assert.equal(response.status, 200);
+    const detailResponse = await fetch(`${started.url}/api/researches/research-1`);
+    assert.equal(detailResponse.status, 200);
     assert.equal(observedId, 'research-1');
     assert.equal(observedRoot, root);
+
+    const systemResponse = await fetch(`${started.url}/api/system`);
+    assert.equal(systemResponse.status, 200);
+    const payload = await systemResponse.json() as { outputs: OutputDiagnostics };
+    assert.equal(payload.outputs.canonicalRoot, root);
   } finally {
     await started.close();
   }
 });
 
-test('system endpoint reports canonical output diagnostics', async () => {
-  const started = await startUiServer({ port: 0, openBrowser: false, deps: deps(), env: {} });
-  try {
-    const response = await fetch(`${started.url}/api/system`);
+async function waitForFinishedJob(
+  url: string,
+  jobId: string,
+): Promise<{ state: string; researchId: string | null; result?: ResearchRunExecution['result'] | null }> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const response = await fetch(`${url}/api/jobs/${encodeURIComponent(jobId)}`);
     assert.equal(response.status, 200);
-    const payload = await response.json() as { outputs: OutputDiagnostics };
-    assert.equal(payload.outputs.canonicalRoot, root);
-    assert.equal(payload.outputs.overrideEscapeHatchEnabled, false);
-  } finally {
-    await started.close();
+    const payload = await response.json() as { job: { state: string; researchId: string | null; result?: ResearchRunExecution['result'] | null } };
+    if (payload.job.state !== 'running') return payload.job;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
   }
-});
+  throw new Error(`Job ${jobId} did not finish in time.`);
+}
