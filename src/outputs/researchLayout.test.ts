@@ -9,6 +9,7 @@ import {
   allocateEnrichmentDirectory,
   allocateResearchLocation,
   archiveResearchDirectory,
+  outputLayout,
   researchSlug,
   resolveOutputRoot,
   resolveRunLocation,
@@ -31,22 +32,66 @@ test('researchSlug produces short human-readable ASCII names', () => {
   assert.ok(researchSlug('a '.repeat(100)).length <= 40);
 });
 
-test('resolveOutputRoot priority is CLI, env, then home fallback', () => {
-  const cliRoot = join(tmpdir(), 'output-root-cli');
+test('resolveOutputRoot uses one canonical root and rejects ad-hoc CLI roots by default', () => {
   const envRoot = join(tmpdir(), 'output-root-env');
+  const otherRoot = join(tmpdir(), 'output-root-other');
   const userHome = join(tmpdir(), 'output-root-home');
 
-  assert.equal(resolveOutputRoot(cliRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), cliRoot);
   assert.equal(resolveOutputRoot(null, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), envRoot);
+  assert.equal(resolveOutputRoot(envRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome), envRoot);
   assert.equal(resolveOutputRoot(null, {}, userHome), join(userHome, 'super-converter-parser-output'));
+  assert.throws(
+    () => resolveOutputRoot(otherRoot, { RESEARCH_OUTPUT_ROOT: envRoot }, userHome),
+    (error: unknown) => error instanceof ResearchError
+      && error.code === 'INPUT_SCHEMA_ERROR'
+      && /Ad-hoc --output-root is disabled/.test(error.message),
+  );
 });
 
-test('research and enrichment directories are human-readable and collision-safe', async () => {
+test('resolveOutputRoot allows an explicit migration/test override only when enabled', () => {
+  const envRoot = join(tmpdir(), 'output-root-env');
+  const overrideRoot = join(tmpdir(), 'output-root-override');
+  assert.equal(
+    resolveOutputRoot(overrideRoot, {
+      RESEARCH_OUTPUT_ROOT: envRoot,
+      RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'true',
+    }),
+    overrideRoot,
+  );
+});
+
+test('resolveOutputRoot rejects relative configured and override roots', () => {
+  assert.throws(
+    () => resolveOutputRoot(null, { RESEARCH_OUTPUT_ROOT: 'relative-output' }),
+    (error: unknown) => error instanceof ResearchError
+      && error.code === 'INPUT_SCHEMA_ERROR'
+      && /RESEARCH_OUTPUT_ROOT must be an absolute path/.test(error.message),
+  );
+  assert.throws(
+    () => resolveOutputRoot('relative-output', {}),
+    (error: unknown) => error instanceof ResearchError
+      && error.code === 'INPUT_SCHEMA_ERROR'
+      && /Output root override must be an absolute path/.test(error.message),
+  );
+});
+
+test('outputLayout keeps all current durable namespaces under one root', () => {
+  const root = join(tmpdir(), 'canonical-layout');
+  assert.deepEqual(outputLayout(root), {
+    root,
+    researches: join(root, 'researches'),
+    index: join(root, 'index'),
+    researchLibrary: join(root, 'research-library'),
+    firstPartySearch: join(root, 'first-party-search'),
+  });
+});
+
+test('research and enrichment directories are human-readable, namespaced, and collision-safe', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-layout-'));
   const first = await allocateResearchLocation(root, 'Compare Lists', new Date('2026-08-25T00:00:00Z'));
   const second = await allocateResearchLocation(root, 'Compare Lists', new Date('2026-08-25T00:00:00Z'));
-  assert.equal(first.researchDirectory, join(root, '2026-08-25-compare-lists'));
-  assert.equal(second.researchDirectory, join(root, '2026-08-25-compare-lists-02'));
+  assert.equal(first.researchDirectory, join(root, 'researches', '2026-08-25-compare-lists'));
+  assert.equal(second.researchDirectory, join(root, 'researches', '2026-08-25-compare-lists-02'));
   assert.equal(await allocateEnrichmentDirectory(first.researchDirectory), join(first.researchDirectory, 'enrichment'));
   assert.equal(await allocateEnrichmentDirectory(first.researchDirectory), join(first.researchDirectory, 'enrichment-02'));
 });
