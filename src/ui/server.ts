@@ -210,10 +210,11 @@ async function handlePost(
 
   if (requestUrl.pathname === '/api/researches') {
     const plan = await context.deps.previewUiResearchDraft(body);
-    const job = context.jobs.start('create_research', null, () =>
+    const job = context.jobs.start('create_research', null, (control) =>
       context.deps.executeUiResearchDraft(body, {
         outputRoot: context.outputRoot,
         env: context.env,
+        onResearchInitialized: ({ researchId }) => control.setResearchId(researchId),
       }));
     sendJson(response, 202, { version: 1, job, plan });
     return;
