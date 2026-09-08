@@ -209,11 +209,14 @@ test('decision submission requires a full current finalist snapshot but permits 
 test('decision temp file remains alive through workflow completion and is removed afterwards', async () => {
   let decisionPath = '';
   let release!: () => void;
+  let signalPathCaptured!: () => void;
   const blocked = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+  const pathCaptured = new Promise<void>((resolvePromise) => { signalPathCaptured = resolvePromise; });
   const service = deps({
     executeExistingResearch: async (_researchId, continuation) => {
       decisionPath = continuation?.declaredFilePath?.resolvedPath ?? '';
       assert.notEqual(decisionPath, '');
+      signalPathCaptured();
       await assert.doesNotReject(() => access(decisionPath));
       await blocked;
       await assert.doesNotReject(() => access(decisionPath));
@@ -225,7 +228,7 @@ test('decision temp file remains alive through workflow completion and is remove
     env: { RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'true' },
     serviceDeps: service,
   });
-  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  await pathCaptured;
   await assert.doesNotReject(() => access(decisionPath));
   release();
   await promise;
