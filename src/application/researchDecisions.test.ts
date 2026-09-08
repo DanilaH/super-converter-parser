@@ -9,7 +9,6 @@ import {
   executeResearchDecisionSelection,
   inspectResearchDecisions,
   validateResearchDecisionSelection,
-  type ResearchDecisionGateV1,
   type ResearchDecisionServiceDeps,
 } from './researchDecisions.js';
 import type { ResearchRunDeps, ResearchRunExecution } from './researchWorkflow.js';
@@ -215,9 +214,9 @@ test('decision temp file remains alive through workflow completion and is remove
     executeExistingResearch: async (_researchId, continuation) => {
       decisionPath = continuation?.declaredFilePath?.resolvedPath ?? '';
       assert.notEqual(decisionPath, '');
-      assert.doesNotReject(() => access(decisionPath));
+      await assert.doesNotReject(() => access(decisionPath));
       await blocked;
-      assert.doesNotReject(() => access(decisionPath));
+      await assert.doesNotReject(() => access(decisionPath));
       return awaitingExecution;
     },
   });
@@ -227,13 +226,13 @@ test('decision temp file remains alive through workflow completion and is remove
     serviceDeps: service,
   });
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
-  assert.doesNotReject(() => access(decisionPath));
+  await assert.doesNotReject(() => access(decisionPath));
   release();
   await promise;
   await assert.rejects(() => access(decisionPath));
 });
 
-test('decision execution rejects representative, entrant, decision-state, and matrix drift under workflow lock', async () => {
+test('decision execution rejects representative revision drift under the workflow lock', async () => {
   const driftedEvidence = {
     ...evidence,
     representativeRevision: 4,
