@@ -75,6 +75,33 @@ test('job registry records thrown ResearchError without converting it into durab
   assert.equal(failed?.result, null);
 });
 
+test('finished-job retention is a strict bound immediately after each completion', async () => {
+  let id = 0;
+  let tick = 0;
+  const registry = new UiJobRegistry({
+    retainFinished: 2,
+    createId: () => `job-${++id}`,
+    now: () => new Date(Date.UTC(2026, 8, 8, 10, 0, tick++)),
+  });
+
+  registry.start('create_research', null, async () => EXECUTION);
+  await flushPromises();
+  registry.start('resume_research', 'research-1', async () => EXECUTION);
+  await flushPromises();
+  registry.start('resume_research', 'research-1', async () => EXECUTION);
+  await flushPromises();
+
+  const jobs = registry.list();
+  assert.equal(jobs.length, 2);
+  assert.deepEqual(jobs.map((job) => job.jobId), ['job-3', 'job-2']);
+  assert.equal(registry.get('job-1'), null);
+});
+
+test('job registry rejects invalid retention limits instead of becoming accidentally unbounded', () => {
+  assert.throws(() => new UiJobRegistry({ retainFinished: -1 }), /non-negative integer/);
+  assert.throws(() => new UiJobRegistry({ retainFinished: 1.5 }), /non-negative integer/);
+});
+
 async function flushPromises(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setImmediate(resolve));
