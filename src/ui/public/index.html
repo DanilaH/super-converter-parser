@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runner Console</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/repair.css">
 </head>
 <body>
   <div class="app-shell">
@@ -28,9 +29,11 @@
     </aside>
 
     <main class="main">
+      <div id="repair-action-root" class="repair-action-shell repair-action hidden" aria-live="polite"></div>
       <div id="app" class="page" aria-live="polite"></div>
     </main>
   </div>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/repair.js"></script>
 </body>
 </html>

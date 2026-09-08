@@ -56,6 +56,7 @@ test('job registry exposes running work, blocks a second execution, then publish
   assert.equal(finished?.state, 'finished');
   assert.equal(finished?.researchId, 'research-1');
   assert.equal(finished?.result?.workflowState, 'completed');
+  assert.equal(finished?.repairResult, null);
   assert.equal(registry.active(), null);
 });
 
@@ -86,6 +87,67 @@ test('running create job can publish its durable research id before workflow com
   resolveTask(EXECUTION);
   await flushPromises();
   assert.equal(registry.get('job-live')?.state, 'finished');
+});
+
+test('repair job publishes a separate repair result instead of fabricating a workflow result', async () => {
+  const registry = new UiJobRegistry({
+    createId: () => 'job-repair',
+    now: () => new Date('2026-09-08T10:00:00.000Z'),
+  });
+
+  const started = registry.startRepair('research-1', async () => ({
+    version: 1,
+    researchId: 'research-1',
+    discoveryRunId: 'run-1',
+    exitCode: 0,
+    discoveryState: 'completed',
+    repairableBefore: 3,
+    repairableAfter: 0,
+  }));
+  assert.equal(started.kind, 'repair_discovery');
+  assert.equal(started.state, 'running');
+  await flushPromises();
+
+  const finished = registry.get('job-repair');
+  assert.equal(finished?.state, 'finished');
+  assert.equal(finished?.result, null);
+  assert.deepEqual(finished?.repairResult, {
+    version: 1,
+    researchId: 'research-1',
+    discoveryRunId: 'run-1',
+    exitCode: 0,
+    discoveryState: 'completed',
+    repairableBefore: 3,
+    repairableAfter: 0,
+  });
+});
+
+test('repair job shares the single-active-job admission boundary', async () => {
+  let resolveTask: (value: ResearchRunExecution) => void = () => {
+    throw new Error('Deferred task resolver was not initialized.');
+  };
+  const pending = new Promise<ResearchRunExecution>((resolve) => { resolveTask = resolve; });
+  const registry = new UiJobRegistry({
+    createId: () => 'job-busy',
+    now: () => new Date('2026-09-08T10:00:00.000Z'),
+  });
+  registry.start('resume_research', 'research-1', async () => pending);
+
+  assert.throws(
+    () => registry.startRepair('research-1', async () => ({
+      version: 1,
+      researchId: 'research-1',
+      discoveryRunId: 'run-1',
+      exitCode: 0,
+      discoveryState: 'completed',
+      repairableBefore: 1,
+      repairableAfter: 0,
+    })),
+    UiJobBusyError,
+  );
+
+  resolveTask(EXECUTION);
+  await flushPromises();
 });
 
 test('resolved non-zero workflow execution is a finished job, not a fabricated job failure', async () => {

@@ -12,6 +12,7 @@ import { buildOutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { ResearchError } from '../shared/errors.js';
 import { listResearchCatalog } from '../application/researchCatalog.js';
 import { inspectResearchConsole } from '../application/researchConsole.js';
+import { repairResearchDiscovery } from '../application/researchRepair.js';
 import { UiJobBusyError, UiJobRegistry } from './jobs.js';
 import {
   executeUiResearchDraft,
@@ -47,6 +48,7 @@ export type UiServerDeps = {
   previewUiResearchDraft: typeof previewUiResearchDraft;
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
+  repairResearchDiscovery: typeof repairResearchDiscovery;
   loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
   openBrowser: (url: string) => void;
 };
@@ -58,6 +60,7 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   previewUiResearchDraft,
   executeUiResearchDraft,
   executeUiResearchResume,
+  repairResearchDiscovery,
   loadStaticAssets,
   openBrowser: openBrowserBestEffort,
 };
@@ -220,6 +223,29 @@ async function handlePost(
     return;
   }
 
+  const repairMatch = /^\/api\/researches\/([^/]+)\/repair-discovery$/.exec(requestUrl.pathname);
+  if (repairMatch) {
+    assertEmptyObject(body, 'Discovery repair request body');
+    const researchId = decodeRouteId(repairMatch[1] ?? '', 'research');
+    const detail = await context.deps.inspectResearchConsole(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    if (detail.status.nextAction.code !== 'repair_discovery' || detail.status.discovery.keywordCounts.repairable <= 0) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `Research ${detail.status.researchId} is not currently eligible for explicit discovery repair.`,
+      );
+    }
+    const job = context.jobs.startRepair(detail.status.researchId, () =>
+      context.deps.repairResearchDiscovery(detail.status.researchId, {
+        outputRoot: context.outputRoot,
+        env: context.env,
+      }));
+    sendJson(response, 202, { version: 1, job });
+    return;
+  }
+
   const resumeMatch = /^\/api\/researches\/([^/]+)\/resume$/.exec(requestUrl.pathname);
   if (resumeMatch) {
     assertEmptyObject(body, 'Resume request body');
@@ -245,7 +271,9 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
     route,

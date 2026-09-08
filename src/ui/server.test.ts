@@ -7,7 +7,7 @@ import type { ResearchRunExecution } from '../application/researchWorkflow.js';
 import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { outputLayout } from '../outputs/researchLayout.js';
 import type { UiResearchPlanPreviewV1 } from './researchExecution.js';
-import { startUiServer, type UiServerDeps } from './server.js';
+import { DEFAULT_UI_SERVER_DEPS, startUiServer, type UiServerDeps } from './server.js';
 
 const root = resolve('/tmp/runner-ui-test-output');
 const diagnostics: OutputDiagnostics = {
@@ -98,6 +98,7 @@ const draft = {
 
 function deps(overrides: Partial<UiServerDeps> = {}): UiServerDeps {
   return {
+    ...DEFAULT_UI_SERVER_DEPS,
     buildOutputDiagnostics: async () => diagnostics,
     listResearchCatalog: async () => [item],
     inspectResearchConsole: async () => detail,
