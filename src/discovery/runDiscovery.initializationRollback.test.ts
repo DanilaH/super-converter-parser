@@ -47,7 +47,8 @@ test('fresh discovery initialization failure does not publish a run index before
     assert.equal(result.runId, null);
     assert.equal(result.researchDirectory, null);
     await assert.rejects(() => access(join(outputRoot, 'index', 'runs')));
-    assert.deepEqual(await readdir(outputRoot), []);
+    assert.deepEqual(await readdir(outputRoot), ['researches']);
+    assert.deepEqual(await readdir(join(outputRoot, 'researches')), []);
   } finally {
     RunStore.prototype.createRun = originalCreateRun;
     await rm(parent, { recursive: true, force: true });
@@ -92,7 +93,8 @@ test('fresh semantic initialization completes before the public run index is pub
     assert.equal(result.runId, null);
     assert.equal(result.researchDirectory, null);
     await assert.rejects(() => access(join(outputRoot, 'index', 'runs')));
-    assert.deepEqual(await readdir(outputRoot), []);
+    assert.deepEqual(await readdir(outputRoot), ['researches']);
+    assert.deepEqual(await readdir(join(outputRoot, 'researches')), []);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
