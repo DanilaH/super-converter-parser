@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildOutputDiagnostics } from '../outputs/outputDiagnostics.js';
@@ -16,6 +16,7 @@ export type UiServerOptions = {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   openBrowser?: boolean;
+  deps?: UiServerDeps;
 };
 
 export type StartedUiServer = {
@@ -26,23 +27,43 @@ export type StartedUiServer = {
 
 type StaticAsset = { contentType: string; body: Buffer };
 
+export type UiServerDeps = {
+  buildOutputDiagnostics: typeof buildOutputDiagnostics;
+  listResearchCatalog: typeof listResearchCatalog;
+  inspectResearchConsole: typeof inspectResearchConsole;
+  loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
+  openBrowser: (url: string) => void;
+};
+
+export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
+  buildOutputDiagnostics,
+  listResearchCatalog,
+  inspectResearchConsole,
+  loadStaticAssets,
+  openBrowser: openBrowserBestEffort,
+};
+
 export async function startUiServer(options: UiServerOptions = {}): Promise<StartedUiServer> {
   const env = options.env ?? process.env;
+  const deps = options.deps ?? DEFAULT_UI_SERVER_DEPS;
   const port = options.port ?? parsePort(env.RESEARCH_UI_PORT);
-  const assets = await loadStaticAssets();
-  const diagnostics = await buildOutputDiagnostics({ env, cwd: options.cwd });
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `UI server port must be an integer from 0 to 65535; received ${port}.`);
+  }
+  const assets = await deps.loadStaticAssets();
+  const diagnostics = await deps.buildOutputDiagnostics({ env, cwd: options.cwd });
   const outputRoot = diagnostics.canonicalRoot;
 
   const server = createServer(async (request, response) => {
     try {
-      const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? `${HOST}:${port}`}`);
+      const requestUrl = new URL(request.url ?? '/', `http://${HOST}:${port}`);
       if (request.method !== 'GET') {
         sendJson(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'The U1 console is read-only.' } });
         return;
       }
 
       if (requestUrl.pathname === '/api/researches') {
-        const items = await listResearchCatalog(outputRoot);
+        const items = await deps.listResearchCatalog(outputRoot);
         const query = requestUrl.searchParams.get('q')?.trim().toLowerCase() ?? '';
         const filtered = query === '' ? items : items.filter((item) => matchesCatalogQuery(item, query));
         sendJson(response, 200, { version: 1, researches: filtered });
@@ -55,14 +76,20 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Star
           sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Research route not found.' } });
           return;
         }
-        const researchId = decodeURIComponent(encoded);
-        const detail = await inspectResearchConsole(researchId, { outputRoot, env });
+        let researchId: string;
+        try {
+          researchId = decodeURIComponent(encoded);
+        } catch {
+          sendJson(response, 400, { error: { code: 'INPUT_SCHEMA_ERROR', message: 'Malformed research identifier.' } });
+          return;
+        }
+        const detail = await deps.inspectResearchConsole(researchId, { outputRoot, env });
         sendJson(response, 200, detail);
         return;
       }
 
       if (requestUrl.pathname === '/api/system') {
-        const current = await buildOutputDiagnostics({ env, cwd: options.cwd });
+        const current = await deps.buildOutputDiagnostics({ env, cwd: options.cwd });
         sendJson(response, 200, { version: 1, outputs: current });
         return;
       }
@@ -75,10 +102,11 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Star
 
       sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Route not found.' } });
     } catch (error) {
-      const status = error instanceof ResearchError
-        && (error.code === 'INPUT_SCHEMA_ERROR' || error.code === 'RESUME_NOT_FOUND')
-        ? 400
-        : 500;
+      const status = error instanceof ResearchError && error.code === 'RESUME_NOT_FOUND'
+        ? 404
+        : error instanceof ResearchError && error.code === 'INPUT_SCHEMA_ERROR'
+          ? 400
+          : 500;
       const code = error instanceof ResearchError ? error.code : 'INTERNAL_ERROR';
       const message = error instanceof Error ? error.message : String(error);
       sendJson(response, status, { error: { code, message } });
@@ -99,9 +127,8 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Star
     throw new Error('UI server did not expose a TCP address.');
   }
   const url = `http://${HOST}:${address.port}`;
-  if (options.openBrowser ?? env.RESEARCH_UI_NO_OPEN?.trim().toLowerCase() !== 'true') {
-    openBrowserBestEffort(url);
-  }
+  const shouldOpenBrowser = options.openBrowser ?? env.RESEARCH_UI_NO_OPEN?.trim().toLowerCase() !== 'true';
+  if (shouldOpenBrowser) deps.openBrowser(url);
   return {
     server,
     url,
@@ -133,7 +160,7 @@ function matchesCatalogQuery(
     || item.knownRunIds.some((id) => id.toLowerCase().includes(query));
 }
 
-function sendJson(response: Parameters<Parameters<typeof createServer>[0]>[1], status: number, value: unknown): void {
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
   const body = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
   setSecurityHeaders(response);
   response.writeHead(status, {
@@ -144,7 +171,7 @@ function sendJson(response: Parameters<Parameters<typeof createServer>[0]>[1], s
   response.end(body);
 }
 
-function sendStatic(response: Parameters<Parameters<typeof createServer>[0]>[1], asset: StaticAsset): void {
+function sendStatic(response: ServerResponse, asset: StaticAsset): void {
   setSecurityHeaders(response);
   response.writeHead(200, {
     'Content-Type': asset.contentType,
@@ -154,7 +181,7 @@ function sendStatic(response: Parameters<Parameters<typeof createServer>[0]>[1],
   response.end(asset.body);
 }
 
-function setSecurityHeaders(response: Parameters<Parameters<typeof createServer>[0]>[1]): void {
+function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
