@@ -7,7 +7,7 @@ import type {
 } from '../application/researchWorkflow.js';
 import { ResearchError } from '../shared/errors.js';
 
-export type UiJobKind = 'create_research' | 'resume_research' | 'shortlist_research' | 'finalist_scope_research' | 'repair_discovery' | 'append_batch';
+export type UiJobKind = 'create_research' | 'resume_research' | 'shortlist_research' | 'finalist_scope_research' | 'decisions_research' | 'repair_discovery' | 'append_batch';
 export type UiJobState = 'running' | 'finished' | 'failed';
 
 export type UiJobSnapshotV1 = {
@@ -45,7 +45,7 @@ export type UiJobRegistryOptions = {
   retainFinished?: number;
 };
 
-type WorkflowJobKind = 'create_research' | 'resume_research' | 'shortlist_research' | 'finalist_scope_research';
+type WorkflowJobKind = 'create_research' | 'resume_research' | 'shortlist_research' | 'finalist_scope_research' | 'decisions_research';
 
 export class UiJobRegistry {
   private readonly jobs = new Map<string, UiJobSnapshotV1>();
