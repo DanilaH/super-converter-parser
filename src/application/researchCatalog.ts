@@ -37,25 +37,33 @@ export async function listResearchCatalog(outputRoot: string): Promise<ResearchC
     throw new ResearchError('OUTPUT_WRITE_ERROR', `Failed to list run indexes under ${runsIndexDirectory}.`, { cause: error });
   }
 
-  const grouped = new Map<string, Set<string>>();
+  const grouped = new Map<string, RunIndexRecord[]>();
   for (const name of names) {
     const path = join(runsIndexDirectory, name);
-    const record = await readRunIndex(path);
+    const expectedRunId = name.slice(0, -'.json'.length);
+    const record = await readRunIndex(path, expectedRunId);
     assertWithin(root, record.researchDirectory, path);
     assertWithin(record.researchDirectory, record.discoveryDirectory, path);
     const researchDirectory = resolve(record.researchDirectory);
-    const runIds = grouped.get(researchDirectory) ?? new Set<string>();
-    runIds.add(record.runId);
-    grouped.set(researchDirectory, runIds);
+    const records = grouped.get(researchDirectory) ?? [];
+    records.push(record);
+    grouped.set(researchDirectory, records);
   }
 
   const items: ResearchCatalogItem[] = [];
-  for (const [researchDirectory, ids] of grouped) {
-    const knownRunIds = [...ids].sort((a, b) => a.localeCompare(b));
-    if (knownRunIds.length === 0) continue;
+  for (const [researchDirectory, records] of grouped) {
+    const knownRunIds = [...new Set(records.map((record) => record.runId))]
+      .sort((a, b) => a.localeCompare(b));
     const container = await readResearchContainer(researchDirectory);
     const operatorConfigAvailable = await exists(join(researchDirectory, 'operator-config.json'));
+
     if (container !== null) {
+      if (!knownRunIds.includes(container.researchId) || !knownRunIds.includes(container.currentRunId)) {
+        throw new ResearchError(
+          'OUTPUT_WRITE_ERROR',
+          `Research ${container.researchId} references a run missing from the canonical run index.`,
+        );
+      }
       items.push({
         researchId: container.researchId,
         label: container.label,
@@ -71,25 +79,29 @@ export async function listResearchCatalog(outputRoot: string): Promise<ResearchC
       continue;
     }
 
-    const fallbackRunId = knownRunIds[0]!;
-    items.push({
-      researchId: fallbackRunId,
-      label: basename(researchDirectory),
-      currentRunId: fallbackRunId,
-      knownRunIds,
-      batchCount: 1,
-      createdAt: null,
-      updatedAt: null,
-      researchDirectory,
-      managed: false,
-      operatorConfigAvailable,
-    });
+    // A directory without research.json has no durable container lineage. Do not
+    // invent one merely because multiple historical run indexes happen to point
+    // into the same directory; expose each indexed run independently.
+    for (const record of records.sort((a, b) => a.runId.localeCompare(b.runId))) {
+      items.push({
+        researchId: record.runId,
+        label: basename(researchDirectory),
+        currentRunId: record.runId,
+        knownRunIds: [record.runId],
+        batchCount: 1,
+        createdAt: null,
+        updatedAt: null,
+        researchDirectory,
+        managed: false,
+        operatorConfigAvailable,
+      });
+    }
   }
 
   return items.sort(compareCatalogItems);
 }
 
-async function readRunIndex(path: string): Promise<RunIndexRecord> {
+async function readRunIndex(path: string, expectedRunId: string): Promise<RunIndexRecord> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
@@ -104,6 +116,12 @@ async function readRunIndex(path: string): Promise<RunIndexRecord> {
     || typeof parsed.discoveryDirectory !== 'string'
   ) {
     throw new ResearchError('OUTPUT_WRITE_ERROR', `Invalid run output index ${path}.`);
+  }
+  if (parsed.runId !== expectedRunId) {
+    throw new ResearchError(
+      'OUTPUT_WRITE_ERROR',
+      `Run output index ${path} identifies ${parsed.runId}, not ${expectedRunId}.`,
+    );
   }
   return parsed as RunIndexRecord;
 }
