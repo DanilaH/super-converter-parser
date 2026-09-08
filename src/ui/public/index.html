@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runner Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <strong>Runner</strong>
+          <span>Local console</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="#/researches" data-nav="researches">Researches</a>
+        <a href="#/system" data-nav="system">System</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="status-dot"></span>
+        localhost only
+      </div>
+    </aside>
+
+    <main class="main">
+      <div id="app" class="page" aria-live="polite"></div>
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

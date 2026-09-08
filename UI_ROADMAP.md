@@ -42,21 +42,21 @@ A normal config-first research can be created, resumed after process/browser res
 
 ## U0 — Application boundary
 
-**Status:** active.
+**Status:** complete; merged in PR #164.
 
 ### Goal
 
 Make the existing Runner workflow callable safely by non-CLI adapters without duplicating orchestration or requiring config/continuation JSON files merely as an invocation mechanism.
 
-### Scope
+### Implemented scope
 
-- move config-first workflow implementation behind an application-layer module while keeping `research:run` as a thin CLI adapter;
-- expose typed application functions for new research and existing-research continuation/resume;
-- allow already-parsed operator config and continuation values to reuse the exact existing planner/executor through dependency injection;
-- preserve declaring-file-relative path semantics for path-bearing typed inputs;
-- expose canonical read-only research inspection through the same application boundary;
-- add tests proving typed inputs do not require file-loader reads;
-- no HTTP server or React UI yet.
+- moved config-first workflow implementation behind `src/application/researchWorkflow.ts` while keeping `research:run` as a thin CLI adapter/re-export;
+- exposed typed application functions for new research and existing-research continuation/resume;
+- allowed already-parsed operator config and continuation values to reuse the exact existing planner/executor through dependency injection;
+- preserved declaring-file-relative path semantics for path-bearing typed inputs;
+- exposed canonical read-only research inspection through the same application boundary;
+- runtime validation accepts `unknown` adapter inputs rather than trusting HTTP/UI shapes at compile time;
+- added tests proving typed inputs do not require file-loader reads.
 
 ### Result
 
@@ -68,21 +68,28 @@ The moved workflow intentionally still retains the existing console output and p
 
 ## U1 — Read-only Research Console
 
-### Scope
+**Status:** complete in PR #165 pending merge.
 
-- `npm run ui` local Node server + React/Vite shell;
-- lightweight research catalog from canonical indexes + `research.json`;
+### Implemented scope
+
+- `npm run ui` localhost-only Node server plus a dependency-free browser shell;
+- lightweight research catalog from canonical run indexes + `research.json`;
 - search by label, `researchId`, and known run IDs;
-- filters for attention/running/completed/all;
-- Research Detail with IDs, batch count, current run/enrichment, pipeline state, next action;
-- batch/run/generation timeline;
-- read-only current effective configuration/provenance;
-- full expensive status projection only for opened research, not every list row;
-- System page with canonical output-root diagnostics.
+- Research Detail with visible/copyable IDs, batch count, current run/enrichment, pipeline state, next action, keyword counts, and quality warnings;
+- batch/run history from durable research-container lineage;
+- read-only current immutable OperatorConfig provenance;
+- full expensive status projection only for an opened research, never for every list row;
+- System page with canonical output-root diagnostics;
+- strict GET-only API in U1;
+- historical indexed runs without a durable research container remain independent instead of receiving invented lineage.
+
+A React/Vite dependency surface is deliberately not required for these read-only screens. Re-evaluate the browser framework before U2, when forms and longer-lived interaction become real complexity.
+
+Attention/running/completed list filters are also deferred until a cheap truthful catalog-level state projection exists. Do not obtain them by running full deep status for every row and do not infer them from timestamps or directory names.
 
 ### Result
 
-The operator can browse and understand all existing researches without terminal/agent assistance.
+The operator can browse, search, open, and understand existing researches without terminal/agent assistance while the list remains a lightweight projection of durable identity rather than a second status engine.
 
 ---
 
@@ -90,6 +97,8 @@ The operator can browse and understand all existing researches without terminal/
 
 ### Scope
 
+- before adding mutations, require same-origin/Origin validation for write endpoints so an unrelated browser page cannot drive localhost research operations;
+- explicitly separate/parameterize process-signal ownership before long-lived server-side workflow execution if the inherited CLI signal policy would interfere with server jobs;
 - New Research form backed by existing OperatorConfig contracts/presets;
 - paste/upload research input;
 - plan preview before execution;
