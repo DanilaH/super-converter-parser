@@ -14,6 +14,10 @@ import { listResearchCatalog } from '../application/researchCatalog.js';
 import { inspectResearchConsole } from '../application/researchConsole.js';
 import { renameResearchLabel } from '../application/researchMetadata.js';
 import { repairResearchDiscovery } from '../application/researchRepair.js';
+import {
+  executeResearchShortlistSelection,
+  inspectResearchShortlist,
+} from '../application/researchShortlist.js';
 import { executeUiResearchBatch, previewUiResearchBatch } from './batchExecution.js';
 import { UiJobBusyError, UiJobRegistry } from './jobs.js';
 import {
@@ -47,6 +51,8 @@ export type UiServerDeps = {
   buildOutputDiagnostics: typeof buildOutputDiagnostics;
   listResearchCatalog: typeof listResearchCatalog;
   inspectResearchConsole: typeof inspectResearchConsole;
+  inspectResearchShortlist: typeof inspectResearchShortlist;
+  executeResearchShortlistSelection: typeof executeResearchShortlistSelection;
   previewUiResearchDraft: typeof previewUiResearchDraft;
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
@@ -62,6 +68,8 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   buildOutputDiagnostics,
   listResearchCatalog,
   inspectResearchConsole,
+  inspectResearchShortlist,
+  executeResearchShortlistSelection,
   previewUiResearchDraft,
   executeUiResearchDraft,
   executeUiResearchResume,
@@ -177,6 +185,17 @@ async function handleGet(
     return;
   }
 
+  const shortlistMatch = /^\/api\/researches\/([^/]+)\/shortlist$/.exec(requestUrl.pathname);
+  if (shortlistMatch) {
+    const researchId = decodeRouteId(shortlistMatch[1] ?? '', 'research');
+    const shortlist = await context.deps.inspectResearchShortlist(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    sendJson(response, 200, { version: 1, shortlist });
+    return;
+  }
+
   if (requestUrl.pathname.startsWith('/api/researches/')) {
     const researchId = decodeRouteId(requestUrl.pathname.slice('/api/researches/'.length), 'research');
     const detail = await context.deps.inspectResearchConsole(researchId, {
@@ -228,6 +247,22 @@ async function handlePost(
         onResearchInitialized: ({ researchId }) => control.setResearchId(researchId),
       }));
     sendJson(response, 202, { version: 1, job, plan });
+    return;
+  }
+
+  const shortlistMatch = /^\/api\/researches\/([^/]+)\/shortlist$/.exec(requestUrl.pathname);
+  if (shortlistMatch) {
+    const researchId = decodeRouteId(shortlistMatch[1] ?? '', 'research');
+    const gate = await context.deps.inspectResearchShortlist(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    const job = context.jobs.start('shortlist_research', gate.researchId, () =>
+      context.deps.executeResearchShortlistSelection(gate.researchId, body, {
+        outputRoot: context.outputRoot,
+        env: context.env,
+      }));
+    sendJson(response, 202, { version: 1, job, shortlist: gate });
     return;
   }
 
@@ -323,10 +358,12 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
     ['/batches.js', 'batches.js', 'text/javascript; charset=utf-8'],
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
+    ['/shortlist.js', 'shortlist.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
     ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
+    ['/shortlist.css', 'shortlist.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
     route,

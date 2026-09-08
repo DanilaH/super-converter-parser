@@ -3,35 +3,41 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata/batch UX', async () => {
+test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata/batch/shortlist UX', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [appSource, batchSource, metadataSource, repairSource, html, css, batchCss, metadataCss, repairCss] = await Promise.all([
+  const [appSource, batchSource, metadataSource, repairSource, shortlistSource, html, css, batchCss, metadataCss, repairCss, shortlistCss] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('shortlist.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('shortlist.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
   assert.doesNotThrow(() => new Function(batchSource));
   assert.doesNotThrow(() => new Function(metadataSource));
   assert.doesNotThrow(() => new Function(repairSource));
+  assert.doesNotThrow(() => new Function(shortlistSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/batches\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/metadata\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/shortlist\.js"><\/script>/);
   assert.match(html, /id="batch-action-root" class="batch-action-shell hidden"/);
   assert.match(html, /id="metadata-action-root" class="metadata-action-shell hidden"/);
   assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
+  assert.match(html, /id="shortlist-action-root" class="shortlist-action-shell hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/batches\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/metadata\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/shortlist\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
 
@@ -64,6 +70,14 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(repairSource, /active\?\.kind === 'repair_discovery'/);
   assert.doesNotMatch(repairSource, /innerHTML\s*=/);
 
+  assert.match(shortlistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/shortlist/);
+  assert.match(shortlistSource, /discoveryRunId:\s*gate\.discoveryRunId/);
+  assert.match(shortlistSource, /normalizedKeywords:\s*keywords/);
+  assert.match(shortlistSource, /Select filtered/);
+  assert.match(shortlistSource, /gate\.minSelection/);
+  assert.match(shortlistSource, /gate\.maxSelection/);
+  assert.doesNotMatch(shortlistSource, /innerHTML\s*=/);
+
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
   assert.match(batchCss, /\.batch-action-shell/);
@@ -72,6 +86,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(metadataCss, /\.metadata-form/);
   assert.match(repairCss, /\.repair-action/);
   assert.match(repairCss, /\.repair-action-shell/);
+  assert.match(shortlistCss, /\.shortlist-action-shell/);
+  assert.match(shortlistCss, /\.shortlist-table/);
 });
 
 test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {

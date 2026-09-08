@@ -175,7 +175,7 @@ Implemented scope:
 
 ### U3.2 — batch preview, append, and resulting discovery
 
-**Status:** complete in PR #170.
+**Status:** complete; merged in PR #170.
 
 Implemented scope:
 
@@ -207,20 +207,54 @@ Long-lived managed research containers can be renamed and extended with new batc
 
 ## U4 — Human gates
 
-**Status:** next active MVP block after U3.2.
+**Status:** active MVP block; U4.1 implemented in PR #171, U4.2–U4.3 remain.
 
-### Scope
+### U4.1 — explicit shortlist selection
 
-- shortlist table/selection using existing keyword evidence;
-- finalist-scope selection including explicit-all semantics;
-- human decision editor with existing decision contract;
-- validation before continuation;
-- continue the exact existing configured workflow after each gate;
-- no automatically invented shortlist/finalist/business decision.
+**Status:** implemented in PR #171 pending merge validation.
+
+Implemented scope:
+
+- expose shortlist candidate evidence only when the canonical existing-research plan reports unresolved `shortlist` input;
+- project candidates from the current discovery run through the existing Runner candidate/scoring implementation rather than introduce UI scoring;
+- show explicit evidence fields including keyword, volume, Score, Tier, organic count, median DR, weak-domain count, and scoring completeness;
+- preserve missing/unscored/degraded evidence without converting it to zero or a recommendation;
+- require 5–200 unique normalized keywords from the current discovery generation, matching the existing enrichment shortlist contract;
+- preselect nothing and provide filtering/select-visible controls as presentation convenience only;
+- bind the submitted selection to its `discoveryRunId` and reject candidate membership/generation drift;
+- materialize a temporary canonical `keyword` CSV only long enough to resolve the existing shortlist `OperatorContinuationV1` action;
+- continue through the existing `executeExistingResearch` config-first workflow;
+- repeat discovery-generation validation through an injected status guard while the existing workflow holds its canonical per-research execution lock;
+- remove the temporary shortlist workspace after execution while the resulting enrichment run persists its own canonical shortlist scope;
+- expose a distinct `shortlist_research` ephemeral job label while retaining the normal `ResearchRunExecution` workflow result;
+- add application, HTTP, and browser regressions without introducing a durable UI selection store.
+
+### U4.2 — finalist scope
+
+**Status:** next.
+
+Scope:
+
+- inspect the exact existing finalist-scope continuation contract and durable eligibility rules;
+- expose explicit finalist selection plus the existing explicit-all semantics without synthesizing a recommended scope;
+- bind the selection to current completed enrichment/finalization parent lineage and fail closed on stale state;
+- continue through the same configured workflow and existing finalization contracts.
+
+### U4.3 — human decisions and terminal continuation
+
+**Status:** after U4.2.
+
+Scope:
+
+- edit the exact existing human-decision facts for the current finalist evidence matrix;
+- preserve current decision vocabulary, notes/evidence semantics, and validation;
+- reject stale finalist/evidence lineage rather than applying decisions to a newer matrix;
+- continue through ready-to-publish/Library using existing workflow semantics;
+- do not invent pursue/reject/investigate decisions.
 
 ### Result
 
-**MVP complete.** A normal research can be taken end-to-end without hand-authored continuation JSON or a coding agent operating the CLI.
+**MVP complete after U4.3.** A normal research can then be taken end-to-end without hand-authored continuation JSON or a coding agent operating the CLI.
 
 ---
 
