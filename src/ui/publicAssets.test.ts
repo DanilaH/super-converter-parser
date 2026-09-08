@@ -27,6 +27,20 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(css, /font-size:\s*14px/);
 });
 
+test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {
+  const appSource = await readFile(fileURLToPath(new URL('./public/app.js', import.meta.url)), 'utf8');
+  const match = /const CONTINUABLE_ACTIONS = new Set\(\[([\s\S]*?)\]\);/.exec(appSource);
+  assert.ok(match, 'CONTINUABLE_ACTIONS declaration must remain explicit and inspectable');
+  const allowlist = match[1] ?? '';
+
+  for (const expected of ['resume_discovery', 'run_enrichment', 'resume_enrichment', 'run_finalization', 'publish_library']) {
+    assert.match(allowlist, new RegExp(`'${expected}'`));
+  }
+  for (const forbidden of ['repair_discovery', 'shortlist', 'finalist_scope', 'human_decisions', 'supply_decisions']) {
+    assert.doesNotMatch(allowlist, new RegExp(`'${forbidden}'`));
+  }
+});
+
 test('browser preset selector stays in lockstep with canonical built-in preset files', async () => {
   const appSource = await readFile(fileURLToPath(new URL('./public/app.js', import.meta.url)), 'utf8');
   const presetDirectory = fileURLToPath(new URL('../../configs/presets/', import.meta.url));
