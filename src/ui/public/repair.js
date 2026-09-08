@@ -14,14 +14,27 @@ Object.assign(root.style, {
 });
 
 let refreshEpoch = 0;
-let eligibleResearchId = null;
 let refreshTimer = null;
+let syncTimer = null;
 
-const noteObserver = new MutationObserver(() => syncRepairNote());
-noteObserver.observe(app, { childList: true, subtree: true });
+const stateObserver = new MutationObserver(() => scheduleRefresh());
+stateObserver.observe(app, {
+  attributes: true,
+  attributeFilter: ['data-research-id', 'data-next-action-code', 'data-repairable'],
+  childList: true,
+  subtree: true,
+});
 
-window.addEventListener('hashchange', () => void refreshRepairAction());
-void refreshRepairAction();
+window.addEventListener('hashchange', () => scheduleRefresh());
+scheduleRefresh();
+
+function scheduleRefresh() {
+  if (syncTimer !== null) window.clearTimeout(syncTimer);
+  syncTimer = window.setTimeout(() => {
+    syncTimer = null;
+    void refreshRepairAction();
+  }, 0);
+}
 
 async function refreshRepairAction() {
   const epoch = ++refreshEpoch;
@@ -29,47 +42,31 @@ async function refreshRepairAction() {
     window.clearTimeout(refreshTimer);
     refreshTimer = null;
   }
-  eligibleResearchId = null;
   hideRoot();
 
   const researchId = researchIdFromHash();
-  if (!researchId) return;
+  const canonicalId = app.dataset.researchId ?? null;
+  if (!researchId || !canonicalId || researchId !== canonicalId) return;
 
-  try {
-    const [detail, jobsPayload] = await Promise.all([
-      api(`/api/researches/${encodeURIComponent(researchId)}`),
-      api('/api/jobs').catch(() => ({ jobs: [] })),
-    ]);
-    if (epoch !== refreshEpoch) return;
+  const repairable = Number(app.dataset.repairable ?? 0);
+  if (app.dataset.nextActionCode !== 'repair_discovery' || !Number.isFinite(repairable) || repairable <= 0) return;
 
-    const canonicalId = detail.status?.researchId;
-    const repairable = Number(detail.status?.discovery?.keywordCounts?.repairable ?? 0);
-    const active = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
-    const activeRepair = active?.kind === 'repair_discovery' && active.researchId === canonicalId ? active : null;
+  const jobsPayload = await api('/api/jobs').catch(() => ({ jobs: [] }));
+  if (epoch !== refreshEpoch) return;
+  const active = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
+  const activeRepair = active?.kind === 'repair_discovery' && active.researchId === canonicalId ? active : null;
 
-    if (activeRepair) {
-      eligibleResearchId = canonicalId;
-      syncRepairNote();
-      renderRunning(activeRepair);
-      void pollRepairJob(activeRepair.jobId, epoch);
-      return;
-    }
-
-    if (detail.status?.nextAction?.code !== 'repair_discovery' || repairable <= 0 || !canonicalId) {
-      syncRepairNote();
-      return;
-    }
-
-    eligibleResearchId = canonicalId;
-    syncRepairNote();
-    renderEligible({
-      researchId: canonicalId,
-      repairable,
-      activeJob: active,
-    });
-  } catch {
-    if (epoch === refreshEpoch) hideRoot();
+  if (activeRepair) {
+    renderRunning(activeRepair);
+    void pollRepairJob(activeRepair.jobId, epoch);
+    return;
   }
+
+  renderEligible({
+    researchId: canonicalId,
+    repairable,
+    activeJob: active,
+  });
 }
 
 function renderEligible({ researchId, repairable, activeJob }) {
@@ -184,7 +181,7 @@ function renderFailure(error) {
   retry.type = 'button';
   retry.className = 'button';
   retry.textContent = 'Reload current state';
-  retry.addEventListener('click', () => void refreshRepairAction());
+  retry.addEventListener('click', () => scheduleRefresh());
   root.append(copy, retry);
 }
 
@@ -212,14 +209,6 @@ function repairCopy(titleText, descriptionText, eyebrowText = null) {
   description.textContent = descriptionText;
   copy.append(title, description);
   return copy;
-}
-
-function syncRepairNote() {
-  const note = app.querySelector('.next-action .action-note');
-  if (!note) return;
-  if (eligibleResearchId && /Repair remains explicit/.test(note.textContent ?? '')) {
-    note.textContent = 'Explicit retry-failed repair is available in the specialist action above; it remains separate from ordinary Continue.';
-  }
 }
 
 function researchIdFromHash() {
