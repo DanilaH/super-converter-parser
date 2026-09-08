@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { LoadedOperatorResearchConfig, ResolvedOperatorContinuation } from '../operatorConfig/resolve.js';
-import type { ResearchRunDeps, ResearchRunExecution } from './researchWorkflow.js';
+import {
+  DEFAULT_RESEARCH_RUN_DEPS,
+  type ResearchRunDeps,
+  type ResearchRunExecution,
+} from './researchWorkflow.js';
 import {
   executeExistingResearch,
   executeNewResearch,
@@ -34,7 +38,7 @@ const EXECUTION: ResearchRunExecution = {
   },
 };
 
-const BASE_DEPS = {} as ResearchRunDeps;
+const BASE_DEPS = DEFAULT_RESEARCH_RUN_DEPS;
 
 test('executeNewResearch injects the supplied loaded config without a config file read', async () => {
   const loaded = { plan: { effectiveConfigFingerprint: 'typed-config' } } as LoadedOperatorResearchConfig;
@@ -43,6 +47,8 @@ test('executeNewResearch injects the supplied loaded config without a config fil
     runFromConfig: async (path, outputRoot, deps, env, signal) => {
       assert.equal(path, '/application/operator-config.json');
       assert.equal(outputRoot, null);
+      assert.ok(deps);
+      assert.ok(signal);
       assert.equal(signal.cancelled, false);
       observed = await deps.loadOperatorConfig(path);
       return EXECUTION;
@@ -73,6 +79,7 @@ test('executeExistingResearch injects the supplied resolved continuation without
       assert.equal(researchId, 'research-1');
       assert.equal(path, '/application/continuation.json');
       assert.equal(outputRoot, null);
+      assert.ok(deps);
       observed = await deps.loadContinuation(path as string);
       return EXECUTION;
     },
@@ -92,7 +99,10 @@ test('executeExistingResearch resumes without inventing a continuation loader wh
   const sentinelLoader = async (): Promise<ResolvedOperatorContinuation> => {
     throw new Error('must not be called');
   };
-  const deps = { loadContinuation: sentinelLoader } as ResearchRunDeps;
+  const deps: ResearchRunDeps = {
+    ...DEFAULT_RESEARCH_RUN_DEPS,
+    loadContinuation: sentinelLoader,
+  };
   const runtime: ResearchControlRuntime = {
     runFromConfig: async () => EXECUTION,
     runFromExisting: async (researchId, path, outputRoot, receivedDeps) => {
@@ -100,7 +110,7 @@ test('executeExistingResearch resumes without inventing a continuation loader wh
       assert.equal(path, null);
       assert.equal(outputRoot, null);
       assert.equal(receivedDeps, deps);
-      assert.equal(receivedDeps.loadContinuation, sentinelLoader);
+      assert.equal(receivedDeps?.loadContinuation, sentinelLoader);
       return EXECUTION;
     },
   };
