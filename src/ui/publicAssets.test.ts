@@ -72,7 +72,14 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(appSource, /\/api\/researches\/plan/);
   assert.match(appSource, /apiMutation\(`\/api\/researches\/\$\{encodeURIComponent\(status\.researchId\)\}\/resume`/);
   assert.match(appSource, /CONTINUABLE_ACTIONS/);
-  assert.match(appSource, /repair_discovery/);
+  assert.match(appSource, /app\.dataset\.researchId\s*=\s*status\.researchId/);
+  assert.match(appSource, /app\.dataset\.nextActionCode/);
+  assert.match(appSource, /app\.dataset\.humanRequirement\s*=\s*humanRequirement/);
+  assert.match(appSource, /app\.dataset\.repairable/);
+  assert.match(appSource, /function researchIdFromHash/);
+  assert.match(appSource, /decodeURIComponent/);
+  assert.doesNotMatch(appSource, /nextActionRequiresInput/);
+  assert.doesNotMatch(appSource, /will be added in U2\.3/);
   assert.doesNotMatch(appSource, /innerHTML\s*=/);
 
   assert.match(batchSource, /\/api\/researches\?q=/);
@@ -92,30 +99,43 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.doesNotMatch(metadataSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}`/);
   assert.doesNotMatch(metadataSource, /innerHTML\s*=/);
 
-  assert.match(repairSource, /nextAction\?\.code !== 'repair_discovery'/);
-  assert.match(repairSource, /keywordCounts\?\.repairable/);
+  assert.match(repairSource, /app\.dataset\.nextActionCode/);
+  assert.match(repairSource, /app\.dataset\.repairable/);
   assert.match(repairSource, /\/repair-discovery`/);
   assert.match(repairSource, /active\?\.kind === 'repair_discovery'/);
+  assert.doesNotMatch(repairSource, /api\(`\/api\/researches\/\$\{encodeURIComponent\(researchId\)\}`\)/);
+  assert.doesNotMatch(repairSource, /syncRepairNote|Repair remains explicit/);
   assert.doesNotMatch(repairSource, /innerHTML\s*=/);
 
   assert.match(shortlistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/shortlist/);
+  assert.match(shortlistSource, /app\.dataset\.humanRequirement/);
+  assert.match(shortlistSource, /currentGateResearchId\('shortlist'\)/);
+  assert.match(shortlistSource, /Could not load current shortlist gate/);
   assert.match(shortlistSource, /discoveryRunId:\s*gate\.discoveryRunId/);
   assert.match(shortlistSource, /normalizedKeywords:\s*keywords/);
   assert.match(shortlistSource, /Select filtered/);
   assert.match(shortlistSource, /gate\.minSelection/);
   assert.match(shortlistSource, /gate\.maxSelection/);
+  assert.doesNotMatch(shortlistSource, /shortlistHintIsRendered|title === 'Run Enrichment'|nextActionRequiresInput/);
   assert.doesNotMatch(shortlistSource, /innerHTML\s*=/);
 
   assert.match(finalistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/finalist-scope/);
+  assert.match(finalistSource, /app\.dataset\.humanRequirement/);
+  assert.match(finalistSource, /currentGateResearchId\('finalist_scope'\)/);
+  assert.match(finalistSource, /Could not load current finalist-scope gate/);
   assert.match(finalistSource, /enrichmentId:\s*gate\.enrichmentId/);
   assert.match(finalistSource, /mode:\s*'selected'/);
   assert.match(finalistSource, /clusterIds/);
   assert.match(finalistSource, /mode:\s*'all'/);
   assert.match(finalistSource, /Use all \$\{gate\.clusterCount\} clusters/);
   assert.match(finalistSource, /not recommendation order/);
+  assert.doesNotMatch(finalistSource, /finalistScopeHintIsRendered|title === 'Run Finalization'|nextActionRequiresInput/);
   assert.doesNotMatch(finalistSource, /innerHTML\s*=/);
 
   assert.match(decisionSource, /\/api\/researches\/\$\{encodeURIComponent\(researchId\)\}\/decisions/);
+  assert.match(decisionSource, /app\.dataset\.humanRequirement/);
+  assert.match(decisionSource, /currentGateResearchId\('human_decisions'\)/);
+  assert.match(decisionSource, /Could not load current human-decision gate/);
   assert.match(decisionSource, /representativeRevision:\s*gate\.representativeRevision/);
   assert.match(decisionSource, /entrantFingerprint:\s*gate\.entrantFingerprint/);
   assert.match(decisionSource, /decisionStateUpdatedAt:\s*gate\.decisionStateUpdatedAt/);
@@ -123,6 +143,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(decisionSource, /seoProductRole:\s*current\.seoProductRole/);
   assert.match(decisionSource, /both empty keeps that finalist unresolved/);
   assert.match(decisionSource, /Save & continue to Library/);
+  assert.doesNotMatch(decisionSource, /decisionHintIsRendered|title === 'Supply Decisions'|nextActionRequiresInput/);
   assert.doesNotMatch(decisionSource, /innerHTML\s*=/);
 
   assert.match(css, /textarea\.control/);

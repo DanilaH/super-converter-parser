@@ -158,6 +158,16 @@ Terminal behavior is also unchanged:
 
 The browser reports this work as a distinct ephemeral `decisions_research` job, but job completion is not research completion: the canonical workflow result and durable status remain authoritative.
 
+### Human-gate browser activation and errors
+
+Research Console detail derives the current explicit human gate directly from the canonical existing-research planner and exposes only `shortlist`, `finalist_scope`, `human_decisions`, or null. This is deliberately distinct from generic `nextAction.command === null`: fail-closed blocked stages are not reinterpreted as human gates.
+
+Specialist shortlist, finalist-scope, and decision modules no longer parse English `Next action` labels or explanatory copy to decide whether they own the page. After a successful deep status load, the main Research Detail renderer publishes a small ephemeral machine-readable projection on the existing `#app` element: current `researchId`, exact planner-derived `humanRequirement`, canonical next-action code, and the current repairable-checkpoint count. Specialist human-gate modules key only from the exact `humanRequirement`; the repair specialist keys from the canonical repair action/count.
+
+This projection is presentation coordination, not a new state store: it is cleared on route changes/load failures, is rebuilt from server-side canonical status/planning, and is never used as mutation authorization. Gate endpoints and application services still revalidate durable lineage and lock semantics independently.
+
+If canonical planning says a human gate is active but loading its current evidence fails, the specialist surface shows the failure and a `Reload current gate` action rather than silently hiding the form. This makes stale/corrupt evidence fail visibly while preserving the server-side fail-closed behavior.
+
 ### Display label
 
 Managed researches expose a compact display-label editor on Research Detail. This label is mutable presentation metadata in `research.json`; it is intentionally distinct from the immutable label captured in `operator-config.json` provenance when the research was created.
@@ -182,7 +192,7 @@ The batch flow deliberately reuses the existing append/fork contract:
 1. pasted keywords are normalized through the normal seed semantics;
 2. a read-only preview reports supplied lines, normalized unique keywords, new keywords, already-known keywords, and expansion children that would be promoted to explicit roots;
 3. changing the pasted input invalidates the preview;
-4. commit revalidates the draft and repeats authoritative append classification under the canonical `execution → batch` lock;
+4. commit revalidates the draft and repeats authoritative append classification under the canonical `execution → batch` research lock;
 5. the existing `prepareResearchAppend` implementation creates batch metadata and, when necessary, forks a new immutable discovery generation while carrying forward eligible evidence;
 6. when a fork is created, only the resulting discovery generation is collected while the composite lock remains held;
 7. enrichment/finalization are **not** entered implicitly; after discovery, canonical `nextAction` again determines the next operator action.
@@ -203,7 +213,9 @@ New-research and batch seed text, shortlist continuation CSV input, and human-de
 
 The console does not have a UI database. Existing Runner SQLite/research files and indexes remain truth.
 
-The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding human gate.
+The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. The discovery-repair specialist reuses the already-rendered deep-status projection instead of issuing a second full Research Detail request. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding planner-derived human gate.
+
+The small `data-*` projection on `#app` exists only to coordinate independently loaded browser modules without coupling them to display strings or duplicating deep status reads. It is disposable and has no authority over server mutation checks.
 
 The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable or appendable through managed-research actions.
 
@@ -217,4 +229,4 @@ The canonical run index does not duplicate the display label. Managed catalog ro
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. U5/U6 remain post-MVP configuration and comfort work to take only from observed operator friction.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP browser hardening slice removes confirmed UI fragility without opening U5/U6 scope; U5/U6 remain post-MVP configuration and comfort work to take only from observed operator friction.

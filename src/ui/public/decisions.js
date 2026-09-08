@@ -8,7 +8,12 @@ let loadedFor = null;
 let scheduled = null;
 
 const observer = new MutationObserver(() => scheduleSync());
-observer.observe(app, { childList: true, subtree: true, characterData: true });
+observer.observe(app, {
+  attributes: true,
+  attributeFilter: ['data-research-id', 'data-human-requirement'],
+  childList: true,
+  subtree: true,
+});
 window.addEventListener('hashchange', () => {
   refreshEpoch += 1;
   loadedFor = null;
@@ -26,8 +31,8 @@ function scheduleSync() {
 }
 
 async function syncFromRenderedDetail() {
-  const researchId = researchIdFromHash();
-  if (!researchId || !decisionHintIsRendered()) {
+  const researchId = currentGateResearchId('human_decisions');
+  if (!researchId) {
     loadedFor = null;
     hideRoot();
     return;
@@ -45,18 +50,19 @@ async function syncFromRenderedDetail() {
     if (epoch !== refreshEpoch) return;
     const activeJob = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
     renderDecisionGate(payload.decisions, activeJob);
-  } catch {
+  } catch (error) {
     if (epoch !== refreshEpoch) return;
     loadedFor = null;
-    hideRoot();
+    renderGateLoadFailure(error);
   }
 }
 
-function decisionHintIsRendered() {
-  const next = app.querySelector('.next-action');
-  const title = next?.querySelector('strong')?.textContent?.trim() ?? '';
-  const note = next?.querySelector('.action-note')?.textContent ?? '';
-  return title === 'Supply Decisions' && /explicit human input/i.test(note);
+function currentGateResearchId(expectedRequirement) {
+  const routeResearchId = researchIdFromHash();
+  const renderedResearchId = app.dataset.researchId ?? null;
+  if (!routeResearchId || !renderedResearchId || routeResearchId !== renderedResearchId) return null;
+  if (app.dataset.humanRequirement !== expectedRequirement) return null;
+  return routeResearchId;
 }
 
 function renderDecisionGate(gate, activeJob) {
@@ -435,6 +441,27 @@ function renderJob(job) {
     panel.classList.add('finished');
   }
   panel.append(strong, span);
+  root.append(panel);
+}
+
+function renderGateLoadFailure(error) {
+  showRoot();
+  root.replaceChildren();
+  const panel = document.createElement('div');
+  panel.className = 'decision-job failed';
+  const strong = document.createElement('strong');
+  strong.textContent = 'Could not load current human-decision gate';
+  const span = document.createElement('span');
+  span.textContent = error instanceof Error ? error.message : String(error);
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'button compact';
+  retry.textContent = 'Reload current gate';
+  retry.addEventListener('click', () => {
+    loadedFor = null;
+    scheduleSync();
+  });
+  panel.append(strong, span, retry);
   root.append(panel);
 }
 

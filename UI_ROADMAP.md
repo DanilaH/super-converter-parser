@@ -275,6 +275,35 @@ The stated UI MVP Definition of Done is met. A normal config-first research can 
 
 ---
 
+## Post-MVP hardening — browser coordination
+
+**Status:** implemented in PR #175; pending cold review, exact-head CI, final gate, and squash merge.
+
+This is a bounded correctness/robustness slice discovered by independent review of the completed MVP. It does **not** reopen U5/U6 scope.
+
+Implemented scope:
+
+- remove obsolete U2.3 placeholder copy from Research Detail;
+- remove the repair specialist's duplicate full Research Detail request and reuse the already-rendered canonical deep-status projection;
+- derive the active explicit human gate directly from canonical `buildExistingResearchPlan(...).unresolvedHumanRequirements`, exposing only `shortlist`, `finalist_scope`, `human_decisions`, or null to Research Console clients;
+- publish a small ephemeral machine-readable Research Detail projection (`researchId`, canonical human requirement, next-action code, repairable count) so independently loaded specialist modules no longer parse English UI labels/copy;
+- keep that browser projection non-authoritative and disposable; all mutation endpoints/application services retain canonical revalidation and lock checks;
+- ensure non-human fail-closed blocked stages are not misclassified as finalist/shortlist gates merely because they lack an executable command;
+- show shortlist/finalist/decision gate-load failures with an explicit reload action instead of silently hiding an active canonical gate;
+- handle malformed percent-encoded research hashes without throwing out of the router;
+- add planner-projection and browser-contract regressions, including a non-human blocked-finalization case.
+
+Independent precheck also revalidated the pre-existing derived Library snapshot-repair path and found it already correct through `operatorConfig/planner.ts` plus configured finalization; no Library workflow change is included in this PR.
+
+Explicitly not included:
+
+- finalist-decision persistence/revision redesign;
+- automatic scoring/recommendations;
+- configuration UX, GSC, charts, Library browsing, React/Electron, or other U5/U6 comfort work;
+- any new durable UI database or publication state machine.
+
+---
+
 ## U5 — Configuration UX
 
 ### Scope
