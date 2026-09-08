@@ -32,6 +32,25 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+test('run resolver preserves pre-researches-namespace indexed paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-index-pre-namespace-'));
+  const researchDirectory = join(root, '2026-08-25-old-layout');
+  const discoveryDirectory = join(researchDirectory, 'discovery');
+  await mkdir(discoveryDirectory, { recursive: true });
+  writeRunDb(join(discoveryDirectory, 'run.sqlite'), 'run_old');
+  await writeJson(join(root, 'index', 'runs', 'run_old.json'), {
+    version: 1,
+    runId: 'run_old',
+    researchDirectory,
+    discoveryDirectory,
+  });
+
+  const resolved = await resolveRunLocation(root, 'run_old');
+  assert.equal(resolved.researchDirectory, researchDirectory);
+  assert.equal(resolved.discoveryDirectory, discoveryDirectory);
+  assert.equal(resolved.legacy, false);
+});
+
 test('run resolver rejects an index whose embedded identity differs from the requested run', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-index-embedded-id-'));
   const researchDirectory = join(root, 'research-b');
