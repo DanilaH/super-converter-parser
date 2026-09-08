@@ -142,7 +142,8 @@ test('run-index failure closes run.sqlite and removes the unindexed research dir
     );
 
     assert.equal(code, EXIT_PREFLIGHT);
-    assert.deepEqual((await readdir(outputRoot)).sort(), ['index']);
+    assert.deepEqual((await readdir(outputRoot)).sort(), ['index', 'researches']);
+    assert.deepEqual(await readdir(join(outputRoot, 'researches')), []);
   });
 });
 

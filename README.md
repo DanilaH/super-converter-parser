@@ -50,6 +50,29 @@ npm ci
 
 Create local configuration from `.env.example`. `.env`, browser profiles, caches, research outputs, and secrets are gitignored.
 
+### Canonical durable outputs
+
+Ordinary operation has exactly one durable output root shared by agents/worktrees:
+
+```text
+RESEARCH_OUTPUT_ROOT (when configured once)
+        ↓
+<user-home>/super-converter-parser-output
+```
+
+Inspect it instead of guessing paths:
+
+```bash
+npm run outputs:where
+npm run outputs:doctor
+```
+
+New research containers are always allocated under `<canonical-root>/researches/`. Indexes, Research Library, and first-party Search Console evidence remain under the same root.
+
+An ad-hoc `--output-root` different from the canonical root fails closed. `RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE=true` is an explicit migration/test escape hatch, not a normal agent/operator setting.
+
+See [`OUTPUTS.md`](./OUTPUTS.md).
+
 ### Research Chrome
 
 Discovery and browser-backed suggestion collection use a dedicated Chrome profile with Keyword Surfer installed. Do not use the daily browsing profile.
@@ -349,7 +372,7 @@ The import keeps `Chart`, query, page, country, device, search-appearance, and f
 Durable first-party truth lives under:
 
 ```text
-<RESEARCH_OUTPUT_ROOT>/first-party-search/search-traction.sqlite
+<canonical-root>/first-party-search/search-traction.sqlite
 ```
 
 with exact source ZIP copies retained under `first-party-search/sources/` for auditability. This V1 is manual ZIP import only; there is no live GSC/OAuth connector or automatic attachment to a research.
@@ -361,28 +384,35 @@ See [`SEARCH_TRACTION.md`](./SEARCH_TRACTION.md).
 A logical research may contain multiple immutable discovery and enrichment generations:
 
 ```text
-<RESEARCH_OUTPUT_ROOT>/
-└── <date>-<label>/
-    ├── research.json
-    ├── operator-config.json          # config-first provenance when applicable
-    ├── batches/
-    ├── discovery/
-    ├── discovery-02/
-    ├── enrichment/
-    ├── enrichment-02/
-    ├── debug/
-    └── results.zip
+<canonical-root>/
+├── researches/
+│   └── <date>-<label>/
+│       ├── research.json
+│       ├── operator-config.json          # config-first provenance when applicable
+│       ├── batches/
+│       ├── discovery/
+│       ├── discovery-02/
+│       ├── enrichment/
+│       ├── enrichment-02/
+│       ├── debug/
+│       └── results.zip
+├── index/
+│   ├── runs/
+│   └── enrichments/
+├── research-library/
+└── first-party-search/
 ```
 
 Each discovery generation owns `run.sqlite`; each enrichment generation owns `enrichment.sqlite`. Old generations are retained and are not rewritten merely because a newer generation becomes current.
 
-The output root also contains the run/enrichment locator index, `research-library/`, and the independent `first-party-search/` evidence store when Search Console snapshots have been imported.
+Existing indexed research directories created before the `researches/` namespace remain valid at their persisted paths. Supported legacy `./runs/<id>` / `./enrichments/<id>` fallback reads remain read-compatible; new writes do not use those locations.
 
 ## Core truth and safety contracts
 
 - **SQLite first.** Generated artifacts are not resume/currentness truth.
 - **Immutable generations.** Append/re-enrichment create new snapshots.
 - **Stable research identity.** Current lineage is validated, not inferred from timestamps.
+- **Canonical outputs.** New durable writes converge on one application-resolved root; agents do not invent output directories.
 - **Fail closed on stale parents.** Downstream evidence pins compatible parent revisions/fingerprints.
 - **Missing is not zero.** Unknown/unavailable/error/omitted states stay explicit.
 - **No automatic finalist verdict.** Human decisions remain separate from automated evidence.
@@ -403,10 +433,11 @@ For current behavior, use these documents by role:
 6. [`RESEARCH_BATCHES.md`](./RESEARCH_BATCHES.md) — append lineage/provenance/locking.
 7. [`RESEARCH_LIBRARY.md`](./RESEARCH_LIBRARY.md) — publication/version lineage.
 8. [`SEARCH_TRACTION.md`](./SEARCH_TRACTION.md) — first-party Search Console import/storage semantics.
-9. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
-10. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
-11. [`ROADMAP.md`](./ROADMAP.md) — current development sequencing; planning only, not runtime authority.
-12. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
+9. [`OUTPUTS.md`](./OUTPUTS.md) — canonical durable output root/layout and agent path policy.
+10. [`SCORING.md`](./SCORING.md) — broad-discovery Score contract.
+11. [`AGENTS.md`](./AGENTS.md) — coding-agent rules and documentation authority.
+12. [`ROADMAP.md`](./ROADMAP.md) — current development sequencing; planning only, not runtime authority.
+13. [`docs/README.md`](./docs/README.md) — frozen history and inactive future-plan taxonomy.
 
 Versioned release roadmaps, acceptance files, methodology reports, and PR-specific plans are archived under `docs/history/`. They preserve historical context and do not override merged runtime behavior. The root `ROADMAP.md` is the explicit current-development exception and likewise does not override runtime contracts.
 
