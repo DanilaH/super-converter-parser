@@ -155,7 +155,10 @@ async function renderNewResearch(epoch) {
     preset.control.append(option);
   }
   const keywords = formControl('Seed keywords', 'textarea', {
-    placeholder: 'one keyword per line\nmic test\nheadphone test\nspeaker test',
+    placeholder: `one keyword per line
+mic test
+headphone test
+speaker test`,
     rows: 14,
   });
   keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and normalized unique keywords.' }));
@@ -807,12 +810,18 @@ function formatDate(value) {
 function publishRenderedResearchState(status) {
   app.dataset.researchId = status.researchId;
   app.dataset.nextActionCode = status.nextAction?.code ?? 'none';
+  app.dataset.nextActionRequiresInput = String(
+    status.nextAction?.code !== 'none'
+      && status.nextAction?.code !== 'repair_discovery'
+      && !status.nextAction?.command,
+  );
   app.dataset.repairable = String(status.discovery?.keywordCounts?.repairable ?? 0);
 }
 
 function clearRenderedResearchState() {
   delete app.dataset.researchId;
   delete app.dataset.nextActionCode;
+  delete app.dataset.nextActionRequiresInput;
   delete app.dataset.repairable;
 }
 
