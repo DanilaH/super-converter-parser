@@ -175,7 +175,7 @@ export async function executeResearchShortlistSelection(
       },
     };
 
-    return deps.executeExistingResearch(gate.researchId, continuation, {
+    return await deps.executeExistingResearch(gate.researchId, continuation, {
       outputRoot: options.outputRoot ?? null,
       ...(options.env !== undefined ? { env: options.env } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
