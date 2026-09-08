@@ -207,7 +207,7 @@ Long-lived managed research containers can be renamed and extended with new batc
 
 ## U4 — Human gates
 
-**Status:** active MVP block; U4.1 is merged, U4.2 is implemented pending validation/merge, U4.3 remains.
+**Status:** U4.1 and U4.2 are merged; U4.3 is implemented in PR #173 and is the final MVP validation/merge gate.
 
 ### U4.1 — explicit shortlist selection
 
@@ -231,7 +231,7 @@ Implemented scope:
 
 ### U4.2 — finalist scope
 
-**Status:** implemented on `feat/ui-finalist-scope`; pending PR validation/merge.
+**Status:** complete; merged in PR #172.
 
 Implemented scope:
 
@@ -252,19 +252,26 @@ Implemented scope:
 
 ### U4.3 — human decisions and terminal continuation
 
-**Status:** next after U4.2.
+**Status:** implemented in PR #173; pending final review, exact-head CI, and squash merge.
 
-Scope:
+Implemented scope:
 
-- edit the exact existing human-decision facts for the current finalist evidence matrix;
-- preserve current decision vocabulary, notes/evidence semantics, and validation;
-- reject stale finalist/evidence lineage rather than applying decisions to a newer matrix;
-- continue through ready-to-publish/Library using existing workflow semantics;
-- do not invent pursue/reject/investigate decisions.
+- expose the exact existing decision contract rather than invent a UI vocabulary: `buildDecision = build | watch | reject | unknown | null` and `seoProductRole = acquisition_anchor | strong_supporting_tool | completeness_tool | experimental | not_applicable | null`;
+- show every current finalist from the current published finalist-evidence matrix together with the current persisted decision, evidence context, and audit flags;
+- prefill only already-persisted current decisions; never auto-select business judgment;
+- preserve canonical partial-decision semantics: either non-null field records a decision, while a row with both fields null remains unresolved and leaves finalization at `awaiting_decisions`;
+- submit exactly one row for every current finalist so the existing replace-style durable decision write cannot accidentally erase previously recorded decisions; undecided rows remain explicit null/null adapter rows and are filtered by the canonical persistence layer;
+- bind the browser submission to current discovery run, enrichment, representative revision, entrant fingerprint, and persisted decision-state timestamp;
+- require the current finalist matrix to remain published/current and the exact finalist membership to remain unchanged;
+- repeat discovery/enrichment/finalization/matrix/representative/entrant/decision-state/finalist-membership validation through an injected status/evidence guard while the existing workflow holds its canonical execution lock;
+- materialize only a temporary raw decisions JSON array, resolve the existing `OperatorContinuationV1` `decisions` action, and `return await` the same `executeExistingResearch` workflow before removing the temporary workspace;
+- let existing configured finalization own terminal behavior: partial decisions remain `awaiting_decisions`; all-current decisions proceed through the existing Library publication step without a UI publication state machine;
+- expose read + same-origin bounded JSON mutation endpoints and a separate CSP-safe browser specialist module with a distinct `decisions_research` ephemeral workflow job;
+- keep SQLite/current Runner files as the only durable truth and add application, stale-lineage, HTTP, mutation-security, and browser regressions.
 
 ### Result
 
-**MVP complete after U4.3.** A normal research can then be taken end-to-end without hand-authored continuation JSON or a coding agent operating the CLI.
+The mandatory MVP implementation is present in PR #173. After the normal cold-review/fix/exact-head dual-OS CI/final-gate/squash-merge workflow closes that PR, the stated UI MVP Definition of Done is met and remaining U5/U6 work is post-MVP configuration/comfort scope rather than an end-to-end operability blocker.
 
 ---
 
