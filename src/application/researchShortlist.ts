@@ -127,8 +127,8 @@ export async function executeResearchShortlistSelection(
   const selection = validateResearchShortlistSelection(selectionValue);
   const deps = options.serviceDeps ?? DEFAULT_RESEARCH_SHORTLIST_DEPS;
   const gate = await inspectResearchShortlist(researchIdValue, {
-    outputRoot: options.outputRoot,
-    env: options.env,
+    ...(options.outputRoot !== undefined ? { outputRoot: options.outputRoot } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
     serviceDeps: deps,
   });
   if (selection.discoveryRunId !== gate.discoveryRunId) {
@@ -177,10 +177,10 @@ export async function executeResearchShortlistSelection(
 
     return deps.executeExistingResearch(gate.researchId, continuation, {
       outputRoot: options.outputRoot ?? null,
-      env: options.env,
-      signal: options.signal,
+      ...(options.env !== undefined ? { env: options.env } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
       deps: guardedWorkflowDeps,
-      runtime: options.runtime,
+      ...(options.runtime !== undefined ? { runtime: options.runtime } : {}),
       manageProcessSignals: false,
     });
   } finally {
