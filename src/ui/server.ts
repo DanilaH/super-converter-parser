@@ -14,6 +14,7 @@ import { listResearchCatalog } from '../application/researchCatalog.js';
 import { inspectResearchConsole } from '../application/researchConsole.js';
 import { renameResearchLabel } from '../application/researchMetadata.js';
 import { repairResearchDiscovery } from '../application/researchRepair.js';
+import { executeUiResearchBatch, previewUiResearchBatch } from './batchExecution.js';
 import { UiJobBusyError, UiJobRegistry } from './jobs.js';
 import {
   executeUiResearchDraft,
@@ -49,6 +50,8 @@ export type UiServerDeps = {
   previewUiResearchDraft: typeof previewUiResearchDraft;
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
+  previewUiResearchBatch: typeof previewUiResearchBatch;
+  executeUiResearchBatch: typeof executeUiResearchBatch;
   repairResearchDiscovery: typeof repairResearchDiscovery;
   renameResearchLabel: typeof renameResearchLabel;
   loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
@@ -62,6 +65,8 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   previewUiResearchDraft,
   executeUiResearchDraft,
   executeUiResearchResume,
+  previewUiResearchBatch,
+  executeUiResearchBatch,
   repairResearchDiscovery,
   renameResearchLabel,
   loadStaticAssets,
@@ -226,6 +231,33 @@ async function handlePost(
     return;
   }
 
+  const batchPlanMatch = /^\/api\/researches\/([^/]+)\/batches\/plan$/.exec(requestUrl.pathname);
+  if (batchPlanMatch) {
+    const researchId = decodeRouteId(batchPlanMatch[1] ?? '', 'research');
+    const plan = await context.deps.previewUiResearchBatch(researchId, body, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    sendJson(response, 200, { version: 1, plan });
+    return;
+  }
+
+  const batchMatch = /^\/api\/researches\/([^/]+)\/batches$/.exec(requestUrl.pathname);
+  if (batchMatch) {
+    const researchId = decodeRouteId(batchMatch[1] ?? '', 'research');
+    const plan = await context.deps.previewUiResearchBatch(researchId, body, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    const job = context.jobs.startBatch(plan.researchId, () =>
+      context.deps.executeUiResearchBatch(plan.researchId, body, {
+        outputRoot: context.outputRoot,
+        env: context.env,
+      }));
+    sendJson(response, 202, { version: 1, job, plan });
+    return;
+  }
+
   const labelMatch = /^\/api\/researches\/([^/]+)\/label$/.exec(requestUrl.pathname);
   if (labelMatch) {
     const researchId = decodeRouteId(labelMatch[1] ?? '', 'research');
@@ -288,9 +320,11 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/batches.js', 'batches.js', 'text/javascript; charset=utf-8'],
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
   ];
