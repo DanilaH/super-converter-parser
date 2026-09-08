@@ -59,6 +59,35 @@ test('job registry exposes running work, blocks a second execution, then publish
   assert.equal(registry.active(), null);
 });
 
+test('running create job can publish its durable research id before workflow completion', async () => {
+  let resolveTask: (value: ResearchRunExecution) => void = () => {
+    throw new Error('Deferred task resolver was not initialized.');
+  };
+  const task = new Promise<ResearchRunExecution>((resolve) => { resolveTask = resolve; });
+  let initialized = false;
+  const registry = new UiJobRegistry({
+    createId: () => 'job-live',
+    now: () => new Date('2026-09-08T10:00:00.000Z'),
+  });
+
+  registry.start('create_research', null, async (control) => {
+    control.setResearchId(' research-live ');
+    initialized = true;
+    return task;
+  });
+  await flushPromises();
+
+  assert.equal(initialized, true);
+  const running = registry.get('job-live');
+  assert.equal(running?.state, 'running');
+  assert.equal(running?.researchId, 'research-live');
+  assert.equal(running?.result, null);
+
+  resolveTask(EXECUTION);
+  await flushPromises();
+  assert.equal(registry.get('job-live')?.state, 'finished');
+});
+
 test('resolved non-zero workflow execution is a finished job, not a fabricated job failure', async () => {
   const blocked: ResearchRunExecution = {
     exitCode: 2,
