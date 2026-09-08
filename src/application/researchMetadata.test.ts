@@ -15,6 +15,7 @@ function deps(sequence: string[], overrides: Partial<RenameResearchLabelDeps> = 
     },
     updateDisplayLabel: async (_directory, label, now) => {
       sequence.push(`update:${label}`);
+      assert.ok(now);
       return {
         version: 1,
         researchId: 'research-1',
