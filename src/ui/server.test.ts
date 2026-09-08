@@ -214,7 +214,9 @@ test('create starts one ephemeral job and publishes the canonical workflow resul
 });
 
 test('a second UI execution is rejected while the first job is still running', async () => {
-  let finish: ((value: ResearchRunExecution) => void) | null = null;
+  let finish: (value: ResearchRunExecution) => void = () => {
+    throw new Error('Deferred execution resolver was not initialized.');
+  };
   const pending = new Promise<ResearchRunExecution>((resolvePromise) => { finish = resolvePromise; });
   const started = await startUiServer({
     port: 0,
@@ -231,7 +233,6 @@ test('a second UI execution is rejected while the first job is still running', a
     assert.equal(payload.error.code, 'UI_JOB_BUSY');
     assert.equal(payload.error.activeJob.state, 'running');
   } finally {
-    assert.ok(finish);
     finish(execution);
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
     await started.close();
