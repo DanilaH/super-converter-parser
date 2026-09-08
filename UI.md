@@ -21,7 +21,7 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, mutable display-label management, and durable-state inspection.
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, mutable display-label management, managed seed-batch append, and durable-state inspection.
 
 ### Researches
 
@@ -47,9 +47,9 @@ Changing any draft input invalidates the previous preview. The server resolves/v
 
 ### Running jobs
 
-Create, resume, and discovery-repair work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
+Create, resume, discovery-repair, and batch-append work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
 
-A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. The live panel refreshes durable discovery/status information independently of the static detail view.
+A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. Long-running discovery, including discovery created by a new appended batch, is observed through canonical research status in parallel with ephemeral job state.
 
 The job registry is not durable truth. Restarting the UI may forget the convenience job record; the research itself remains recoverable from canonical status and can be continued or repaired again from Research Detail when canonical state permits it.
 
@@ -96,15 +96,33 @@ Renaming a display label:
 
 The browser disables rename while it already knows another UI execution job is active. Canonical research locks remain authoritative for external CLI/process concurrency.
 
+### Add batch
+
+Managed Research Detail exposes an `Add batch` editor for extending a long-lived research with additional explicit seed keywords.
+
+The batch flow deliberately reuses the existing append/fork contract:
+
+1. pasted keywords are normalized through the normal seed semantics;
+2. a read-only preview reports supplied lines, normalized unique keywords, new keywords, already-known keywords, and expansion children that would be promoted to explicit roots;
+3. changing the pasted input invalidates the preview;
+4. commit revalidates the draft and repeats authoritative append classification under the canonical `execution → batch` lock;
+5. the existing `prepareResearchAppend` implementation creates batch metadata and, when necessary, forks a new immutable discovery generation while carrying forward eligible evidence;
+6. when a fork is created, only the resulting discovery generation is collected while the composite lock remains held;
+7. enrichment/finalization are **not** entered implicitly; after discovery, canonical `nextAction` again determines the next operator action.
+
+A duplicate-only batch is still persisted as batch history but does not create a pointless discovery generation. An append that introduces new roots or promotes expansion-only keywords produces a new current discovery generation. Preview is advisory only and never serves as authorization for commit.
+
+The UI does not silently adopt historical/indexed runs lacking a managed `research.json` container. Such researches fail closed for batch append rather than acquiring invented long-lived lineage.
+
 Shortlist, finalist-scope, and human-decision gates remain non-actionable until U4 because they require explicit human input; the console does not invent that input.
 
 ## Mutation boundary
 
 Mutation requests are stricter than reads: they require `POST`, `Content-Type: application/json`, and a same-origin loopback `Origin` using the actual UI port. Request bodies are bounded. An unrelated webpage cannot drive localhost research operations merely because the Runner UI is open.
 
-Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair shares the same per-research execution lock used by config-first continuation. Display-label rename uses the composite execution-plus-batch lock because it mutates the shared research container.
+Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair shares the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
 
-New-research seed text is materialized only into a temporary local workspace long enough for the normal seed loader/workflow to consume it; that workspace is removed after execution. OperatorConfig provenance and research evidence keep their existing semantics.
+New-research and batch seed text is materialized only into temporary local workspaces long enough for the normal seed loader/workflow to consume it; those workspaces are removed after execution. OperatorConfig provenance and immutable research evidence keep their existing semantics.
 
 ## Truth model
 
@@ -112,12 +130,13 @@ The console does not have a UI database. Existing Runner SQLite/research files a
 
 The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research.
 
-The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable through this managed-research action.
+The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable or appendable through managed-research actions.
 
 ## Still out of scope
 
-- batch append until U3.2;
 - shortlist, finalist scope, and human-decision editing until U4;
+- automatic downstream enrichment/finalization after batch append;
+- configuration evolution within an existing V1 research container;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database.
 
 ## Roadmap
