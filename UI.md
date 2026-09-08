@@ -21,7 +21,7 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist and finalist-scope selection, mutable display-label management, managed seed-batch append, and durable-state inspection.
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist/finalist-scope/human-decision gates, mutable display-label management, managed seed-batch append, terminal Library continuation through the existing workflow, and durable-state inspection.
 
 ### Researches
 
@@ -47,7 +47,7 @@ Changing any draft input invalidates the previous preview. The server resolves/v
 
 ### Running jobs
 
-Create, resume, shortlist-continuation, finalist-scope continuation, discovery-repair, and batch-append work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
+Create, resume, shortlist-continuation, finalist-scope continuation, human-decision continuation, discovery-repair, and batch-append work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
 
 A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. Long-running discovery, including discovery created by a new appended batch, is observed through canonical research status in parallel with ephemeral job state.
 
@@ -125,6 +125,39 @@ Submission is bound to the displayed current enrichment. The application service
 
 After that guard, the normal configured finalization workflow owns the continuation. The existing representative-query step resolves the durable finalist scope, and downstream entrant/history/evidence work continues under existing finalization contracts. No finalist choice is stored in a UI database.
 
+### Explicit human-decision gate and terminal continuation
+
+When the canonical existing-research plan reports unresolved `human_decisions`, Research Detail exposes the current published finalist-evidence matrix together with any decisions that are still current for that exact lineage. The browser is an editor for the existing durable decision facts, not a recommendation layer.
+
+The decision contract is the Runner's existing contract:
+
+- `buildDecision`: `build`, `watch`, `reject`, `unknown`, or null;
+- `seoProductRole`: `acquisition_anchor`, `strong_supporting_tool`, `completeness_tool`, `experimental`, `not_applicable`, or null.
+
+The surface shows every current finalist, its canonical keyword/cluster ID, selected evidence summaries and audit flags, and only the currently persisted human decision when one exists. It never preselects a new business judgment. A finalist counts as decided when either canonical decision field is non-null; leaving both fields empty keeps it unresolved, matching the existing persistence/finalization semantics.
+
+Because the durable `replaceFinalistDecisions` operation replaces the whole enrichment decision set, browser submission contains exactly one adapter row for every current finalist. Previously persisted decisions are carried forward in that full snapshot unless the operator edits them; unresolved finalists use explicit null/null rows, which the canonical persistence layer filters out. This prevents a partial save from accidentally erasing decisions recorded earlier.
+
+The submitted snapshot is bound to:
+
+- current `discoveryRunId`;
+- current `enrichmentId`;
+- current representative revision;
+- current entrant-cohort fingerprint;
+- the persisted current-decision update timestamp observed by the gate.
+
+The read-side gate also requires the finalist-evidence artifact to match current enrichment source, representative revision, entrant fingerprint, and exact current finalist membership. During mutation the application adapter writes only a temporary raw decisions JSON array and resolves the existing `action: { type: 'decisions', path }` continuation. The normal `executeExistingResearch` workflow then re-reads status while holding the canonical execution lock, and a guard re-checks discovery/enrichment/finalization state, current matrix publication, representative/entrant lineage, persisted decision state, and exact finalist membership. Any drift fails closed and requires reloading the current gate.
+
+The temporary decisions file remains alive until the awaited workflow finishes and is then removed. Durable decisions continue to live only in the existing enrichment SQLite state.
+
+Terminal behavior is also unchanged:
+
+- a partial snapshot is accepted by the existing Runner and finalization remains `awaiting_decisions`;
+- once all current finalists have a current human decision, the existing configured finalization path proceeds to its existing Library publication step;
+- the UI does not add a second `ready_to_publish`/publication state machine or a separate Publish button.
+
+The browser reports this work as a distinct ephemeral `decisions_research` job, but job completion is not research completion: the canonical workflow result and durable status remain authoritative.
+
 ### Display label
 
 Managed researches expose a compact display-label editor on Research Detail. This label is mutable presentation metadata in `research.json`; it is intentionally distinct from the immutable label captured in `operator-config.json` provenance when the research was created.
@@ -158,32 +191,30 @@ A duplicate-only batch is still persisted as batch history but does not create a
 
 The UI does not silently adopt historical/indexed runs lacking a managed `research.json` container. Such researches fail closed for batch append rather than acquiring invented long-lived lineage.
 
-Human-decision editing remains non-actionable until U4.3 because that step requires explicit judgment over the current finalist evidence matrix; the console does not invent those decisions.
-
 ## Mutation boundary
 
 Mutation requests are stricter than reads: they require `POST`, `Content-Type: application/json`, and a same-origin loopback `Origin` using the actual UI port. Request bodies are bounded. An unrelated webpage cannot drive localhost research operations merely because the Runner UI is open.
 
-Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair, shortlist continuation, and finalist-scope continuation share the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
+Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair, shortlist continuation, finalist-scope continuation, and human-decision continuation share the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
 
-New-research and batch seed text plus shortlist continuation CSV input are materialized only into temporary local workspaces long enough for the normal loader/workflow to consume them; those workspaces are removed after execution. Finalist scope is pathless canonical continuation data and needs no temporary file. OperatorConfig provenance and immutable research evidence keep their existing semantics.
+New-research and batch seed text, shortlist continuation CSV input, and human-decision continuation JSON input are materialized only into temporary local workspaces long enough for the normal loader/workflow to consume them; those workspaces are removed after execution. Finalist scope is pathless canonical continuation data and needs no temporary file. OperatorConfig provenance and immutable research evidence keep their existing semantics.
 
 ## Truth model
 
 The console does not have a UI database. Existing Runner SQLite/research files and indexes remain truth.
 
-The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. Shortlist candidate evidence and finalist cluster evidence are loaded only when the current Research Detail is actually at the corresponding human gate.
+The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding human gate.
 
 The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable or appendable through managed-research actions.
 
 ## Still out of scope
 
-- human-decision editing until U4.3;
 - automatic shortlist/finalist/business decisions;
 - automatic downstream enrichment/finalization after batch append;
 - configuration evolution within an existing V1 research container;
-- auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database.
+- auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database;
+- post-MVP evidence/Library/GSC polish until actual operator usage justifies it.
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the active U0–U6 sequence. U4 remains the MVP completion gate; shortlist operation is merged from PR #171 and finalist-scope operation is implemented in U4.2, while human decisions remain before a normal research is fully operable end-to-end without hand-authored continuation JSON or a coding agent driving the CLI.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1 and U4.2 are merged; U4.3 is implemented in PR #173 and is the final review/CI/merge gate for the stated UI MVP. Once that PR passes the repository workflow and is merged, a normal research is operable end-to-end from the local UI without hand-authored continuation JSON or a coding agent driving the CLI.
