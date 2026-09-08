@@ -21,7 +21,7 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can now perform the normal no-human-input parts of a config-first workflow as well as inspect durable state.
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, and durable-state inspection.
 
 ### Researches
 
@@ -47,11 +47,11 @@ Changing any draft input invalidates the previous preview. The server resolves/v
 
 ### Running jobs
 
-Create/resume work runs in-process under the existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
+Create, resume, and discovery-repair work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
 
 A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. The live panel refreshes durable discovery/status information independently of the static detail view.
 
-The job registry is not durable truth. Restarting the UI may forget the convenience job record; the research itself remains recoverable from canonical status and can be continued from Research Detail.
+The job registry is not durable truth. Restarting the UI may forget the convenience job record; the research itself remains recoverable from canonical status and can be continued or repaired again from Research Detail when canonical state permits it.
 
 ### Continue existing research
 
@@ -59,18 +59,35 @@ Research Detail exposes a browser continuation button only when all of the follo
 
 - the research has immutable OperatorConfig provenance;
 - the canonical `nextAction` supplies an executable stable-research command;
-- the action is one of the normal config-first continuation actions currently exposed by U2.2: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
+- the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
 - no other UI execution job is active.
 
 The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection.
 
-`repair_discovery` is deliberately excluded until U2.3. Shortlist, finalist-scope, and human-decision gates remain non-actionable in U2.2 because they require explicit human input; the console does not invent that input.
+### Explicit discovery repair
+
+`repair_discovery` remains separate from ordinary Continue because `retryFailed` is a distinct mutation with its own eligibility semantics.
+
+Research Detail exposes the specialist repair action only when canonical status says `nextAction.code === repair_discovery` and the current discovery has one or more `repairable` checkpoints. The browser does not equate generic `failed` or `partial` counts with repair eligibility.
+
+Before mutation, the application repair action:
+
+1. reads canonical status and verifies repair eligibility;
+2. acquires the existing per-research execution lock;
+3. re-reads canonical status under that lock;
+4. fails closed if repairability disappeared or the current discovery generation changed;
+5. invokes the existing discovery resume path with `retryFailed: true` and `manageProcessSignals: false`;
+6. returns a distinct repair result with before/after repairable counts and the resulting discovery state.
+
+This preserves the existing primary-evidence repair rules and attempt history. The UI does not rewrite unknown evidence to zero and does not fabricate a normal workflow result for repair.
+
+Shortlist, finalist-scope, and human-decision gates remain non-actionable until U4 because they require explicit human input; the console does not invent that input.
 
 ## Mutation boundary
 
 Mutation requests are stricter than reads: they require `POST`, `Content-Type: application/json`, and a same-origin loopback `Origin` using the actual UI port. Request bodies are bounded. An unrelated webpage cannot drive localhost research operations merely because the Runner UI is open.
 
-Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative.
+Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair shares the same per-research execution lock used by config-first continuation, so repair and continuation cannot mutate the same research concurrently through the UI application boundary.
 
 New-research seed text is materialized only into a temporary local workspace long enough for the normal seed loader/workflow to consume it; that workspace is removed after execution. OperatorConfig provenance and research evidence keep their existing semantics.
 
@@ -84,7 +101,6 @@ Historical indexed runs without a durable `research.json` container are shown in
 
 ## Still out of scope
 
-- repair action until U2.3;
 - batch append / rename until U3;
 - shortlist, finalist scope, and human-decision editing until U4;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database.
