@@ -207,7 +207,7 @@ Long-lived managed research containers can be renamed and extended with new batc
 
 ## U4 — Human gates
 
-**Status:** U4.1 and U4.2 are merged; U4.3 is implemented in PR #173 and is the final MVP validation/merge gate.
+**Status:** complete; U4.1–U4.3 merged through PR #173.
 
 ### U4.1 — explicit shortlist selection
 
@@ -252,7 +252,7 @@ Implemented scope:
 
 ### U4.3 — human decisions and terminal continuation
 
-**Status:** implemented in PR #173; pending final review, exact-head CI, and squash merge.
+**Status:** complete; merged in PR #173.
 
 Implemented scope:
 
@@ -271,7 +271,7 @@ Implemented scope:
 
 ### Result
 
-The mandatory MVP implementation is present in PR #173. After the normal cold-review/fix/exact-head dual-OS CI/final-gate/squash-merge workflow closes that PR, the stated UI MVP Definition of Done is met and remaining U5/U6 work is post-MVP configuration/comfort scope rather than an end-to-end operability blocker.
+The stated UI MVP Definition of Done is met. A normal config-first research can now be operated end-to-end through the local UI without hand-authored continuation JSON or a coding agent driving the CLI. Remaining U5/U6 work is post-MVP configuration/comfort scope and should be driven by observed operator friction rather than treated as an operability blocker.
 
 ---
 
