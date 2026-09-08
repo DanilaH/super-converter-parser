@@ -15,6 +15,10 @@ import { inspectResearchConsole } from '../application/researchConsole.js';
 import { renameResearchLabel } from '../application/researchMetadata.js';
 import { repairResearchDiscovery } from '../application/researchRepair.js';
 import {
+  executeResearchFinalistScopeSelection,
+  inspectResearchFinalistScope,
+} from '../application/researchFinalists.js';
+import {
   executeResearchShortlistSelection,
   inspectResearchShortlist,
 } from '../application/researchShortlist.js';
@@ -53,6 +57,8 @@ export type UiServerDeps = {
   inspectResearchConsole: typeof inspectResearchConsole;
   inspectResearchShortlist: typeof inspectResearchShortlist;
   executeResearchShortlistSelection: typeof executeResearchShortlistSelection;
+  inspectResearchFinalistScope: typeof inspectResearchFinalistScope;
+  executeResearchFinalistScopeSelection: typeof executeResearchFinalistScopeSelection;
   previewUiResearchDraft: typeof previewUiResearchDraft;
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
@@ -70,6 +76,8 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   inspectResearchConsole,
   inspectResearchShortlist,
   executeResearchShortlistSelection,
+  inspectResearchFinalistScope,
+  executeResearchFinalistScopeSelection,
   previewUiResearchDraft,
   executeUiResearchDraft,
   executeUiResearchResume,
@@ -196,6 +204,17 @@ async function handleGet(
     return;
   }
 
+  const finalistScopeMatch = /^\/api\/researches\/([^/]+)\/finalist-scope$/.exec(requestUrl.pathname);
+  if (finalistScopeMatch) {
+    const researchId = decodeRouteId(finalistScopeMatch[1] ?? '', 'research');
+    const finalistScope = await context.deps.inspectResearchFinalistScope(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    sendJson(response, 200, { version: 1, finalistScope });
+    return;
+  }
+
   if (requestUrl.pathname.startsWith('/api/researches/')) {
     const researchId = decodeRouteId(requestUrl.pathname.slice('/api/researches/'.length), 'research');
     const detail = await context.deps.inspectResearchConsole(researchId, {
@@ -263,6 +282,22 @@ async function handlePost(
         env: context.env,
       }));
     sendJson(response, 202, { version: 1, job, shortlist: gate });
+    return;
+  }
+
+  const finalistScopeMatch = /^\/api\/researches\/([^/]+)\/finalist-scope$/.exec(requestUrl.pathname);
+  if (finalistScopeMatch) {
+    const researchId = decodeRouteId(finalistScopeMatch[1] ?? '', 'research');
+    const gate = await context.deps.inspectResearchFinalistScope(researchId, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    const job = context.jobs.start('finalist_scope_research', gate.researchId, () =>
+      context.deps.executeResearchFinalistScopeSelection(gate.researchId, body, {
+        outputRoot: context.outputRoot,
+        env: context.env,
+      }));
+    sendJson(response, 202, { version: 1, job, finalistScope: gate });
     return;
   }
 
@@ -359,11 +394,13 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/shortlist.js', 'shortlist.js', 'text/javascript; charset=utf-8'],
+    ['/finalists.js', 'finalists.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
     ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
     ['/shortlist.css', 'shortlist.css', 'text/css; charset=utf-8'],
+    ['/finalists.css', 'finalists.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
     route,

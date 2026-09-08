@@ -207,11 +207,11 @@ Long-lived managed research containers can be renamed and extended with new batc
 
 ## U4 — Human gates
 
-**Status:** active MVP block; U4.1 implemented in PR #171, U4.2–U4.3 remain.
+**Status:** active MVP block; U4.1 is merged, U4.2 is implemented pending validation/merge, U4.3 remains.
 
 ### U4.1 — explicit shortlist selection
 
-**Status:** implemented in PR #171 pending merge validation.
+**Status:** complete; merged in PR #171.
 
 Implemented scope:
 
@@ -231,18 +231,28 @@ Implemented scope:
 
 ### U4.2 — finalist scope
 
-**Status:** next.
+**Status:** implemented on `feat/ui-finalist-scope`; pending PR validation/merge.
 
-Scope:
+Implemented scope:
 
-- inspect the exact existing finalist-scope continuation contract and durable eligibility rules;
-- expose explicit finalist selection plus the existing explicit-all semantics without synthesizing a recommended scope;
-- bind the selection to current completed enrichment/finalization parent lineage and fail closed on stale state;
-- continue through the same configured workflow and existing finalization contracts.
+- expose finalist scope only when the canonical existing-research plan reports unresolved `finalist_scope` input;
+- read current persisted cluster identity/evidence from the completed current enrichment rather than derive a UI-only cluster model;
+- require the same current clustering algorithm/version, URL identity, complete-link grouping, completed cluster checkpoint, and concrete keyword identities that representative finalization already requires;
+- show canonical keyword, exact cluster ID, membership/volume/cohesion context, member keywords, and representative domains without scoring or recommendation;
+- preserve persisted cluster order and preselect nothing;
+- support a non-empty exact selected-cluster mode mapping to canonical `finalists` continuation;
+- preserve the distinct explicit-all action by mapping `Use all` to canonical `finalists_all` instead of expanding it into a UI-selected ID list;
+- reject unknown, duplicate, blank, or whitespace-mutated explicit cluster IDs rather than normalize identities;
+- bind submission to the displayed current enrichment;
+- repeat research/discovery/enrichment identity and unopened `finalization:not_started` validation through a workflow status guard under the existing execution lock;
+- fail closed when lineage or finalization state advances while the operator is looking at the gate;
+- continue through the existing configured finalization workflow rather than add a UI finalization state machine;
+- expose a distinct `finalist_scope_research` ephemeral job label while preserving normal `ResearchRunExecution` results;
+- add application, HTTP, and browser regressions with no durable UI finalist-selection store.
 
 ### U4.3 — human decisions and terminal continuation
 
-**Status:** after U4.2.
+**Status:** next after U4.2.
 
 Scope:
 
