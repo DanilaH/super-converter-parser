@@ -155,13 +155,10 @@ async function renderNewResearch(epoch) {
     preset.control.append(option);
   }
   const keywords = formControl('Seed keywords', 'textarea', {
-    placeholder: `one keyword per line
-mic test
-headphone test
-speaker test`,
+    placeholder: 'one keyword per line\nmic test\nheadphone test\nspeaker test',
     rows: 14,
   });
-  keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and discovery-normalized unique keyword count.' }));
+  keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and normalized unique keywords.' }));
 
   const advanced = node('details', { className: 'advanced-fields' });
   advanced.append(node('summary', { text: 'Locale overrides' }));
@@ -414,7 +411,7 @@ async function renderResearchDetail(researchId, epoch) {
     left.append(renderPipeline(status));
     left.append(renderDiscovery(status));
     left.append(renderBatches(container, status));
-    right.append(renderNextAction(status));
+    right.append(renderNextAction(status, humanRequirement));
     right.append(renderResearchFacts(status, container, operatorConfig));
     right.append(renderConfig(operatorConfig));
     grid.append(left, right);
@@ -576,7 +573,7 @@ function renderDiscovery(status) {
   return section;
 }
 
-function renderNextAction(status) {
+function renderNextAction(status, humanRequirement) {
   const section = panelSection('Next action');
   const body = node('div', { className: 'next-action' });
   body.append(
@@ -585,7 +582,7 @@ function renderNextAction(status) {
   );
   if (status.nextAction.code === 'repair_discovery') {
     body.append(node('div', { className: 'action-note', text: 'Use the explicit discovery-repair action for eligible checkpoints; repair remains separate from ordinary Continue.' }));
-  } else if (!status.nextAction.command && status.nextAction.code !== 'none') {
+  } else if (humanRequirement) {
     body.append(node('div', { className: 'action-note', text: 'This step requires explicit human input; the console will not invent it.' }));
   }
   section.append(body);
