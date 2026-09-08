@@ -69,7 +69,8 @@ const execution: ResearchRunExecution = {
 
 const plan: UiResearchPlanPreviewV1 = {
   version: 1,
-  keywordCount: 2,
+  inputLineCount: 2,
+  uniqueKeywordCount: 2,
   effectiveConfigFingerprint: 'config',
   preset: { id: 'quick-scan', revision: 1 },
   workflowTarget: 'discovery',
@@ -177,6 +178,7 @@ test('plan preview is same-origin JSON and does not start an execution job', asy
     assert.equal(response.status, 200);
     const payload = await response.json() as { plan: UiResearchPlanPreviewV1 };
     assert.equal(payload.plan.effectiveConfigFingerprint, 'config');
+    assert.equal(payload.plan.uniqueKeywordCount, 2);
     assert.equal(executionCalls, 0);
 
     const jobs = await fetch(`${started.url}/api/jobs`).then((value) => value.json()) as { jobs: unknown[] };
