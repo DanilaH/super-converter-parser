@@ -156,11 +156,11 @@ New and interrupted research plus explicit discovery repair can be operated with
 
 ## U3 — Research management and batches
 
-**Status:** active; delivered as bounded mutation slices.
+**Status:** implemented through U3.2; U3.3 is optional comfort and not an MVP gate.
 
 ### U3.1 — mutable display label
 
-**Status:** complete in PR #169.
+**Status:** complete; merged in PR #169.
 
 Implemented scope:
 
@@ -175,31 +175,39 @@ Implemented scope:
 
 ### U3.2 — batch preview, append, and resulting discovery
 
-**Status:** next.
+**Status:** complete in PR #170.
 
-Scope:
+Implemented scope:
 
-- add batch to an existing managed research using the current append/fork semantics and canonical composite locks;
-- accept pasted seeds through a temporary input artifact rather than inventing downstream seed semantics;
-- preflight/preview supplied, new, duplicate, and promoted counts where those values can be derived without committing the batch;
-- keep preview advisory and recompute authoritative counts under lock at commit time;
-- create the batch/fork using the existing research append implementation rather than cloning it in the UI layer;
-- run/resume the resulting current discovery generation and expose durable progress through existing job/status polling;
-- preserve batch history and result run IDs exactly as the current research container contract defines them.
-
-Do not combine U3.2 with human gates or configuration evolution.
+- add a read-only append preview for existing managed researches with supplied-line, normalized-unique, new, already-known, and promoted-root counts;
+- derive preview from the current terminal discovery generation without writing batch/fork state;
+- make preview advisory only and recompute authoritative append state after acquiring the canonical composite `execution → batch` research lock;
+- materialize pasted browser seeds through a temporary CSV and the existing seed loader/normalizer rather than inventing downstream seed semantics;
+- fail closed for historical/indexed researches without a managed `research.json` container instead of implicitly adopting them through the UI;
+- reuse the existing `prepareResearchAppend` fork/promotion/evidence-carry-forward implementation for commit;
+- persist duplicate-only batches as history without allocating a pointless new discovery generation;
+- keep the composite lock through collection of a newly forked current discovery generation;
+- invoke discovery directly with `manageProcessSignals: false` and do not implicitly enter enrichment/finalization;
+- expose a distinct `append_batch` ephemeral job/result rather than fabricating a config-first workflow result;
+- expose same-origin JSON plan/commit endpoints and a managed Research Detail batch editor with mandatory preview invalidation and canonical discovery polling;
+- preserve batch lineage/result run IDs and immutable old generations exactly as the existing append contract defines them;
+- add research/application/job/HTTP/browser regressions, including preview-versus-commit classification parity.
 
 ### U3.3 — optional local folder convenience
 
-Only add an OS "open research output folder" action if it remains a tiny portable convenience after U3.2. It must never become a requirement for operating the research or a new path-selection mechanism.
+**Status:** optional/deferred unless personal usage makes it useful.
+
+Only add an OS "open research output folder" action if it remains a tiny portable convenience. It must never become a requirement for operating the research or a new path-selection mechanism.
 
 ### Result
 
-When U3.2 closes, long-lived research containers can be renamed and extended from the UI. U3.3 is optional comfort and is not an MVP gate.
+Long-lived managed research containers can be renamed and extended with new batches from the UI. U3.3 is not required for MVP completion.
 
 ---
 
 ## U4 — Human gates
+
+**Status:** next active MVP block after U3.2.
 
 ### Scope
 

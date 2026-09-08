@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ResearchBatchExecutionResultV1 } from '../application/researchBatches.js';
 import type { ResearchDiscoveryRepairResultV1 } from '../application/researchRepair.js';
 import type {
   ResearchRunExecution,
@@ -6,7 +7,7 @@ import type {
 } from '../application/researchWorkflow.js';
 import { ResearchError } from '../shared/errors.js';
 
-export type UiJobKind = 'create_research' | 'resume_research' | 'repair_discovery';
+export type UiJobKind = 'create_research' | 'resume_research' | 'repair_discovery' | 'append_batch';
 export type UiJobState = 'running' | 'finished' | 'failed';
 
 export type UiJobSnapshotV1 = {
@@ -20,6 +21,7 @@ export type UiJobSnapshotV1 = {
   finishedAt: string | null;
   result: ResearchRunMachineResultV1 | null;
   repairResult: ResearchDiscoveryRepairResultV1 | null;
+  batchResult: ResearchBatchExecutionResultV1 | null;
   error: { code: string; message: string } | null;
 };
 
@@ -43,7 +45,7 @@ export type UiJobRegistryOptions = {
   retainFinished?: number;
 };
 
-type WorkflowJobKind = Exclude<UiJobKind, 'repair_discovery'>;
+type WorkflowJobKind = 'create_research' | 'resume_research';
 
 export class UiJobRegistry {
   private readonly jobs = new Map<string, UiJobSnapshotV1>();
@@ -93,14 +95,32 @@ export class UiJobRegistry {
     researchId: string,
     task: () => Promise<ResearchDiscoveryRepairResultV1>,
   ): UiJobSnapshotV1 {
-    const normalizedId = researchId.trim();
-    if (normalizedId === '') throw new ResearchError('INPUT_SCHEMA_ERROR', 'Repair job research id must not be empty.');
+    const normalizedId = requireJobResearchId(researchId, 'Repair');
     const job = this.begin('repair_discovery', normalizedId);
 
     void Promise.resolve()
       .then(task)
       .then((result) => {
         job.repairResult = { ...result };
+        job.researchId = result.researchId;
+        this.finish(job);
+      })
+      .catch((error: unknown) => this.fail(job, error));
+
+    return snapshot(job);
+  }
+
+  startBatch(
+    researchId: string,
+    task: () => Promise<ResearchBatchExecutionResultV1>,
+  ): UiJobSnapshotV1 {
+    const normalizedId = requireJobResearchId(researchId, 'Batch');
+    const job = this.begin('append_batch', normalizedId);
+
+    void Promise.resolve()
+      .then(task)
+      .then((result) => {
+        job.batchResult = cloneBatchResult(result);
         job.researchId = result.researchId;
         this.finish(job);
       })
@@ -143,6 +163,7 @@ export class UiJobRegistry {
       finishedAt: null,
       result: null,
       repairResult: null,
+      batchResult: null,
       error: null,
     };
     this.jobs.set(job.jobId, job);
@@ -178,6 +199,7 @@ function snapshot(job: UiJobSnapshotV1): UiJobSnapshotV1 {
     ...job,
     result: job.result === null ? null : cloneResult(job.result),
     repairResult: job.repairResult === null ? null : { ...job.repairResult },
+    batchResult: job.batchResult === null ? null : cloneBatchResult(job.batchResult),
     error: job.error === null ? null : { ...job.error },
   };
 }
@@ -188,6 +210,22 @@ function cloneResult(result: ResearchRunMachineResultV1): ResearchRunMachineResu
     unresolvedHumanRequirements: [...result.unresolvedHumanRequirements],
     stageFingerprints: { ...result.stageFingerprints },
   };
+}
+
+function cloneBatchResult(result: ResearchBatchExecutionResultV1): ResearchBatchExecutionResultV1 {
+  return {
+    ...result,
+    promotedNormalizedKeywords: [...result.promotedNormalizedKeywords],
+    discovery: { ...result.discovery },
+  };
+}
+
+function requireJobResearchId(value: string, label: string): string {
+  const normalized = value.trim();
+  if (normalized === '') {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `${label} job research id must not be empty.`);
+  }
+  return normalized;
 }
 
 function errorSnapshot(error: unknown): { code: string; message: string } {
