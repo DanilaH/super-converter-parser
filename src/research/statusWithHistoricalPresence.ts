@@ -68,10 +68,16 @@ export async function buildResearchStatusWithHistoricalPresence(input: {
   const provenance = await readOperatorConfigProvenance(projected.researchDirectory);
   if (provenance === null) return projected;
   const plan = buildExistingResearchPlan(projected, null, provenance);
-  return { ...projected, nextAction: configFirstNextAction(plan) };
+  return {
+    ...projected,
+    nextAction: configFirstNextAction(plan, projected.library.derivedSnapshotsCurrent ?? null),
+  };
 }
 
-function configFirstNextAction(plan: ExistingResearchExecutionPlan): ResearchNextAction {
+export function configFirstNextAction(
+  plan: ExistingResearchExecutionPlan,
+  derivedSnapshotsCurrent: boolean | null = null,
+): ResearchNextAction {
   const researchId = plan.stateContext.researchId;
   const stableRunCommand = `npm run research:run -- --research ${researchId}`;
   const discovery = requireStage(plan, 'discovery');
@@ -139,14 +145,19 @@ function configFirstNextAction(plan: ExistingResearchExecutionPlan): ResearchNex
       command: null,
     };
   }
+  if (
+    finalization.state === 'already_satisfied'
+    && plan.durableState.finalizationState === 'published'
+    && plan.durableState.libraryPublished
+    && derivedSnapshotsCurrent === false
+  ) {
+    return {
+      code: 'publish_library',
+      message: 'Durable Library publication exists, but derived library.json/library.zip snapshots need idempotent repair.',
+      command: stableRunCommand,
+    };
+  }
   if (finalization.state === 'ready') {
-    if (plan.durableState.finalizationState === 'published' && plan.durableState.libraryPublished) {
-      return {
-        code: 'publish_library',
-        message: 'Durable Library publication exists, but derived library.json/library.zip snapshots need idempotent repair.',
-        command: stableRunCommand,
-      };
-    }
     if (plan.durableState.finalizationState === 'ready_to_publish') {
       return {
         code: 'publish_library',
