@@ -5,11 +5,12 @@ import test from 'node:test';
 
 test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair UX', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [appSource, repairSource, html, css] = await Promise.all([
+  const [appSource, repairSource, html, css, repairCss] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
@@ -18,6 +19,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
   assert.match(html, /id="repair-action-root"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
 
@@ -35,7 +37,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
 
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
-  assert.match(css, /\.repair-action/);
+  assert.match(repairCss, /\.repair-action/);
+  assert.match(repairCss, /\.repair-action-shell/);
 });
 
 test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {
