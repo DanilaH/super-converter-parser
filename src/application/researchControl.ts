@@ -106,9 +106,17 @@ export async function inspectResearch(
 }
 
 function hostSignal(options: ResearchControlOptions): HostCancellationSignal {
-  const signal = options.signal ?? { cancelled: false };
-  if (options.manageProcessSignals === undefined) return signal;
-  return { ...signal, manageProcessSignals: options.manageProcessSignals };
+  const source = options.signal ?? { cancelled: false };
+  if (options.manageProcessSignals === undefined) return source;
+  return {
+    get cancelled() {
+      return source.cancelled;
+    },
+    set cancelled(value: boolean) {
+      source.cancelled = value;
+    },
+    manageProcessSignals: options.manageProcessSignals,
+  };
 }
 
 function withDiscoverySignalPolicy(
