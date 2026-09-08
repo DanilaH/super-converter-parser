@@ -64,6 +64,7 @@ export type DiscoveryRunRequest = {
   outputRoot?: string | null;
   name?: string | null;
   semanticConfig?: DiscoverySemanticConfig | null;
+  manageProcessSignals?: boolean;
   onFreshResearchInitialized?: ((context: {
     runId: string;
     researchDirectory: string;
@@ -147,6 +148,7 @@ export async function runDiscovery(
   const forceRefresh = request.forceRefresh ?? false;
   const rawRefreshKeywords = request.refreshKeywords ?? [];
   const jsonStatus = request.jsonStatus ?? false;
+  const manageProcessSignals = request.manageProcessSignals ?? true;
   const isResume = requestInput.kind === 'resume';
   if (retryFailed && !isResume) {
     console.error('--retry-failed requires a resume request.');
@@ -170,7 +172,7 @@ export async function runDiscovery(
       process.kill(process.pid, 'SIGINT');
     }
   };
-  process.on('SIGINT', onSigint);
+  if (manageProcessSignals) process.on('SIGINT', onSigint);
 
   let browser: Browser | null = null;
   let store: RunStore | null = null;
@@ -620,7 +622,7 @@ export async function runDiscovery(
     cacheStore?.close();
     await browser?.close().catch(() => undefined);
     browser = null;
-    process.off('SIGINT', onSigint);
+    if (manageProcessSignals) process.off('SIGINT', onSigint);
   }
 }
 
