@@ -17,7 +17,7 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.doesNotThrow(() => new Function(repairSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
-  assert.match(html, /id="repair-action-root"/);
+  assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
