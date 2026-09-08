@@ -3,20 +3,36 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata/batch/shortlist UX', async () => {
+test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata/batch/human-gate UX', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [appSource, batchSource, metadataSource, repairSource, shortlistSource, html, css, batchCss, metadataCss, repairCss, shortlistCss] = await Promise.all([
+  const [
+    appSource,
+    batchSource,
+    metadataSource,
+    repairSource,
+    shortlistSource,
+    finalistSource,
+    html,
+    css,
+    batchCss,
+    metadataCss,
+    repairCss,
+    shortlistCss,
+    finalistCss,
+  ] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('shortlist.js', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('finalists.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('batches.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('metadata.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('shortlist.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('finalists.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
@@ -24,20 +40,24 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.doesNotThrow(() => new Function(metadataSource));
   assert.doesNotThrow(() => new Function(repairSource));
   assert.doesNotThrow(() => new Function(shortlistSource));
+  assert.doesNotThrow(() => new Function(finalistSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/batches\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/metadata\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/shortlist\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/finalists\.js"><\/script>/);
   assert.match(html, /id="batch-action-root" class="batch-action-shell hidden"/);
   assert.match(html, /id="metadata-action-root" class="metadata-action-shell hidden"/);
   assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
   assert.match(html, /id="shortlist-action-root" class="shortlist-action-shell hidden"/);
+  assert.match(html, /id="finalist-action-root" class="finalist-action-shell hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/batches\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/metadata\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/shortlist\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/finalists\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
 
@@ -78,6 +98,15 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(shortlistSource, /gate\.maxSelection/);
   assert.doesNotMatch(shortlistSource, /innerHTML\s*=/);
 
+  assert.match(finalistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/finalist-scope/);
+  assert.match(finalistSource, /enrichmentId:\s*gate\.enrichmentId/);
+  assert.match(finalistSource, /mode:\s*'selected'/);
+  assert.match(finalistSource, /clusterIds/);
+  assert.match(finalistSource, /mode:\s*'all'/);
+  assert.match(finalistSource, /Use all \$\{gate\.clusterCount\} clusters/);
+  assert.match(finalistSource, /not recommendation order/);
+  assert.doesNotMatch(finalistSource, /innerHTML\s*=/);
+
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
   assert.match(batchCss, /\.batch-action-shell/);
@@ -88,6 +117,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(repairCss, /\.repair-action-shell/);
   assert.match(shortlistCss, /\.shortlist-action-shell/);
   assert.match(shortlistCss, /\.shortlist-table/);
+  assert.match(finalistCss, /\.finalist-action-shell/);
+  assert.match(finalistCss, /\.finalist-card/);
 });
 
 test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {
