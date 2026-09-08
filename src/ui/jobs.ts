@@ -48,6 +48,9 @@ export class UiJobRegistry {
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? randomUUID;
     this.retainFinished = options.retainFinished ?? 50;
+    if (!Number.isInteger(this.retainFinished) || this.retainFinished < 0) {
+      throw new RangeError('retainFinished must be a non-negative integer.');
+    }
   }
 
   start(
@@ -83,12 +86,14 @@ export class UiJobRegistry {
         job.researchId = execution.result.researchId ?? job.researchId;
         job.finishedAt = this.now().toISOString();
         if (this.activeJobId === job.jobId) this.activeJobId = null;
+        this.trimFinished();
       })
       .catch((error: unknown) => {
         job.state = 'failed';
         job.error = errorSnapshot(error);
         job.finishedAt = this.now().toISOString();
         if (this.activeJobId === job.jobId) this.activeJobId = null;
+        this.trimFinished();
       });
 
     return snapshot(job);
@@ -112,7 +117,6 @@ export class UiJobRegistry {
   }
 
   private trimFinished(): void {
-    if (this.retainFinished < 0) return;
     const finished = [...this.jobs.values()]
       .filter((job) => job.state !== 'running')
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
