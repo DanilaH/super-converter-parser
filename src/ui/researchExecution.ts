@@ -8,6 +8,7 @@ import {
   type ResearchControlOptions,
 } from '../application/researchControl.js';
 import type { ResearchRunExecution } from '../application/researchWorkflow.js';
+import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import type { OperatorResearchConfigSourceV1 } from '../operatorConfig/contracts.js';
 import { ResearchError } from '../shared/errors.js';
 
@@ -23,7 +24,8 @@ export type UiCreateResearchDraftV1 = {
 
 export type UiResearchPlanPreviewV1 = {
   version: 1;
-  keywordCount: number;
+  inputLineCount: number;
+  uniqueKeywordCount: number;
   effectiveConfigFingerprint: string;
   preset: { id: string; revision: number } | null;
   workflowTarget: 'discovery' | 'enrichment' | 'finalization';
@@ -67,6 +69,9 @@ export async function previewUiResearchDraft(
 ): Promise<UiResearchPlanPreviewV1> {
   const draft = validateUiCreateResearchDraft(value);
   const keywords = parseKeywordLines(draft.keywords);
+  const uniqueKeywords = buildSeedKeywords(
+    keywords.map((keyword, index) => ({ keyword, rowNumber: index + 2 })),
+  );
   const declaringPath = join(tmpdir(), 'runner-ui-preview', 'operator-config.json');
   const loaded = await deps.resolveOperatorResearchConfigInput(
     buildOperatorSource(draft),
@@ -75,7 +80,8 @@ export async function previewUiResearchDraft(
   const semantics = loaded.plan.semantics;
   return {
     version: 1,
-    keywordCount: keywords.length,
+    inputLineCount: keywords.length,
+    uniqueKeywordCount: uniqueKeywords.length,
     effectiveConfigFingerprint: loaded.plan.effectiveConfigFingerprint,
     preset: loaded.plan.preset,
     workflowTarget: semantics.workflow.target,
