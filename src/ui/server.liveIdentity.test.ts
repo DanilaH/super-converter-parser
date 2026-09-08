@@ -5,7 +5,7 @@ import type { ResearchRunExecution } from '../application/researchWorkflow.js';
 import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { outputLayout } from '../outputs/researchLayout.js';
 import { previewUiResearchDraft } from './researchExecution.js';
-import { startUiServer, type UiServerDeps } from './server.js';
+import { DEFAULT_UI_SERVER_DEPS, startUiServer, type UiServerDeps } from './server.js';
 
 const root = resolve('/tmp/runner-ui-live-id-output');
 const diagnostics: OutputDiagnostics = {
@@ -59,6 +59,7 @@ test('create endpoint exposes durable researchId while the UI job is still runni
   const pending = new Promise<ResearchRunExecution>((resolvePromise) => { finish = resolvePromise; });
 
   const deps: UiServerDeps = {
+    ...DEFAULT_UI_SERVER_DEPS,
     buildOutputDiagnostics: async () => diagnostics,
     listResearchCatalog: async () => [],
     inspectResearchConsole: async () => { throw new Error('detail not expected'); },
