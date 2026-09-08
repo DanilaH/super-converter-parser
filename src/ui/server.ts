@@ -595,3 +595,16 @@ class UiHttpError extends Error {
     this.name = 'UiHttpError';
   }
 }
+
+async function main(): Promise<void> {
+  try {
+    const started = await startUiServer();
+    console.log(`Runner UI: ${started.url}`);
+    console.log('Local Runner console. Press Ctrl+C to stop.');
+  } catch (error) {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) void main();
