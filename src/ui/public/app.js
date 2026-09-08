@@ -161,7 +161,7 @@ headphone test
 speaker test`,
     rows: 14,
   });
-  keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and normalized unique keywords.' }));
+  keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and discovery-normalized unique keyword count.' }));
 
   const advanced = node('details', { className: 'advanced-fields' });
   advanced.append(node('summary', { text: 'Locale overrides' }));
@@ -349,11 +349,11 @@ async function renderResearchDetail(researchId, epoch) {
       api('/api/jobs').catch(() => ({ jobs: [] })),
     ]);
     if (epoch !== routeEpoch) return;
-    const { status, container, operatorConfig } = detail;
+    const { status, container, operatorConfig, humanRequirement } = detail;
     const activeJob = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
     const activeForThisResearch = activeJob?.researchId === status.researchId ? activeJob : null;
     app.replaceChildren();
-    publishRenderedResearchState(status);
+    publishRenderedResearchState(status, humanRequirement);
 
     const top = node('div', { className: 'detail-top' });
     const back = node('a', { className: 'back-link', href: '#/researches', text: '← Researches' });
@@ -807,21 +807,17 @@ function formatDate(value) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
-function publishRenderedResearchState(status) {
+function publishRenderedResearchState(status, humanRequirement) {
   app.dataset.researchId = status.researchId;
   app.dataset.nextActionCode = status.nextAction?.code ?? 'none';
-  app.dataset.nextActionRequiresInput = String(
-    status.nextAction?.code !== 'none'
-      && status.nextAction?.code !== 'repair_discovery'
-      && !status.nextAction?.command,
-  );
+  app.dataset.humanRequirement = humanRequirement ?? '';
   app.dataset.repairable = String(status.discovery?.keywordCounts?.repairable ?? 0);
 }
 
 function clearRenderedResearchState() {
   delete app.dataset.researchId;
   delete app.dataset.nextActionCode;
-  delete app.dataset.nextActionRequiresInput;
+  delete app.dataset.humanRequirement;
   delete app.dataset.repairable;
 }
 
