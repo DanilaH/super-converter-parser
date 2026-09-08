@@ -1,10 +1,15 @@
 import { join } from 'node:path';
 import process from 'node:process';
 import { RunStore } from '../db/store.js';
-import type { CancellationSignal } from '../enrichment/types.js';
 import { CLUSTERING_ALGORITHM_VERSION } from '../enrichment/clustering.js';
+import { assertRepresentativeSourceFreshness } from '../enrichment/representativeSourceFreshness.js';
+import type { CancellationSignal } from '../enrichment/types.js';
 import { CLUSTER_URL_IDENTITY_VERSION } from '../enrichment/urlIdentity.js';
-import { resolveEnrichmentLocation, resolveOutputRoot } from '../outputs/researchLayout.js';
+import {
+  resolveEnrichmentLocation,
+  resolveOutputRoot,
+  resolveRunLocation,
+} from '../outputs/researchLayout.js';
 import { buildExistingResearchPlan } from '../operatorConfig/planner.js';
 import { readOperatorConfigProvenance } from '../operatorConfig/provenance.js';
 import { buildResearchStatusWithHistoricalPresence } from '../research/statusWithHistoricalPresence.js';
@@ -278,6 +283,8 @@ export async function loadFinalistScopeClusters(
       );
     }
 
+    await assertFinalistSourceIsFresh(outputRoot, run.sourceRunId, clusteringItem.updatedAt);
+
     const clusters = store.loadKeywordClusters(enrichmentId);
     if (clusters.length === 0) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', `Enrichment ${enrichmentId} contains no clusters.`);
@@ -311,6 +318,42 @@ export async function loadFinalistScopeClusters(
     }));
   } finally {
     store.close();
+  }
+}
+
+async function assertFinalistSourceIsFresh(
+  outputRoot: string,
+  sourceRunId: string,
+  clusteringUpdatedAt: string,
+): Promise<void> {
+  const sourceLocation = await resolveRunLocation(outputRoot, sourceRunId);
+  const sourceStore = RunStore.openReadOnly(join(sourceLocation.discoveryDirectory, 'run.sqlite'));
+  try {
+    const sourceRun = sourceStore.loadRun(sourceRunId);
+    if (!sourceRun) {
+      throw new ResearchError('INPUT_SCHEMA_ERROR', `Source run not found: ${sourceRunId}.`);
+    }
+    if (sourceRun.state !== 'completed') {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        `Source run ${sourceRunId} is ${sourceRun.state}; finalist scope requires the completed source snapshot used by clustering.`,
+      );
+    }
+    try {
+      assertRepresentativeSourceFreshness({
+        sourceRunId,
+        sourceUpdatedAt: sourceRun.updatedAt,
+        clusteringUpdatedAt,
+      });
+    } catch (error) {
+      throw new ResearchError(
+        'INPUT_SCHEMA_ERROR',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    }
+  } finally {
+    sourceStore.close();
   }
 }
 
