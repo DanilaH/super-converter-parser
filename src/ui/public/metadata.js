@@ -9,20 +9,25 @@ void refreshMetadataAction();
 async function refreshMetadataAction() {
   const epoch = ++refreshEpoch;
   hideRoot();
-  const researchId = researchIdFromHash();
-  if (!researchId) return;
+  const routeResearchId = researchIdFromHash();
+  if (!routeResearchId) return;
 
   try {
-    const [detail, jobsPayload] = await Promise.all([
-      api(`/api/researches/${encodeURIComponent(researchId)}`),
+    const [catalogPayload, jobsPayload] = await Promise.all([
+      api(`/api/researches?q=${encodeURIComponent(routeResearchId)}`),
       api('/api/jobs').catch(() => ({ jobs: [] })),
     ]);
     if (epoch !== refreshEpoch) return;
-    if (detail.status?.legacy || !detail.container || !detail.status?.researchId) return;
+
+    const item = (catalogPayload.researches ?? []).find((candidate) =>
+      candidate.researchId === routeResearchId
+      || (candidate.knownRunIds ?? []).includes(routeResearchId));
+    if (!item?.managed || !item.researchId) return;
+
     const active = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
     renderSummary({
-      researchId: detail.status.researchId,
-      label: detail.status.label,
+      researchId: item.researchId,
+      label: item.label,
       activeJob: active,
     });
   } catch {
