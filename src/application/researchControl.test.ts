@@ -157,3 +157,33 @@ test('application adapters can disable discovery process-signal ownership withou
 
   assert.equal(observedPolicy, false);
 });
+
+test('host cancellation policy preserves a live cancellation signal in both directions', async () => {
+  const loaded = { plan: { effectiveConfigFingerprint: 'typed-config' } } as LoadedOperatorResearchConfig;
+  const sourceSignal = { cancelled: false };
+  let observedPolicy: boolean | undefined;
+  const runtime: ResearchControlRuntime = {
+    runFromConfig: async (_path, _outputRoot, _deps, _env, signal) => {
+      const hostSignal = signal as typeof signal & { manageProcessSignals?: boolean };
+      observedPolicy = hostSignal.manageProcessSignals;
+      assert.equal(hostSignal.cancelled, false);
+      sourceSignal.cancelled = true;
+      assert.equal(hostSignal.cancelled, true);
+      hostSignal.cancelled = false;
+      assert.equal(sourceSignal.cancelled, false);
+      return EXECUTION;
+    },
+    runFromExisting: async () => EXECUTION,
+  };
+
+  await executeNewResearch(loaded, {
+    deps: BASE_DEPS,
+    runtime,
+    env: {},
+    signal: sourceSignal,
+    manageProcessSignals: false,
+  });
+
+  assert.equal(observedPolicy, false);
+  assert.equal(sourceSignal.cancelled, false);
+});
