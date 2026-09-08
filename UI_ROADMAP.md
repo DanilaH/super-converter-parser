@@ -277,7 +277,7 @@ The stated UI MVP Definition of Done is met. A normal config-first research can 
 
 ## Post-MVP hardening — browser coordination
 
-**Status:** implemented in PR #175; pending cold review, exact-head CI, final gate, and squash merge.
+**Status:** complete; merged in PR #175. Exact-head CI #934 passed on Ubuntu and Windows.
 
 This is a bounded correctness/robustness slice discovered by independent review of the completed MVP. It does **not** reopen U5/U6 scope.
 
