@@ -19,9 +19,9 @@ RESEARCH_UI_NO_OPEN=true
 
 `RESEARCH_UI_NO_OPEN=true` starts the server without opening a browser automatically.
 
-## Current U1 surface
+## Current browser surface
 
-The current console is intentionally read-only. It can:
+The U1 browser shell remains focused on inspection while U2 operator forms are built. It can:
 
 - browse researches discovered from the canonical run index;
 - search by persisted label, stable `researchId`, current run id, or another indexed run id;
@@ -33,7 +33,22 @@ The current console is intentionally read-only. It can:
 - inspect immutable OperatorConfig provenance when available;
 - inspect canonical output-root diagnostics.
 
-It does not create, resume, repair, rename, append, finalize, publish, or otherwise mutate research state yet. Non-GET API requests fail closed.
+## U2 execution boundary
+
+The local server also exposes the bounded execution primitives needed by the next browser screens:
+
+- preview a new-research draft through the existing OperatorConfig/preset resolver;
+- start a new research from pasted seed keywords using the existing application workflow;
+- resume an existing configured research by stable `researchId`;
+- poll ephemeral in-process job state and the canonical workflow result.
+
+Mutation requests are deliberately stricter than reads: they require `POST`, `Content-Type: application/json`, and a same-origin loopback `Origin` using the actual UI port. Request bodies are bounded. An unrelated webpage cannot drive localhost research operations merely because the Runner UI is open.
+
+Only one UI execution job is admitted at a time. The job registry is RAM-only convenience state, not durable Runner truth. Restarting the UI can therefore forget an in-process job record, but the research itself is recovered from the existing durable SQLite/index/status contracts.
+
+New-research seed text is materialized only into a temporary local workspace long enough for the normal seed loader/workflow to consume it; that workspace is removed after execution. OperatorConfig provenance and research evidence keep their existing semantics.
+
+Repair, batch mutation, rename, and human-gate editing are not part of this execution-boundary slice.
 
 ## Truth model
 
