@@ -70,6 +70,34 @@ function post(url: string, body: unknown): Promise<Response> {
   });
 }
 
+test('default static loader serves external research metadata editor assets', async () => {
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: {
+      ...DEFAULT_UI_SERVER_DEPS,
+      buildOutputDiagnostics: async () => diagnostics,
+      listResearchCatalog: async () => [],
+      inspectResearchConsole: async () => { throw new Error('detail not expected'); },
+      openBrowser: () => undefined,
+    },
+  });
+  try {
+    const script = await fetch(`${started.url}/metadata.js`);
+    assert.equal(script.status, 200);
+    assert.match(script.headers.get('content-type') ?? '', /text\/javascript/);
+    assert.match(await script.text(), /metadata-action-root/);
+
+    const stylesheet = await fetch(`${started.url}/metadata.css`);
+    assert.equal(stylesheet.status, 200);
+    assert.match(stylesheet.headers.get('content-type') ?? '', /text\/css/);
+    assert.match(await stylesheet.text(), /metadata-action-shell/);
+  } finally {
+    await started.close();
+  }
+});
+
 test('label endpoint delegates to the serialized application action and returns committed metadata', async () => {
   let observedId = '';
   let observedLabel: unknown = null;
