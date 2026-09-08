@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { resolveOperatorResearchConfigInput } from '../application/operatorInputs.js';
-import type { ResearchRunExecution } from '../application/researchWorkflow.js';
+import {
+  DEFAULT_RESEARCH_RUN_DEPS,
+  type ResearchRunExecution,
+} from '../application/researchWorkflow.js';
 import {
   executeUiResearchDraft,
   executeUiResearchResume,
@@ -76,6 +79,62 @@ test('draft execution materializes a temporary valid seed CSV and disables proce
   assert.equal(result, EXECUTION);
   assert.equal(observedSignals, false);
   assert.equal(observedCsv, 'keyword\n"alpha tool"\n"beta, tool"\n"alpha   tool"\n');
+});
+
+test('live initialization chains after the existing fresh-research callback instead of replacing it', async () => {
+  const events: string[] = [];
+  let initializedId = '';
+  const baseDeps = {
+    ...DEFAULT_RESEARCH_RUN_DEPS,
+    runDiscovery: async (request: Parameters<typeof DEFAULT_RESEARCH_RUN_DEPS.runDiscovery>[0]) => {
+      await request.onFreshResearchInitialized?.({
+        runId: 'research-live',
+        researchDirectory: '/output/research-live',
+        discoveryDirectory: '/output/research-live/discovery',
+      });
+      return {
+        exitCode: 0,
+        researchId: 'research-live',
+        runId: 'research-live',
+        researchDirectory: '/output/research-live',
+        discoveryDirectory: '/output/research-live/discovery',
+        state: 'completed',
+      };
+    },
+  };
+  const deps: UiResearchExecutionDeps = {
+    resolveOperatorResearchConfigInput,
+    executeNewResearch: async (_loaded, options) => {
+      assert.ok(options?.deps);
+      await options.deps.runDiscovery(
+        {
+          input: { kind: 'seeds', path: '/tmp/seeds.csv' },
+          onFreshResearchInitialized: async () => { events.push('provenance'); },
+        },
+        options.deps.cliDeps,
+        {},
+      );
+      return EXECUTION;
+    },
+    executeExistingResearch: async () => EXECUTION,
+  };
+
+  await executeUiResearchDraft(
+    DRAFT,
+    {
+      env: {},
+      outputRoot: '/tmp/output',
+      deps: baseDeps,
+      onResearchInitialized: ({ researchId }) => {
+        initializedId = researchId;
+        events.push('ui');
+      },
+    },
+    deps,
+  );
+
+  assert.equal(initializedId, 'research-live');
+  assert.deepEqual(events, ['provenance', 'ui']);
 });
 
 test('resume uses the same application workflow with process-level signal ownership disabled', async () => {
