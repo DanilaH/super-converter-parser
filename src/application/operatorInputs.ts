@@ -1,7 +1,5 @@
 import { resolve } from 'node:path';
 import {
-  type OperatorContinuationV1,
-  type OperatorResearchConfigSourceV1,
   validateOperatorContinuation,
   validateOperatorResearchConfigSource,
 } from '../operatorConfig/contracts.js';
@@ -22,7 +20,7 @@ import {
  * path contract for research inputs.
  */
 export async function resolveOperatorResearchConfigInput(
-  source: OperatorResearchConfigSourceV1,
+  source: unknown,
   declaringPath: string,
 ): Promise<LoadedOperatorResearchConfig> {
   const sourceConfig = validateOperatorResearchConfigSource(source);
@@ -39,7 +37,7 @@ export async function resolveOperatorResearchConfigInput(
  * file. Path-bearing actions retain the same declaring-file-relative semantics.
  */
 export function resolveOperatorContinuationInput(
-  value: OperatorContinuationV1,
+  value: unknown,
   declaringPath: string,
 ): ResolvedOperatorContinuation {
   const continuation = validateOperatorContinuation(value);
