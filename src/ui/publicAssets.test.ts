@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -25,4 +25,18 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
 
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
+});
+
+test('browser preset selector stays in lockstep with canonical built-in preset files', async () => {
+  const appSource = await readFile(fileURLToPath(new URL('./public/app.js', import.meta.url)), 'utf8');
+  const presetDirectory = fileURLToPath(new URL('../../configs/presets/', import.meta.url));
+  const files = (await readdir(presetDirectory))
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => name.slice(0, -'.json'.length))
+    .sort();
+  const browserPresetIds = [...appSource.matchAll(/\{ id: '([a-z0-9-]+)', label: '[^']+' \}/g)]
+    .map((match) => match[1] as string)
+    .sort();
+
+  assert.deepEqual(browserPresetIds, files);
 });
