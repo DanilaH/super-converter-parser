@@ -31,6 +31,13 @@ if (testFiles.length === 0) {
 
 const child = spawn(process.execPath, ['--import', 'tsx', '--test', ...testFiles], {
   stdio: 'inherit',
+  env: {
+    ...process.env,
+    // Integration tests intentionally use isolated temporary output roots.
+    // Production keeps ad-hoc overrides fail-closed unless this escape hatch is
+    // explicitly enabled by the caller.
+    RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE: 'true',
+  },
 });
 
 child.on('error', (error) => {
