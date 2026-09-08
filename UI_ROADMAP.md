@@ -92,7 +92,7 @@ The operator can browse, search, open, and understand existing researches withou
 
 ## U2 — Create, execute, resume, repair
 
-**Status:** complete in PR #168.
+**Status:** complete; merged through PR #168.
 
 ### U2.1 — safe execution boundary
 
@@ -133,7 +133,7 @@ The dependency-free browser shell remains sufficient for this scope; adding Reac
 
 ### U2.3 — explicit discovery repair
 
-**Status:** complete in PR #168.
+**Status:** complete; merged in PR #168.
 
 Implemented scope:
 
@@ -150,27 +150,52 @@ Implemented scope:
 
 ### Result
 
-New and interrupted research plus explicit discovery repair can be operated without CLI commands while repair remains explicit rather than implicit. U2 is closed; the next active capability is U3 research management and batch append.
+New and interrupted research plus explicit discovery repair can be operated without CLI commands while repair remains explicit rather than implicit.
 
 ---
 
 ## U3 — Research management and batches
 
+**Status:** active; delivered as bounded mutation slices.
+
+### U3.1 — mutable display label
+
+**Status:** complete in PR #169.
+
+Implemented scope:
+
+- treat `research.json.label` as mutable display metadata while immutable OperatorConfig provenance retains the original configured label;
+- rename without changing the research directory/original slug, `researchId`, current/known run IDs, batches, lineage, or immutable evidence;
+- atomically rewrite only `label` and `updatedAt` in the validated managed research container;
+- serialize rename against continuation and append using the existing composite `execution → batch` research lock;
+- make same-label rename idempotent without rewriting `updatedAt`;
+- refresh `results.zip` best-effort after the durable metadata commit, reporting archive failure as a warning rather than making the committed rename retryable;
+- expose strict same-origin JSON label mutation and a managed-research-only browser inline editor;
+- keep historical/legacy layouts non-renameable through this managed metadata action.
+
+### U3.2 — batch preview, append, and resulting discovery
+
 **Status:** next.
 
-### Scope
+Scope:
 
-- rename display label without changing directory, IDs, lineage, or immutable evidence;
-- visible/copyable `researchId`, current `runId`, current `enrichmentId`;
-- add batch to existing research using current append semantics and locks;
-- preflight/preview supplied, new, duplicate, and promoted counts where deterministically available before commit;
-- run/resume the resulting current discovery generation;
-- batch history and result run IDs;
-- optional OS "open output folder" convenience if implementable without weakening portability.
+- add batch to an existing managed research using the current append/fork semantics and canonical composite locks;
+- accept pasted seeds through a temporary input artifact rather than inventing downstream seed semantics;
+- preflight/preview supplied, new, duplicate, and promoted counts where those values can be derived without committing the batch;
+- keep preview advisory and recompute authoritative counts under lock at commit time;
+- create the batch/fork using the existing research append implementation rather than cloning it in the UI layer;
+- run/resume the resulting current discovery generation and expose durable progress through existing job/status polling;
+- preserve batch history and result run IDs exactly as the current research container contract defines them.
+
+Do not combine U3.2 with human gates or configuration evolution.
+
+### U3.3 — optional local folder convenience
+
+Only add an OS "open research output folder" action if it remains a tiny portable convenience after U3.2. It must never become a requirement for operating the research or a new path-selection mechanism.
 
 ### Result
 
-Long-lived research containers can be maintained from the UI.
+When U3.2 closes, long-lived research containers can be renamed and extended from the UI. U3.3 is optional comfort and is not an MVP gate.
 
 ---
 
