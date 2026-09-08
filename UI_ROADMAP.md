@@ -92,7 +92,7 @@ The operator can browse, search, open, and understand existing researches withou
 
 ## U2 — Create, execute, resume, repair
 
-**Status:** active, delivered as bounded slices rather than one oversized mutation PR.
+**Status:** complete in PR #168.
 
 ### U2.1 — safe execution boundary
 
@@ -112,7 +112,7 @@ Implemented scope:
 
 ### U2.2 — operator create/resume screens
 
-**Status:** complete in PR #167.
+**Status:** complete; merged in PR #167.
 
 Implemented scope:
 
@@ -131,19 +131,32 @@ Implemented scope:
 
 The dependency-free browser shell remains sufficient for this scope; adding React/Vite here would add maintenance surface without solving a demonstrated problem.
 
-### U2.3 — repair
+### U2.3 — explicit discovery repair
 
-**Status:** next.
+**Status:** complete in PR #168.
 
-Repair remains a separate bounded capability because discovery `retryFailed` is not an OperatorContinuation action and has distinct mutation semantics. Expose it only where current Runner rules mark checkpoints repairable; do not reinterpret ordinary resume as repair.
+Implemented scope:
+
+- add a typed application repair action over the existing discovery `retryFailed` behavior rather than routing repair through OperatorContinuation;
+- authorize repair only from canonical `nextAction.code === repair_discovery` and `repairable > 0`;
+- acquire the existing per-research execution lock and repeat canonical eligibility checks under the lock before mutation;
+- fail closed if repairability disappears or the current discovery generation changes while waiting for the lock;
+- invoke the existing discovery resume path with `retryFailed: true` while the long-lived UI host retains process-signal ownership;
+- expose a distinct `repair_discovery` ephemeral job/result surface instead of fabricating a config-first workflow result;
+- add a dedicated same-origin JSON mutation endpoint and a separate Research Detail specialist repair action;
+- preserve ordinary Continue as a disjoint allowlist that still excludes repair and human-input gates;
+- refresh durable canonical status after repair completion;
+- add application, job, HTTP, and browser regressions for repair eligibility and separation from ordinary continuation.
 
 ### Result
 
-When U2.3 closes, new and interrupted research plus explicit discovery repair can be operated without CLI commands while repair remains explicit rather than implicit.
+New and interrupted research plus explicit discovery repair can be operated without CLI commands while repair remains explicit rather than implicit. U2 is closed; the next active capability is U3 research management and batch append.
 
 ---
 
 ## U3 — Research management and batches
+
+**Status:** next.
 
 ### Scope
 
