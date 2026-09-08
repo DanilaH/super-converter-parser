@@ -59,10 +59,18 @@ Research Detail exposes a browser continuation button only when all of the follo
 
 - the research has immutable OperatorConfig provenance;
 - the canonical `nextAction` supplies an executable stable-research command;
-- the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
+- the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication/derived-snapshot repair step;
 - no other UI execution job is active.
 
 The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection.
+
+### Derived Library snapshot repair
+
+`research-library/library.sqlite` and the durable publication lineage remain authoritative. `library.json` and `library.zip` are derived convenience snapshots.
+
+For a research whose current snapshot is already durably published, deep status also verifies those derived files. If the durable publication remains current but `library.json` or `library.zip` is missing, invalid, or stale, config-first status exposes an executable `publish_library` next action rather than incorrectly reporting `none`. Ordinary stable-research continuation then re-enters the existing idempotent Library path to rebuild the derived snapshots; the UI does not create another publication state machine or a second publication record merely to repair derived files.
+
+A missing/unreadable durable `library.sqlite` is not treated as derived-snapshot damage: the base Library status cannot establish `published: true`, so this repair path is not offered. Likewise, higher-priority current work—discovery repair/resume, enrichment, finalist scope, or human decisions—continues to win over derived-snapshot repair.
 
 ### Explicit discovery repair
 
@@ -158,6 +166,14 @@ Terminal behavior is also unchanged:
 
 The browser reports this work as a distinct ephemeral `decisions_research` job, but job completion is not research completion: the canonical workflow result and durable status remain authoritative.
 
+### Human-gate browser activation and errors
+
+Specialist shortlist, finalist-scope, and decision modules no longer parse English `Next action` labels or explanatory copy to decide whether they own the page. After a successful deep status load, the main Research Detail renderer publishes a small ephemeral machine-readable projection on the existing `#app` element: current `researchId`, `nextActionCode`, whether that next action requires explicit human input, and the current repairable-checkpoint count. Specialist modules use that projection only to decide whether to fetch their canonical gate endpoint.
+
+This projection is presentation coordination, not a new state store: it is cleared on route changes/load failures, is rebuilt from the server's canonical status, and is never used as mutation authorization. Gate endpoints and application services still revalidate durable lineage and lock semantics independently.
+
+If canonical status says a human gate is active but loading its current evidence fails, the specialist surface now shows the failure and a `Reload current gate` action rather than silently hiding the form. This makes stale/corrupt evidence fail visibly while preserving the server-side fail-closed behavior.
+
 ### Display label
 
 Managed researches expose a compact display-label editor on Research Detail. This label is mutable presentation metadata in `research.json`; it is intentionally distinct from the immutable label captured in `operator-config.json` provenance when the research was created.
@@ -203,7 +219,9 @@ New-research and batch seed text, shortlist continuation CSV input, and human-de
 
 The console does not have a UI database. Existing Runner SQLite/research files and indexes remain truth.
 
-The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding human gate.
+The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. The discovery-repair specialist reuses the already-rendered deep-status projection instead of issuing a second full Research Detail request. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding human gate.
+
+The small `data-*` projection on `#app` exists only to coordinate independently loaded browser modules without coupling them to display strings or duplicating deep status reads. It is disposable and has no authority over server mutation checks.
 
 The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable or appendable through managed-research actions.
 
@@ -213,8 +231,8 @@ The canonical run index does not duplicate the display label. Managed catalog ro
 - automatic downstream enrichment/finalization after batch append;
 - configuration evolution within an existing V1 research container;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database;
-- post-MVP evidence/Library/GSC polish until actual operator usage justifies it.
+- broader post-MVP evidence/GSC/configuration/comfort work until actual operator usage justifies it.
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. U5/U6 remain post-MVP configuration and comfort work to take only from observed operator friction.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP hardening slice fixes confirmed correctness/robustness issues without opening U5/U6 scope; U5/U6 remain configuration and comfort work to take only from observed operator friction.
