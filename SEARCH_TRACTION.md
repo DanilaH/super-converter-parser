@@ -30,16 +30,9 @@ npm run search-traction:import -- \
   --json
 ```
 
-Optional durable output-root override:
-
-```bash
-npm run search-traction:import -- \
-  --input ./gsc-export.zip \
-  --property sc-domain:example.com \
-  --output-root /absolute/research/output
-```
-
 `--property` is mandatory. Property identity is never inferred from the ZIP filename.
+
+First-party snapshots always use the Runner's canonical durable output root described by [`OUTPUTS.md`](./OUTPUTS.md). An ad-hoc `--output-root` is not part of the normal workflow; a different root requires the explicit `RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE=true` migration/test escape hatch.
 
 ## Supported Google UI export contract
 
@@ -130,10 +123,10 @@ A header-only `Search appearance.csv` is a valid empty aggregate and is persiste
 
 ## Durable storage
 
-First-party evidence is stored independently under the Runner output root:
+First-party evidence is stored independently under the canonical Runner output root:
 
 ```text
-<RESEARCH_OUTPUT_ROOT>/
+<canonical-root>/
 └── first-party-search/
     ├── search-traction.sqlite
     └── sources/
