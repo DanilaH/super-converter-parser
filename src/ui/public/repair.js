@@ -3,6 +3,16 @@ const app = document.querySelector('#app');
 
 if (!root || !app) throw new Error('Missing Runner repair UI roots.');
 
+root.classList.add('panel');
+Object.assign(root.style, {
+  width: 'min(1180px, calc(100% - 64px))',
+  margin: '24px auto -18px',
+  padding: '16px 18px',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '18px',
+});
+
 let refreshEpoch = 0;
 let eligibleResearchId = null;
 let refreshTimer = null;
@@ -63,19 +73,13 @@ async function refreshRepairAction() {
 }
 
 function renderEligible({ researchId, repairable, activeJob }) {
-  root.classList.remove('hidden');
+  showRoot();
   root.replaceChildren();
-
-  const copy = document.createElement('div');
-  copy.className = 'repair-copy';
-  const eyebrow = document.createElement('div');
-  eyebrow.className = 'eyebrow repair-eyebrow';
-  eyebrow.textContent = 'Explicit specialist action';
-  const title = document.createElement('strong');
-  title.textContent = 'Repair discovery checkpoints';
-  const description = document.createElement('span');
-  description.textContent = `${repairable} checkpoint${repairable === 1 ? '' : 's'} are repairable under the Runner primary-evidence rules. This retries only failed or provably incomplete primary checkpoints and preserves attempt history.`;
-  copy.append(eyebrow, title, description);
+  const copy = repairCopy(
+    'Repair discovery checkpoints',
+    `${repairable} checkpoint${repairable === 1 ? '' : 's'} are repairable under the Runner primary-evidence rules. This retries only failed or provably incomplete primary checkpoints and preserves attempt history.`,
+    'Explicit specialist action',
+  );
 
   const button = document.createElement('button');
   button.type = 'button';
@@ -133,69 +137,81 @@ async function pollRepairJob(jobId, epoch) {
 }
 
 function renderStarting() {
-  root.classList.remove('hidden');
-  root.replaceChildren();
-  const copy = document.createElement('div');
-  copy.className = 'repair-copy';
-  const title = document.createElement('strong');
-  title.textContent = 'Starting discovery repair…';
-  const description = document.createElement('span');
-  description.textContent = 'Canonical eligibility is being revalidated under the research execution lock.';
-  copy.append(title, description);
-  root.append(copy);
+  showRoot();
+  root.replaceChildren(repairCopy(
+    'Starting discovery repair…',
+    'Canonical eligibility is being revalidated under the research execution lock.',
+  ));
 }
 
 function renderRunning(job) {
-  root.classList.remove('hidden');
+  showRoot();
   root.replaceChildren();
-  const copy = document.createElement('div');
-  copy.className = 'repair-copy';
-  const title = document.createElement('strong');
-  title.textContent = 'Repairing discovery';
-  const description = document.createElement('span');
-  description.textContent = `Job ${job.jobId} is retrying eligible primary checkpoints. Ordinary continuation remains blocked until this job finishes.`;
-  copy.append(title, description);
-  const badge = document.createElement('span');
-  badge.className = 'badge info';
-  badge.textContent = 'Running';
-  root.append(copy, badge);
+  const copy = repairCopy(
+    'Repairing discovery',
+    `Job ${job.jobId} is retrying eligible primary checkpoints. Ordinary continuation remains blocked until this job finishes.`,
+  );
+  const state = document.createElement('span');
+  state.className = 'badge info';
+  state.textContent = 'Running';
+  root.append(copy, state);
 }
 
 function renderFinished(job) {
-  root.classList.remove('hidden');
+  showRoot();
   root.replaceChildren();
   const result = job.repairResult;
-  const copy = document.createElement('div');
-  copy.className = 'repair-copy';
-  const title = document.createElement('strong');
-  title.textContent = 'Discovery repair finished';
-  const description = document.createElement('span');
-  description.textContent = result
-    ? `${result.repairableBefore} → ${result.repairableAfter} repairable checkpoints · discovery ${humanize(result.discoveryState ?? 'unknown')} · exit ${result.exitCode}.`
-    : 'Repair job finished; refreshing canonical research state.';
-  copy.append(title, description);
-  const badge = document.createElement('span');
-  badge.className = 'badge good';
-  badge.textContent = 'Finished';
-  root.append(copy, badge);
+  const copy = repairCopy(
+    'Discovery repair finished',
+    result
+      ? `${result.repairableBefore} → ${result.repairableAfter} repairable checkpoints · discovery ${humanize(result.discoveryState ?? 'unknown')} · exit ${result.exitCode}.`
+      : 'Repair job finished; refreshing canonical research state.',
+  );
+  const state = document.createElement('span');
+  state.className = 'badge good';
+  state.textContent = 'Finished';
+  root.append(copy, state);
 }
 
 function renderFailure(error) {
-  root.classList.remove('hidden');
+  showRoot();
   root.replaceChildren();
-  const copy = document.createElement('div');
-  copy.className = 'repair-copy';
-  const title = document.createElement('strong');
-  title.textContent = 'Discovery repair did not complete';
-  const description = document.createElement('span');
-  description.textContent = error instanceof Error ? error.message : String(error);
-  copy.append(title, description);
+  const copy = repairCopy(
+    'Discovery repair did not complete',
+    error instanceof Error ? error.message : String(error),
+  );
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'button';
   retry.textContent = 'Reload current state';
   retry.addEventListener('click', () => void refreshRepairAction());
   root.append(copy, retry);
+}
+
+function repairCopy(titleText, descriptionText, eyebrowText = null) {
+  const copy = document.createElement('div');
+  copy.style.minWidth = '0';
+  copy.style.maxWidth = '850px';
+  if (eyebrowText) {
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'eyebrow';
+    eyebrow.style.marginBottom = '5px';
+    eyebrow.textContent = eyebrowText;
+    copy.append(eyebrow);
+  }
+  const title = document.createElement('strong');
+  title.style.display = 'block';
+  title.style.fontSize = '14px';
+  title.textContent = titleText;
+  const description = document.createElement('span');
+  description.style.display = 'block';
+  description.style.marginTop = '5px';
+  description.style.color = '#9fa8b8';
+  description.style.fontSize = '13px';
+  description.style.lineHeight = '1.45';
+  description.textContent = descriptionText;
+  copy.append(title, description);
+  return copy;
 }
 
 function syncRepairNote() {
@@ -239,6 +255,11 @@ async function requestJson(path, options) {
   }
   if (!response.ok) throw new Error(payload?.error?.message ?? `HTTP ${response.status}`);
   return payload;
+}
+
+function showRoot() {
+  root.classList.remove('hidden');
+  root.style.display = 'flex';
 }
 
 function hideRoot() {
