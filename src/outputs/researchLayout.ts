@@ -6,11 +6,23 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import Database from 'better-sqlite3';
 import { ResearchError } from '../shared/errors.js';
 
+export const DEFAULT_OUTPUT_DIRECTORY_NAME = 'super-converter-parser-output';
+export const RESEARCHES_DIRECTORY_NAME = 'researches';
+export const OUTPUT_ROOT_OVERRIDE_ENV = 'RESEARCH_ALLOW_OUTPUT_ROOT_OVERRIDE';
+
 export type ResearchLocation = {
   researchDirectory: string;
   discoveryDirectory: string;
   archivePath: string;
   legacy: boolean;
+};
+
+export type OutputLayout = {
+  root: string;
+  researches: string;
+  index: string;
+  researchLibrary: string;
+  firstPartySearch: string;
 };
 
 type RunIndexRecord = {
@@ -39,17 +51,50 @@ const MANIFEST_GATED_ENRICHMENT_ARTIFACTS = new Set([
   'finalist-evidence-matrix.json',
 ]);
 
+export function resolveCanonicalOutputRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  userHome: string = homedir(),
+): string {
+  const configured = env.RESEARCH_OUTPUT_ROOT?.trim();
+  const root = configured || join(userHome, DEFAULT_OUTPUT_DIRECTORY_NAME);
+  if (configured && !isAbsolute(root)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `RESEARCH_OUTPUT_ROOT must be an absolute path: ${root}`);
+  }
+  return resolve(root);
+}
+
 export function resolveOutputRoot(
   cliValue: string | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
   userHome: string = homedir(),
 ): string {
-  const selected = cliValue?.trim() || env.RESEARCH_OUTPUT_ROOT?.trim();
-  const root = selected || join(userHome, 'super-converter-parser-output');
-  if (selected && !isAbsolute(root)) {
-    throw new ResearchError('INPUT_SCHEMA_ERROR', `Output root must be an absolute path: ${root}`);
+  const canonical = resolveCanonicalOutputRoot(env, userHome);
+  const requested = cliValue?.trim();
+  if (!requested) return canonical;
+  if (!isAbsolute(requested)) {
+    throw new ResearchError('INPUT_SCHEMA_ERROR', `Output root override must be an absolute path: ${requested}`);
   }
-  return resolve(root);
+  const resolvedRequested = resolve(requested);
+  if (resolvedRequested === canonical) return canonical;
+  if (!isExplicitlyEnabled(env[OUTPUT_ROOT_OVERRIDE_ENV])) {
+    throw new ResearchError(
+      'INPUT_SCHEMA_ERROR',
+      `Ad-hoc --output-root is disabled. Use canonical output root ${canonical}. `
+        + `Set RESEARCH_OUTPUT_ROOT once for the whole Runner, or set ${OUTPUT_ROOT_OVERRIDE_ENV}=true only for an explicit migration/test override.`,
+    );
+  }
+  return resolvedRequested;
+}
+
+export function outputLayout(outputRoot: string): OutputLayout {
+  const root = resolve(outputRoot);
+  return {
+    root,
+    researches: join(root, RESEARCHES_DIRECTORY_NAME),
+    index: join(root, 'index'),
+    researchLibrary: join(root, 'research-library'),
+    firstPartySearch: join(root, 'first-party-search'),
+  };
 }
 
 export function researchSlug(value: string): string {
@@ -69,11 +114,12 @@ export async function allocateResearchLocation(
   date: Date = new Date(),
 ): Promise<ResearchLocation> {
   let researchDirectory: string | null = null;
+  const researchesRoot = outputLayout(outputRoot).researches;
   try {
-    await mkdir(outputRoot, { recursive: true });
+    await mkdir(researchesRoot, { recursive: true });
     const datePrefix = date.toISOString().slice(0, 10);
     const baseName = `${datePrefix}-${researchSlug(label)}`;
-    researchDirectory = await allocateDirectory(outputRoot, baseName);
+    researchDirectory = await allocateDirectory(researchesRoot, baseName);
     const discoveryDirectory = join(researchDirectory, 'discovery');
     await mkdir(discoveryDirectory);
     return {
@@ -89,7 +135,7 @@ export async function allocateResearchLocation(
     if (error instanceof ResearchError) throw error;
     throw new ResearchError(
       'OUTPUT_WRITE_ERROR',
-      `Failed to allocate a research directory under "${outputRoot}".`,
+      `Failed to allocate a research directory under "${researchesRoot}".`,
       { cause: error },
     );
   }
@@ -395,6 +441,10 @@ function shouldExclude(relativePath: string, directory: boolean): boolean {
     || name.endsWith('-shm')
     || name === '.env'
     || /secret/i.test(name);
+}
+
+function isExplicitlyEnabled(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
