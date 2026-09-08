@@ -217,4 +217,4 @@ The canonical run index does not duplicate the display label. Managed catalog ro
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1 and U4.2 are merged; U4.3 is implemented in PR #173 and is the final review/CI/merge gate for the stated UI MVP. Once that PR passes the repository workflow and is merged, a normal research is operable end-to-end from the local UI without hand-authored continuation JSON or a coding agent driving the CLI.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. U5/U6 remain post-MVP configuration and comfort work to take only from observed operator friction.
