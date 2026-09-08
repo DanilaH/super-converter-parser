@@ -6,7 +6,7 @@ import type {
 import { ResearchError } from '../shared/errors.js';
 
 export type UiJobKind = 'create_research' | 'resume_research';
-export type UiJobState = 'running' | 'completed' | 'failed';
+export type UiJobState = 'running' | 'finished' | 'failed';
 
 export type UiJobSnapshotV1 = {
   version: 1;
@@ -81,7 +81,7 @@ export class UiJobRegistry {
     void Promise.resolve()
       .then(task)
       .then((execution) => {
-        job.state = 'completed';
+        job.state = 'finished';
         job.result = execution.result;
         job.researchId = execution.result.researchId ?? job.researchId;
         job.finishedAt = this.now().toISOString();
