@@ -35,10 +35,12 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(appSource, /repair_discovery/);
   assert.doesNotMatch(appSource, /innerHTML\s*=/);
 
-  assert.match(metadataSource, /detail\.status\?\.legacy/);
-  assert.match(metadataSource, /!detail\.container/);
+  assert.match(metadataSource, /\/api\/researches\?q=/);
+  assert.match(metadataSource, /candidate\.knownRunIds/);
+  assert.match(metadataSource, /!item\?\.managed/);
   assert.match(metadataSource, /\/label`/);
   assert.match(metadataSource, /directory and IDs stay unchanged/);
+  assert.doesNotMatch(metadataSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}`/);
   assert.doesNotMatch(metadataSource, /innerHTML\s*=/);
 
   assert.match(repairSource, /nextAction\?\.code !== 'repair_discovery'/);
