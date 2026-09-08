@@ -1,14 +1,17 @@
 import type { FinalistDecisionInput } from '../db/finalistDecisions.js';
 import type { FinalistBuildDecision, FinalistSeoProductRole } from './finalistEvidence.js';
 
-const BUILD_DECISIONS: ReadonlySet<string> = new Set(['build', 'watch', 'reject', 'unknown']);
-const SEO_PRODUCT_ROLES: ReadonlySet<string> = new Set([
+export const FINALIST_BUILD_DECISION_VALUES = ['build', 'watch', 'reject', 'unknown'] as const;
+export const FINALIST_SEO_PRODUCT_ROLE_VALUES = [
   'acquisition_anchor',
   'strong_supporting_tool',
   'completeness_tool',
   'experimental',
   'not_applicable',
-]);
+] as const;
+
+const BUILD_DECISIONS: ReadonlySet<string> = new Set(FINALIST_BUILD_DECISION_VALUES);
+const SEO_PRODUCT_ROLES: ReadonlySet<string> = new Set(FINALIST_SEO_PRODUCT_ROLE_VALUES);
 
 export function parseFinalistDecisionsJson(content: string, label = 'finalist decisions'): FinalistDecisionInput[] {
   let parsed: unknown;
