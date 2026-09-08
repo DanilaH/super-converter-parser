@@ -21,6 +21,10 @@ export type UiJobSnapshotV1 = {
   error: { code: string; message: string } | null;
 };
 
+export type UiJobControl = {
+  setResearchId: (researchId: string) => void;
+};
+
 export class UiJobBusyError extends Error {
   readonly activeJob: UiJobSnapshotV1;
 
@@ -56,7 +60,7 @@ export class UiJobRegistry {
   start(
     kind: UiJobKind,
     researchId: string | null,
-    task: () => Promise<ResearchRunExecution>,
+    task: (control: UiJobControl) => Promise<ResearchRunExecution>,
   ): UiJobSnapshotV1 {
     const active = this.activeJobId === null ? null : this.jobs.get(this.activeJobId) ?? null;
     if (active?.state === 'running') throw new UiJobBusyError(snapshot(active));
@@ -78,8 +82,18 @@ export class UiJobRegistry {
     this.jobs.set(job.jobId, job);
     this.activeJobId = job.jobId;
 
+    const control: UiJobControl = {
+      setResearchId: (nextResearchId) => {
+        const normalized = nextResearchId.trim();
+        if (normalized === '') {
+          throw new ResearchError('INPUT_SCHEMA_ERROR', 'UI job research id must not be empty.');
+        }
+        job.researchId = normalized;
+      },
+    };
+
     void Promise.resolve()
-      .then(task)
+      .then(() => task(control))
       .then((execution) => {
         job.state = 'finished';
         job.result = execution.result;
