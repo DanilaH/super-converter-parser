@@ -21,12 +21,12 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, and durable-state inspection.
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, mutable display-label management, and durable-state inspection.
 
 ### Researches
 
 - browse researches discovered from the canonical run index;
-- search by persisted label, stable `researchId`, current run id, or another indexed run id;
+- search by persisted display label, stable `researchId`, current run id, or another indexed run id;
 - open one research and inspect canonical durable status;
 - show/copy stable research, current discovery, and current enrichment IDs;
 - inspect pipeline state, discovery keyword counts, quality warnings, batch history, immutable OperatorConfig provenance, and the Runner's canonical next operator action.
@@ -81,13 +81,28 @@ Before mutation, the application repair action:
 
 This preserves the existing primary-evidence repair rules and attempt history. The UI does not rewrite unknown evidence to zero and does not fabricate a normal workflow result for repair.
 
+### Display label
+
+Managed researches expose a compact display-label editor on Research Detail. This label is mutable presentation metadata in `research.json`; it is intentionally distinct from the immutable label captured in `operator-config.json` provenance when the research was created.
+
+Renaming a display label:
+
+- changes only `research.json.label` and `research.json.updatedAt`;
+- does **not** rename the research directory or its original slug;
+- does **not** change `researchId`, current/known run IDs, batch lineage, enrichment/finalization evidence, or OperatorConfig provenance;
+- is idempotent when the trimmed label is already current;
+- uses the existing composite research lock in canonical `execution → batch` order, so it cannot overwrite `research.json` concurrently with batch append or config-first continuation;
+- refreshes the derived `results.zip` best-effort after the durable metadata commit. Archive failure is surfaced as a warning rather than making the committed rename look retryable.
+
+The browser disables rename while it already knows another UI execution job is active. Canonical research locks remain authoritative for external CLI/process concurrency.
+
 Shortlist, finalist-scope, and human-decision gates remain non-actionable until U4 because they require explicit human input; the console does not invent that input.
 
 ## Mutation boundary
 
 Mutation requests are stricter than reads: they require `POST`, `Content-Type: application/json`, and a same-origin loopback `Origin` using the actual UI port. Request bodies are bounded. An unrelated webpage cannot drive localhost research operations merely because the Runner UI is open.
 
-Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair shares the same per-research execution lock used by config-first continuation, so repair and continuation cannot mutate the same research concurrently through the UI application boundary.
+Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair shares the same per-research execution lock used by config-first continuation. Display-label rename uses the composite execution-plus-batch lock because it mutates the shared research container.
 
 New-research seed text is materialized only into a temporary local workspace long enough for the normal seed loader/workflow to consume it; that workspace is removed after execution. OperatorConfig provenance and research evidence keep their existing semantics.
 
@@ -97,11 +112,11 @@ The console does not have a UI database. Existing Runner SQLite/research files a
 
 The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research.
 
-Historical indexed runs without a durable `research.json` container are shown independently; the console does not invent lineage between them.
+The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable through this managed-research action.
 
 ## Still out of scope
 
-- batch append / rename until U3;
+- batch append until U3.2;
 - shortlist, finalist scope, and human-decision editing until U4;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database.
 

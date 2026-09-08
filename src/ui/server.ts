@@ -12,6 +12,7 @@ import { buildOutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { ResearchError } from '../shared/errors.js';
 import { listResearchCatalog } from '../application/researchCatalog.js';
 import { inspectResearchConsole } from '../application/researchConsole.js';
+import { renameResearchLabel } from '../application/researchMetadata.js';
 import { repairResearchDiscovery } from '../application/researchRepair.js';
 import { UiJobBusyError, UiJobRegistry } from './jobs.js';
 import {
@@ -49,6 +50,7 @@ export type UiServerDeps = {
   executeUiResearchDraft: typeof executeUiResearchDraft;
   executeUiResearchResume: typeof executeUiResearchResume;
   repairResearchDiscovery: typeof repairResearchDiscovery;
+  renameResearchLabel: typeof renameResearchLabel;
   loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
   openBrowser: (url: string) => void;
 };
@@ -61,6 +63,7 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   executeUiResearchDraft,
   executeUiResearchResume,
   repairResearchDiscovery,
+  renameResearchLabel,
   loadStaticAssets,
   openBrowser: openBrowserBestEffort,
 };
@@ -223,6 +226,20 @@ async function handlePost(
     return;
   }
 
+  const labelMatch = /^\/api\/researches\/([^/]+)\/label$/.exec(requestUrl.pathname);
+  if (labelMatch) {
+    const researchId = decodeRouteId(labelMatch[1] ?? '', 'research');
+    const label = readRenameLabel(body);
+    const active = context.jobs.active();
+    if (active !== null) throw new UiJobBusyError(active);
+    const result = await context.deps.renameResearchLabel(researchId, label, {
+      outputRoot: context.outputRoot,
+      env: context.env,
+    });
+    sendJson(response, 200, { version: 1, rename: result });
+    return;
+  }
+
   const repairMatch = /^\/api\/researches\/([^/]+)\/repair-discovery$/.exec(requestUrl.pathname);
   if (repairMatch) {
     assertEmptyObject(body, 'Discovery repair request body');
@@ -271,8 +288,10 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
@@ -361,6 +380,19 @@ function assertEmptyObject(value: unknown, label: string): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length !== 0) {
     throw new UiHttpError(400, 'INPUT_SCHEMA_ERROR', `${label} must be an empty JSON object.`);
   }
+}
+
+function readRenameLabel(value: unknown): unknown {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).length !== 1
+    || !Object.prototype.hasOwnProperty.call(value, 'label')
+  ) {
+    throw new UiHttpError(400, 'INPUT_SCHEMA_ERROR', 'Research label request body must be exactly {"label":"..."}.');
+  }
+  return (value as { label?: unknown }).label;
 }
 
 function sendError(response: ServerResponse, error: unknown): void {
