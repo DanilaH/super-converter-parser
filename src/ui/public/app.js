@@ -22,6 +22,7 @@ void route();
 
 async function route() {
   const epoch = ++routeEpoch;
+  clearRenderedResearchState();
   const hash = window.location.hash || '#/researches';
   const navName = hash === '#/new' ? 'new' : hash.startsWith('#/system') ? 'system' : 'researches';
   setActiveNav(navName);
@@ -35,7 +36,11 @@ async function route() {
     return;
   }
   if (hash.startsWith('#/research/')) {
-    const id = decodeURIComponent(hash.slice('#/research/'.length));
+    const id = researchIdFromHash(hash);
+    if (!id) {
+      window.location.hash = '#/researches';
+      return;
+    }
     await renderResearchDetail(id, epoch);
     return;
   }
@@ -333,6 +338,7 @@ function renderPlanPreview(container, plan) {
 }
 
 async function renderResearchDetail(researchId, epoch) {
+  clearRenderedResearchState();
   app.replaceChildren(node('div', { className: 'loading', text: 'Loading research…' }));
   try {
     const [detail, jobsPayload] = await Promise.all([
@@ -344,6 +350,7 @@ async function renderResearchDetail(researchId, epoch) {
     const activeJob = (jobsPayload.jobs ?? []).find((job) => job.state === 'running') ?? null;
     const activeForThisResearch = activeJob?.researchId === status.researchId ? activeJob : null;
     app.replaceChildren();
+    publishRenderedResearchState(status);
 
     const top = node('div', { className: 'detail-top' });
     const back = node('a', { className: 'back-link', href: '#/researches', text: '← Researches' });
@@ -419,6 +426,7 @@ async function renderResearchDetail(researchId, epoch) {
     }
   } catch (error) {
     if (epoch !== routeEpoch) return;
+    clearRenderedResearchState();
     app.replaceChildren();
     app.append(pageHeader('Research unavailable', 'The durable projection could not be loaded.'));
     const panel = node('div', { className: 'panel' });
@@ -573,7 +581,7 @@ function renderNextAction(status) {
     node('p', { text: status.nextAction.message }),
   );
   if (status.nextAction.code === 'repair_discovery') {
-    body.append(node('div', { className: 'action-note', text: 'Repair remains explicit and will be added in U2.3.' }));
+    body.append(node('div', { className: 'action-note', text: 'Use the explicit discovery-repair action for eligible checkpoints; repair remains separate from ordinary Continue.' }));
   } else if (!status.nextAction.command && status.nextAction.code !== 'none') {
     body.append(node('div', { className: 'action-note', text: 'This step requires explicit human input; the console will not invent it.' }));
   }
@@ -794,6 +802,28 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function publishRenderedResearchState(status) {
+  app.dataset.researchId = status.researchId;
+  app.dataset.nextActionCode = status.nextAction?.code ?? 'none';
+  app.dataset.repairable = String(status.discovery?.keywordCounts?.repairable ?? 0);
+}
+
+function clearRenderedResearchState() {
+  delete app.dataset.researchId;
+  delete app.dataset.nextActionCode;
+  delete app.dataset.repairable;
+}
+
+function researchIdFromHash(hash = window.location.hash) {
+  if (!hash.startsWith('#/research/')) return null;
+  try {
+    const decoded = decodeURIComponent(hash.slice('#/research/'.length)).trim();
+    return decoded || null;
+  } catch {
+    return null;
+  }
 }
 
 async function api(path) {
