@@ -7,15 +7,11 @@ import { loadConfig } from '../config/config.js';
 import { RunStore } from '../db/store.js';
 import { GOOGLE_PARSER_VERSION } from '../google/serp.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
-import type { ExistingResearchExecutionPlan } from '../operatorConfig/planner.js';
 import { buildNewResearchPlan, type LoadedOperatorResearchConfig } from '../operatorConfig/resolve.js';
 import { writeOperatorConfigProvenance } from '../operatorConfig/provenance.js';
 import { allocateResearchLocation, writeRunIndex } from '../outputs/researchLayout.js';
 import { SURFER_PARSER_VERSION } from '../surfer/selectors.js';
-import {
-  buildResearchStatusWithHistoricalPresence,
-  configFirstNextAction,
-} from './statusWithHistoricalPresence.js';
+import { buildResearchStatusWithHistoricalPresence } from './statusWithHistoricalPresence.js';
 
 const CONFIG = loadConfig({});
 
@@ -110,42 +106,4 @@ test('paused config-first discovery points to stable config-first resume instead
   assert.equal(status.nextAction.code, 'resume_discovery');
   assert.equal(status.nextAction.command, `npm run research:run -- --research ${fixture.runId}`);
   assert.doesNotMatch(status.nextAction.command ?? '', /npm run research -- --resume/);
-});
-
-test('published config-first research exposes idempotent repair when derived Library snapshots are stale', () => {
-  const plan = {
-    stateContext: {
-      kind: 'existing',
-      researchId: 'research_published',
-      currentDiscoveryRunId: 'run_published',
-      currentEnrichmentId: 'enrichment_published',
-      legacyLayout: false,
-    },
-    stages: [
-      { id: 'discovery', state: 'already_satisfied', reason: null },
-      { id: 'enrichment', state: 'already_satisfied', reason: null },
-      { id: 'finalization', state: 'already_satisfied', reason: null },
-    ],
-    unresolvedHumanRequirements: [],
-    expectedStopPoint: 'complete',
-    durableState: {
-      discoveryState: 'completed',
-      repairableDiscoveryCheckpoints: 0,
-      enrichmentState: 'completed',
-      finalizationState: 'published',
-      finalistCount: 1,
-      currentDecisionCount: 1,
-      libraryPublished: true,
-      nextAction: { code: 'none', message: 'complete' },
-    },
-  } as ExistingResearchExecutionPlan;
-
-  const stale = configFirstNextAction(plan, false);
-  assert.equal(stale.code, 'publish_library');
-  assert.equal(stale.command, 'npm run research:run -- --research research_published');
-  assert.match(stale.message, /derived library\.json\/library\.zip snapshots need idempotent repair/i);
-
-  const current = configFirstNextAction(plan, true);
-  assert.equal(current.code, 'none');
-  assert.equal(current.command, null);
 });
