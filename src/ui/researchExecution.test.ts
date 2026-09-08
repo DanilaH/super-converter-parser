@@ -66,7 +66,7 @@ test('draft execution materializes a temporary valid seed CSV and disables proce
     resolveOperatorResearchConfigInput,
     executeNewResearch: async (loaded, options) => {
       observedCsv = await readFile(loaded.plan.semantics.research.input.resolvedPath, 'utf8');
-      observedSignals = options.manageProcessSignals;
+      observedSignals = options?.manageProcessSignals;
       return EXECUTION;
     },
     executeExistingResearch: async () => EXECUTION,
@@ -87,7 +87,7 @@ test('resume uses the same application workflow with process-level signal owners
     {
       executeExistingResearch: async (researchId, continuation, options) => {
         observedId = researchId;
-        observedSignals = options.manageProcessSignals;
+        observedSignals = options?.manageProcessSignals;
         assert.equal(continuation, null);
         return EXECUTION;
       },
