@@ -10,7 +10,7 @@ let scheduled = null;
 const observer = new MutationObserver(() => scheduleSync());
 observer.observe(app, {
   attributes: true,
-  attributeFilter: ['data-research-id', 'data-next-action-code', 'data-next-action-requires-input'],
+  attributeFilter: ['data-research-id', 'data-human-requirement'],
   childList: true,
   subtree: true,
 });
@@ -31,7 +31,7 @@ function scheduleSync() {
 }
 
 async function syncFromRenderedDetail() {
-  const researchId = currentGateResearchId('supply_decisions');
+  const researchId = currentGateResearchId('human_decisions');
   if (!researchId) {
     loadedFor = null;
     hideRoot();
@@ -57,11 +57,11 @@ async function syncFromRenderedDetail() {
   }
 }
 
-function currentGateResearchId(expectedAction) {
+function currentGateResearchId(expectedRequirement) {
   const routeResearchId = researchIdFromHash();
   const renderedResearchId = app.dataset.researchId ?? null;
   if (!routeResearchId || !renderedResearchId || routeResearchId !== renderedResearchId) return null;
-  if (app.dataset.nextActionCode !== expectedAction || app.dataset.nextActionRequiresInput !== 'true') return null;
+  if (app.dataset.humanRequirement !== expectedRequirement) return null;
   return routeResearchId;
 }
 
