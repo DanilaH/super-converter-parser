@@ -68,9 +68,9 @@ The moved workflow intentionally still retains the existing console output and p
 
 ## U1 — Read-only Research Console
 
-**Status:** active.
+**Status:** complete in PR #165 pending merge.
 
-### Scope
+### Implemented scope
 
 - `npm run ui` localhost-only Node server plus a dependency-free browser shell;
 - lightweight research catalog from canonical run indexes + `research.json`;
@@ -80,7 +80,8 @@ The moved workflow intentionally still retains the existing console output and p
 - read-only current immutable OperatorConfig provenance;
 - full expensive status projection only for an opened research, never for every list row;
 - System page with canonical output-root diagnostics;
-- strict GET-only API in U1.
+- strict GET-only API in U1;
+- historical indexed runs without a durable research container remain independent instead of receiving invented lineage.
 
 A React/Vite dependency surface is deliberately not required for these read-only screens. Re-evaluate the browser framework before U2, when forms and longer-lived interaction become real complexity.
 
@@ -96,6 +97,8 @@ The operator can browse, search, open, and understand existing researches withou
 
 ### Scope
 
+- before adding mutations, require same-origin/Origin validation for write endpoints so an unrelated browser page cannot drive localhost research operations;
+- explicitly separate/parameterize process-signal ownership before long-lived server-side workflow execution if the inherited CLI signal policy would interfere with server jobs;
 - New Research form backed by existing OperatorConfig contracts/presets;
 - paste/upload research input;
 - plan preview before execution;
