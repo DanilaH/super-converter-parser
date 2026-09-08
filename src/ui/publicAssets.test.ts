@@ -3,22 +3,28 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair UX', async () => {
+test('operator browser shell is syntactically valid, external-only, and exposes create/continue/repair/metadata UX', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [appSource, repairSource, html, css, repairCss] = await Promise.all([
+  const [appSource, metadataSource, repairSource, html, css, metadataCss, repairCss] = await Promise.all([
     readFile(fileURLToPath(new URL('app.js', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('metadata.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('styles.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('metadata.css', base)), 'utf8'),
     readFile(fileURLToPath(new URL('repair.css', base)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(appSource));
+  assert.doesNotThrow(() => new Function(metadataSource));
   assert.doesNotThrow(() => new Function(repairSource));
   assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/metadata\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/repair\.js"><\/script>/);
+  assert.match(html, /id="metadata-action-root" class="metadata-action-shell hidden"/);
   assert.match(html, /id="repair-action-root" class="repair-action-shell repair-action hidden"/);
   assert.match(html, /<link rel="stylesheet" href="\/styles\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\/metadata\.css">/);
   assert.match(html, /<link rel="stylesheet" href="\/repair\.css">/);
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
   assert.match(html, /href="#\/new"/);
@@ -29,6 +35,12 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(appSource, /repair_discovery/);
   assert.doesNotMatch(appSource, /innerHTML\s*=/);
 
+  assert.match(metadataSource, /detail\.status\?\.legacy/);
+  assert.match(metadataSource, /!detail\.container/);
+  assert.match(metadataSource, /\/label`/);
+  assert.match(metadataSource, /directory and IDs stay unchanged/);
+  assert.doesNotMatch(metadataSource, /innerHTML\s*=/);
+
   assert.match(repairSource, /nextAction\?\.code !== 'repair_discovery'/);
   assert.match(repairSource, /keywordCounts\?\.repairable/);
   assert.match(repairSource, /\/repair-discovery`/);
@@ -37,6 +49,8 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
 
   assert.match(css, /textarea\.control/);
   assert.match(css, /font-size:\s*14px/);
+  assert.match(metadataCss, /\.metadata-action-shell/);
+  assert.match(metadataCss, /\.metadata-form/);
   assert.match(repairCss, /\.repair-action/);
   assert.match(repairCss, /\.repair-action-shell/);
 });
