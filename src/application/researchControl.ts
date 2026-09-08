@@ -17,6 +17,10 @@ import {
 const IN_MEMORY_CONFIG_SOURCE = '/application/operator-config.json';
 const IN_MEMORY_CONTINUATION_SOURCE = '/application/continuation.json';
 
+export type HostCancellationSignal = CancellationSignal & {
+  manageProcessSignals?: boolean;
+};
+
 export type ResearchControlRuntime = {
   runFromConfig: typeof runResearchFromConfig;
   runFromExisting: typeof runResearchFromExisting;
@@ -35,7 +39,7 @@ export type ResearchControlOptions = {
   runtime?: ResearchControlRuntime;
   /**
    * CLI adapters own process-level signal handling by default. Long-lived hosts
-   * such as the local UI server can opt out without changing discovery semantics.
+   * such as the local UI server can opt out without changing research semantics.
    */
   manageProcessSignals?: boolean;
 };
@@ -46,7 +50,7 @@ export async function executeNewResearch(
   options: ResearchControlOptions = {},
 ): Promise<ResearchRunExecution> {
   const env = options.env ?? process.env;
-  const signal = options.signal ?? { cancelled: false };
+  const signal = hostSignal(options);
   const baseDeps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
   const deps = withDiscoverySignalPolicy(baseDeps, options.manageProcessSignals);
   const runtime = options.runtime ?? DEFAULT_RESEARCH_CONTROL_RUNTIME;
@@ -70,7 +74,7 @@ export async function executeExistingResearch(
   options: ResearchControlOptions = {},
 ): Promise<ResearchRunExecution> {
   const env = options.env ?? process.env;
-  const signal = options.signal ?? { cancelled: false };
+  const signal = hostSignal(options);
   const baseDeps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
   const deps = withDiscoverySignalPolicy(baseDeps, options.manageProcessSignals);
   const runtime = options.runtime ?? DEFAULT_RESEARCH_CONTROL_RUNTIME;
@@ -99,6 +103,12 @@ export async function inspectResearch(
   const deps = options.deps ?? DEFAULT_RESEARCH_RUN_DEPS;
   const outputRoot = resolveOutputRoot(options.outputRoot ?? null, env);
   return deps.buildStatus({ outputRoot, targetRunId: researchId });
+}
+
+function hostSignal(options: ResearchControlOptions): HostCancellationSignal {
+  const signal = options.signal ?? { cancelled: false };
+  if (options.manageProcessSignals === undefined) return signal;
+  return { ...signal, manageProcessSignals: options.manageProcessSignals };
 }
 
 function withDiscoverySignalPolicy(
