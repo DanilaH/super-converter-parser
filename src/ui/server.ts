@@ -51,7 +51,8 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Star
     throw new ResearchError('INPUT_SCHEMA_ERROR', `UI server port must be an integer from 0 to 65535; received ${port}.`);
   }
   const assets = await deps.loadStaticAssets();
-  const diagnostics = await deps.buildOutputDiagnostics({ env, cwd: options.cwd });
+  const diagnosticsInput = options.cwd === undefined ? { env } : { env, cwd: options.cwd };
+  const diagnostics = await deps.buildOutputDiagnostics(diagnosticsInput);
   const outputRoot = diagnostics.canonicalRoot;
 
   const server = createServer(async (request, response) => {
@@ -89,7 +90,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Star
       }
 
       if (requestUrl.pathname === '/api/system') {
-        const current = await deps.buildOutputDiagnostics({ env, cwd: options.cwd });
+        const current = await deps.buildOutputDiagnostics(diagnosticsInput);
         sendJson(response, 200, { version: 1, outputs: current });
         return;
       }
@@ -182,7 +183,7 @@ function sendStatic(response: ServerResponse, asset: StaticAsset): void {
 }
 
 function setSecurityHeaders(response: ServerResponse): void {
-  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
 }
