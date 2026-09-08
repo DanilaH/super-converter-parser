@@ -288,8 +288,10 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
   ];
   const entries = await Promise.all(specs.map(async ([route, file, contentType]) => [
