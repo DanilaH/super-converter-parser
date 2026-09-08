@@ -275,6 +275,33 @@ The stated UI MVP Definition of Done is met. A normal config-first research can 
 
 ---
 
+## Post-MVP hardening — confirmed operability fixes
+
+**Status:** implemented in PR #175; pending cold review, exact-head CI, final gate, and squash merge.
+
+This is a bounded correctness/robustness slice discovered by independent review of the completed MVP. It does **not** reopen U5/U6 scope.
+
+Implemented scope:
+
+- make stale/missing derived `research-library/library.json` and `library.zip` repair reachable after a current durable publication, while keeping `library.sqlite`/publication lineage authoritative and refusing to reinterpret durable-store failure as derived damage;
+- preserve canonical action priority so discovery/enrichment/human-gate work wins over derived-snapshot repair;
+- remove obsolete U2.3 placeholder copy from Research Detail;
+- remove the repair specialist's duplicate full Research Detail request and reuse the already-rendered canonical deep-status projection;
+- publish a small ephemeral machine-readable Research Detail projection (`researchId`, next-action code, explicit-human-input requirement, repairable count) so independently loaded specialist modules no longer parse English UI labels/copy;
+- keep that browser projection non-authoritative and disposable; all mutation endpoints/application services retain canonical revalidation and lock checks;
+- show shortlist/finalist/decision gate-load failures with an explicit reload action instead of silently hiding an active canonical gate;
+- handle malformed percent-encoded research hashes without throwing out of the router;
+- add regressions for derived Library repair and browser coordination contracts.
+
+Explicitly not included:
+
+- finalist-decision persistence/revision redesign;
+- automatic scoring/recommendations;
+- configuration UX, GSC, charts, Library browsing, React/Electron, or other U5/U6 comfort work;
+- any new durable UI database or publication state machine.
+
+---
+
 ## U5 — Configuration UX
 
 ### Scope
