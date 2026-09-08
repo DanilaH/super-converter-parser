@@ -31,7 +31,9 @@ const EXECUTION: ResearchRunExecution = {
 };
 
 test('job registry exposes running work, blocks a second execution, then publishes the result', async () => {
-  let resolveTask: ((value: ResearchRunExecution) => void) | null = null;
+  let resolveTask: (value: ResearchRunExecution) => void = () => {
+    throw new Error('Deferred task resolver was not initialized.');
+  };
   const task = new Promise<ResearchRunExecution>((resolve) => { resolveTask = resolve; });
   let tick = 0;
   const registry = new UiJobRegistry({
@@ -47,7 +49,6 @@ test('job registry exposes running work, blocks a second execution, then publish
     UiJobBusyError,
   );
 
-  assert.ok(resolveTask);
   resolveTask(EXECUTION);
   await flushPromises();
 
