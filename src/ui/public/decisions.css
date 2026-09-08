@@ -1,0 +1,276 @@
+.decision-action-shell {
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.decision-action-shell.hidden {
+  display: none;
+}
+
+.decision-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.decision-copy {
+  display: grid;
+  gap: 6px;
+  max-width: 760px;
+}
+
+.decision-copy > strong {
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.decision-copy > span:last-child,
+.decision-footer-note,
+.decision-job > span {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.decision-identities {
+  display: grid;
+  gap: 6px;
+  min-width: 240px;
+  font-size: 13px;
+}
+
+.decision-identities > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.decision-identities span {
+  color: var(--muted);
+}
+
+.decision-identities code {
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.decision-toolbar,
+.decision-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.decision-toolbar {
+  margin-bottom: 14px;
+}
+
+.decision-search {
+  flex: 1;
+  min-width: 220px;
+}
+
+.decision-status {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.decision-status.complete {
+  color: var(--good);
+}
+
+.decision-list {
+  display: grid;
+  gap: 12px;
+}
+
+.decision-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--panel-strong, var(--panel));
+}
+
+.decision-card.recorded {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+
+.decision-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.decision-card-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.decision-card-title strong {
+  font-size: 16px;
+}
+
+.decision-card-title code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-flags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.decision-flags span {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.decision-evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.decision-evidence > span {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.decision-evidence strong {
+  font-size: 14px;
+}
+
+.decision-evidence small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.decision-details {
+  font-size: 13px;
+}
+
+.decision-details summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.decision-detail-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.decision-detail-body > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) 1fr;
+  gap: 12px;
+}
+
+.decision-detail-body span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.decision-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.decision-field {
+  display: grid;
+  gap: 6px;
+}
+
+.decision-field > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.decision-footer {
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.decision-footer-note {
+  max-width: 720px;
+}
+
+.decision-loading,
+.decision-empty {
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.decision-job {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.decision-job.finished {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+
+.decision-job.failed {
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+}
+
+.decision-job .button {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .decision-header,
+  .decision-toolbar,
+  .decision-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .decision-identities {
+    min-width: 0;
+  }
+
+  .decision-status {
+    margin-left: 0;
+  }
+
+  .decision-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .decision-detail-body > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
