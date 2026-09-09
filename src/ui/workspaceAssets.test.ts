@@ -35,7 +35,7 @@ test('browser shell is one persistent split workspace instead of primary full-sc
   assert.match(css, /\.main\.workspace-main/);
 
   for (const route of ['/workspace.js', '/seed-import.js', '/workspace.css']) {
-    assert.match(serverSource, new RegExp(`\\['${route.replace('.', '\\.')}')`));
+    assert.ok(serverSource.includes(`['${route}',`), `server static allowlist must include ${route}`);
   }
 });
 
