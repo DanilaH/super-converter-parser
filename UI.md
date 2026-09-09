@@ -193,7 +193,7 @@ Renaming a display label:
 
 - changes only `research.json.label` and `research.json.updatedAt`;
 - does **not** rename the research directory or its original slug;
-- does **not** change `researchId`, current/known run IDs, batches, lineage, enrichment/finalization evidence, or OperatorConfig provenance;
+- does **not** change `researchId`, current/known run IDs, batch lineage, enrichment/finalization evidence, or OperatorConfig provenance;
 - is idempotent when the trimmed label is already current;
 - uses the existing composite research lock in canonical `execution → batch` order, so it cannot overwrite `research.json` concurrently with batch append or config-first continuation;
 - refreshes the derived `results.zip` best-effort after the durable metadata commit. Archive failure is surfaced as a warning rather than making the committed rename retryable.
