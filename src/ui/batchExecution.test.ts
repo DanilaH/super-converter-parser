@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { UiBatchExecutionDeps } from './batchExecution.js';
 import { executeUiResearchBatch, previewUiResearchBatch, validateUiBatchDraft } from './batchExecution.js';
 
-function deps(sequence: string[]): UiBatchExecutionDeps {
+function deps(sequence: string[], changed = true): UiBatchExecutionDeps {
   return {
     previewResearchBatch: async (researchId, seeds) => {
       sequence.push(`preview:${researchId}:${seeds.length}`);
@@ -14,11 +14,11 @@ function deps(sequence: string[]): UiBatchExecutionDeps {
         currentRunId: 'run-1',
         batchId: 'batch-0002',
         inputUniqueKeywordCount: seeds.length,
-        addedKeywordCount: 1,
-        duplicateKeywordCount: 1,
-        promotedKeywordCount: 1,
-        promotedNormalizedKeywords: ['alpha'],
-        changed: true,
+        addedKeywordCount: changed ? 1 : 0,
+        duplicateKeywordCount: changed ? 1 : seeds.length,
+        promotedKeywordCount: changed ? 1 : 0,
+        promotedNormalizedKeywords: changed ? ['alpha'] : [],
+        changed,
       };
     },
     appendResearchBatch: async (researchId, seedsPath, seeds) => {
@@ -30,14 +30,14 @@ function deps(sequence: string[]): UiBatchExecutionDeps {
         researchDirectory: '/output/research-1',
         batchId: 'batch-0002',
         previousRunId: 'run-1',
-        currentRunId: 'run-2',
+        currentRunId: changed ? 'run-2' : 'run-1',
         inputUniqueKeywordCount: seeds.length,
-        addedKeywordCount: 1,
-        duplicateKeywordCount: 1,
-        promotedKeywordCount: 1,
-        promotedNormalizedKeywords: ['alpha'],
-        changed: true,
-        discovery: { attempted: true, exitCode: 0, state: 'completed' },
+        addedKeywordCount: changed ? 1 : 0,
+        duplicateKeywordCount: changed ? 1 : seeds.length,
+        promotedKeywordCount: changed ? 1 : 0,
+        promotedNormalizedKeywords: changed ? ['alpha'] : [],
+        changed,
+        discovery: { attempted: changed, exitCode: changed ? 0 : null, state: changed ? 'completed' : null },
         archiveWarning: null,
       };
     },
@@ -82,16 +82,28 @@ test('batch preview reports supplied lines separately from normalized unique key
   assert.deepEqual(sequence, ['preview:research-1:2']);
 });
 
-test('batch execution starts Research Chrome before materializing seeds and appending discovery', async () => {
+test('batch execution starts Research Chrome only after current batch preview confirms discovery changes', async () => {
   const sequence: string[] = [];
   const result = await executeUiResearchBatch('research-1', {
     version: 1,
     keywords: 'alpha\nalpha\nbeta\n',
   }, {}, deps(sequence));
 
-  assert.deepEqual(sequence, ['chrome', 'load', 'append:research-1:2']);
+  assert.deepEqual(sequence, ['load', 'preview:research-1:2', 'chrome', 'append:research-1:2']);
   assert.equal(result.currentRunId, 'run-2');
   assert.equal(result.discovery.attempted, true);
+});
+
+test('duplicate-only batch does not start Research Chrome when no discovery generation is needed', async () => {
+  const sequence: string[] = [];
+  const result = await executeUiResearchBatch('research-1', {
+    version: 1,
+    keywords: 'alpha\nalpha\nbeta\n',
+  }, {}, deps(sequence, false));
+
+  assert.deepEqual(sequence, ['load', 'preview:research-1:2', 'append:research-1:2']);
+  assert.equal(result.currentRunId, 'run-1');
+  assert.equal(result.discovery.attempted, false);
 });
 
 test('batch draft validation is exact and rejects empty seed text', () => {
