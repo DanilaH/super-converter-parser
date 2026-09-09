@@ -275,7 +275,7 @@ test('resume discovery preflights Research Chrome inside the admitted job before
         return detailForAction('resume_discovery');
       },
       ensureResearchChromeForDiscovery: async (options) => {
-        sequence.push(`chrome:${options.env?.CDP_URL ?? ''}`);
+        sequence.push(`chrome:${options?.env?.CDP_URL ?? ''}`);
         return connectedChrome;
       },
       executeUiResearchResume: async (researchId) => {
