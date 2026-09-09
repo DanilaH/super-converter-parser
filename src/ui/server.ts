@@ -456,7 +456,9 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/workspace.js', 'workspace.js', 'text/javascript; charset=utf-8'],
     ['/research-chrome.js', 'research-chrome.js', 'text/javascript; charset=utf-8'],
+    ['/seed-import.js', 'seed-import.js', 'text/javascript; charset=utf-8'],
     ['/batches.js', 'batches.js', 'text/javascript; charset=utf-8'],
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
@@ -464,6 +466,7 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
     ['/finalists.js', 'finalists.js', 'text/javascript; charset=utf-8'],
     ['/decisions.js', 'decisions.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/workspace.css', 'workspace.css', 'text/css; charset=utf-8'],
     ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
