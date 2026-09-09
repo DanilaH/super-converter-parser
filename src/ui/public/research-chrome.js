@@ -1,161 +1,181 @@
-const app = document.querySelector('#app');
+const root = document.querySelector('#research-chrome-root');
 
-if (!app) throw new Error('Missing Runner app root.');
+if (!root) throw new Error('Missing Research Chrome workspace root.');
 
 let refreshEpoch = 0;
-let scheduled = null;
+let autoStartAttempted = false;
+let statusTimer = null;
 
-const observer = new MutationObserver(() => scheduleSync());
-observer.observe(app, { childList: true, subtree: true });
-window.addEventListener('hashchange', () => {
-  refreshEpoch += 1;
-  scheduleSync();
+void refreshStatus({ autoStart: true });
+scheduleRefresh();
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) void refreshStatus({ autoStart: false });
 });
-scheduleSync();
 
-function scheduleSync() {
-  if (scheduled !== null) window.clearTimeout(scheduled);
-  scheduled = window.setTimeout(() => {
-    scheduled = null;
-    void syncSystemCard();
-  }, 0);
-}
-
-async function syncSystemCard() {
-  if (window.location.hash !== '#/system') return;
-  const grid = app.querySelector('.system-grid');
-  if (!grid || grid.querySelector('[data-research-chrome-card]')) return;
-
-  const card = document.createElement('section');
-  card.className = 'panel system-card';
-  card.dataset.researchChromeCard = 'true';
-  grid.append(card);
-  await loadStatus(card);
-}
-
-async function loadStatus(card) {
+async function refreshStatus(options = { autoStart: false }) {
   const epoch = ++refreshEpoch;
-  renderLoading(card);
+  renderChecking();
   try {
     const payload = await api('/api/system/research-chrome');
-    if (epoch !== refreshEpoch || !card.isConnected || window.location.hash !== '#/system') return;
-    renderStatus(card, payload.researchChrome);
+    if (epoch !== refreshEpoch) return;
+    const status = payload.researchChrome;
+
+    if (
+      options.autoStart
+      && !autoStartAttempted
+      && !status.connected
+      && status.profileReady === true
+      && status.controlSupported
+      && !status.configurationError
+    ) {
+      autoStartAttempted = true;
+      await startAutomatically(epoch);
+      return;
+    }
+    renderStatus(status);
   } catch (error) {
-    if (epoch !== refreshEpoch || !card.isConnected) return;
-    renderFailure(card, 'Could not inspect Research Chrome', error);
+    if (epoch === refreshEpoch) renderFailure('Could not inspect Research Chrome', error);
   }
 }
 
-function renderStatus(card, status) {
-  card.replaceChildren();
-  card.append(
-    node('h2', 'Research Chrome'),
-    badge(status.connected ? 'Connected' : 'Not running', status.connected ? 'good' : 'warn'),
-    spacer(12),
-    kvRow('CDP', status.endpoint),
-    kvRow('Browser', status.browser ?? (status.connected ? 'connected' : 'not available')),
-    kvRow('Profile', status.profileReady === true ? 'ready' : status.profileReady === false ? 'missing / incomplete' : 'not managed on this OS'),
-    kvRow('Profile root', status.profileRoot),
-  );
-
-  if (status.configurationError) {
-    card.append(note(status.configurationError, true));
-  } else if (status.controlReason) {
-    card.append(note(status.controlReason));
-  } else if (!status.connected && status.profileReady === false) {
-    card.append(note('Setup copies the current Chrome Default profile into the dedicated Research Chrome profile. This is a one-time machine setup.'));
-  } else if (!status.connected) {
-    card.append(note('The dedicated profile is ready. Start it here before discovery work that needs browser-backed Google / Keyword Surfer evidence.'));
-  } else {
-    card.append(note('CDP is responding from the configured Research Chrome endpoint.'));
+async function startAutomatically(epoch) {
+  renderStarting('Starting Research Chrome automatically…');
+  try {
+    const payload = await apiMutation('/api/system/research-chrome/start', {});
+    if (epoch !== refreshEpoch) return;
+    renderStatus(payload.researchChrome);
+  } catch (error) {
+    if (epoch === refreshEpoch) renderFailure('Automatic Research Chrome start failed', error, true);
   }
+}
+
+function renderStatus(status) {
+  root.replaceChildren();
+  const card = document.createElement('div');
+  card.className = 'workspace-chrome-card';
+  const line = document.createElement('div');
+  line.className = 'workspace-chrome-line';
+  line.append(dot(status.connected ? 'connected' : status.profileReady === false ? 'setup' : 'starting'));
+  const title = document.createElement('strong');
+  title.textContent = status.connected ? 'Research Chrome connected' : status.profileReady === false ? 'Chrome setup required' : 'Research Chrome offline';
+  line.append(title);
+  card.append(line);
+
+  const detail = document.createElement('div');
+  detail.className = 'workspace-chrome-detail';
+  if (status.connected) {
+    detail.textContent = `${status.browser ?? 'Chrome'} · ${status.endpoint}`;
+  } else if (status.configurationError) {
+    detail.textContent = status.configurationError;
+  } else if (status.controlReason) {
+    detail.textContent = status.controlReason;
+  } else if (status.profileReady === false) {
+    detail.textContent = 'One-time setup copies your Chrome Default profile. Close regular Chrome first if Windows reports locked files.';
+  } else {
+    detail.textContent = `Ready profile · ${status.endpoint}`;
+  }
+  card.append(detail);
 
   const actions = document.createElement('div');
-  actions.className = 'form-actions';
-
+  actions.className = 'workspace-chrome-actions';
   if (!status.connected && status.controlSupported) {
     const primary = document.createElement('button');
     primary.type = 'button';
-    primary.className = 'button primary';
+    primary.className = 'button compact';
     const setup = status.profileReady !== true;
-    primary.textContent = setup ? 'Setup Research Chrome' : 'Start Research Chrome';
-    primary.addEventListener('click', () => void runAction(card, setup ? 'setup' : 'start'));
+    primary.textContent = setup ? 'Setup once' : 'Start Chrome';
+    primary.addEventListener('click', () => void runManualAction(setup ? 'setup' : 'start'));
     actions.append(primary);
   }
-
   const refresh = document.createElement('button');
   refresh.type = 'button';
-  refresh.className = 'button';
-  refresh.textContent = 'Refresh status';
-  refresh.addEventListener('click', () => void loadStatus(card));
+  refresh.className = 'button compact';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => void refreshStatus({ autoStart: false }));
   actions.append(refresh);
   card.append(actions);
+  root.append(card);
 }
 
-async function runAction(card, action) {
+async function runManualAction(action) {
   const epoch = ++refreshEpoch;
-  card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
-  card.append(note(action === 'setup' ? 'Preparing the dedicated Research Chrome profile…' : 'Starting Research Chrome and waiting for CDP…'));
+  renderStarting(action === 'setup' ? 'Preparing Research Chrome profile…' : 'Starting Research Chrome…');
   try {
-    const payload = await apiMutation(`/api/system/research-chrome/${action}`, {});
-    if (epoch !== refreshEpoch || !card.isConnected) return;
-    renderStatus(card, payload.researchChrome);
+    let payload = await apiMutation(`/api/system/research-chrome/${action}`, {});
+    if (epoch !== refreshEpoch) return;
+    if (action === 'setup' && payload.researchChrome.profileReady === true && !payload.researchChrome.connected) {
+      renderStarting('Profile ready. Starting Research Chrome…');
+      payload = await apiMutation('/api/system/research-chrome/start', {});
+      if (epoch !== refreshEpoch) return;
+    }
+    autoStartAttempted = true;
+    renderStatus(payload.researchChrome);
   } catch (error) {
-    if (epoch !== refreshEpoch || !card.isConnected) return;
-    renderFailure(card, action === 'setup' ? 'Research Chrome setup failed' : 'Research Chrome start failed', error);
+    if (epoch === refreshEpoch) renderFailure(action === 'setup' ? 'Research Chrome setup failed' : 'Research Chrome start failed', error, action === 'start');
   }
 }
 
-function renderLoading(card) {
-  card.replaceChildren(
-    node('h2', 'Research Chrome'),
-    node('div', 'Checking CDP and dedicated profile…', 'loading compact-loading'),
-  );
+function renderChecking() {
+  root.replaceChildren(statusCard('starting', 'Checking Research Chrome…', 'Reading live CDP/profile status.'));
 }
 
-function renderFailure(card, title, error) {
-  card.replaceChildren(
-    node('h2', 'Research Chrome'),
-    badge('Needs attention', 'warn'),
-    note(`${title}: ${error instanceof Error ? error.message : String(error)}`, true),
-  );
-  const retry = document.createElement('button');
-  retry.type = 'button';
-  retry.className = 'button';
-  retry.textContent = 'Reload status';
-  retry.addEventListener('click', () => void loadStatus(card));
+function renderStarting(message) {
+  root.replaceChildren(statusCard('starting', message, 'No terminal command is needed.'));
+}
+
+function renderFailure(title, error, offerStart = false) {
+  root.replaceChildren();
+  const card = statusCard('error', title, error instanceof Error ? error.message : String(error));
   const actions = document.createElement('div');
-  actions.className = 'form-actions';
-  actions.append(retry);
+  actions.className = 'workspace-chrome-actions';
+  if (offerStart) {
+    const retryStart = document.createElement('button');
+    retryStart.type = 'button';
+    retryStart.className = 'button compact';
+    retryStart.textContent = 'Retry start';
+    retryStart.addEventListener('click', () => void runManualAction('start'));
+    actions.append(retryStart);
+  }
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'button compact';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => void refreshStatus({ autoStart: false }));
+  actions.append(refresh);
   card.append(actions);
+  root.append(card);
 }
 
-function kvRow(key, value) {
-  const row = document.createElement('div');
-  row.className = 'kv-row';
-  row.append(node('div', key, 'kv-key'), node('div', value ?? 'n/a', 'kv-value'));
-  return row;
+function statusCard(tone, titleText, detailText) {
+  const card = document.createElement('div');
+  card.className = 'workspace-chrome-card';
+  const line = document.createElement('div');
+  line.className = 'workspace-chrome-line';
+  line.append(dot(tone));
+  const title = document.createElement('strong');
+  title.textContent = titleText;
+  line.append(title);
+  const detail = document.createElement('div');
+  detail.className = 'workspace-chrome-detail';
+  detail.textContent = detailText;
+  card.append(line, detail);
+  return card;
 }
 
-function note(text, error = false) {
-  return node('div', text, `plan-note${error ? ' error-note' : ''}`);
-}
-
-function badge(text, tone) {
-  return node('span', text, `badge ${tone}`);
-}
-
-function spacer(height) {
-  const element = document.createElement('div');
-  element.setAttribute('style', `height:${height}px`);
+function dot(tone) {
+  const element = document.createElement('span');
+  element.className = `workspace-dot ${tone}`;
   return element;
 }
 
-function node(tag, text, className = '') {
-  const element = document.createElement(tag);
-  if (className) element.className = className;
-  element.textContent = String(text);
-  return element;
+function scheduleRefresh() {
+  if (statusTimer !== null) window.clearTimeout(statusTimer);
+  statusTimer = window.setTimeout(async () => {
+    statusTimer = null;
+    if (!document.hidden) await refreshStatus({ autoStart: false });
+    scheduleRefresh();
+  }, 8000);
 }
 
 async function api(path) {
