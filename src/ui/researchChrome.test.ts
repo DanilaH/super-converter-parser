@@ -13,6 +13,10 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+async function readyProfileAccess(path: string): Promise<void> {
+  if (path.endsWith('.runner-profile-incomplete')) throw new Error('marker absent');
+}
+
 test('status reports configured CDP independently from Windows-only process control', async () => {
   const status = await inspectResearchChrome({
     env: { CDP_URL: 'http://127.0.0.1:9333' },
@@ -35,13 +39,28 @@ test('status requires a real CDP Browser field rather than any 200 JSON response
     env: { CDP_URL: 'http://127.0.0.1:9333' },
     runtime: {
       platform: 'win32',
-      accessPath: async () => undefined,
+      accessPath: readyProfileAccess,
       fetchImpl: (async () => jsonResponse({ ok: true })) as typeof fetch,
     },
   });
 
   assert.equal(status.connected, false);
   assert.equal(status.browser, null);
+  assert.equal(status.profileReady, true);
+});
+
+test('an incomplete setup marker keeps a partially copied profile non-ready', async () => {
+  const status = await inspectResearchChrome({
+    env: { CDP_URL: 'http://127.0.0.1:9333' },
+    runtime: {
+      platform: 'win32',
+      accessPath: async () => undefined,
+      fetchImpl: (async () => { throw new Error('offline'); }) as typeof fetch,
+    },
+  });
+
+  assert.equal(status.profileReady, false);
+  assert.equal(status.connected, false);
 });
 
 test('malformed CDP configuration fails read-only inspection closed without throwing', async () => {
@@ -50,7 +69,7 @@ test('malformed CDP configuration fails read-only inspection closed without thro
     env: { CDP_URL: 'not a url' },
     runtime: {
       platform: 'win32',
-      accessPath: async () => undefined,
+      accessPath: readyProfileAccess,
       fetchImpl: (async () => { fetchCalls += 1; return jsonResponse({}); }) as typeof fetch,
     },
   });
@@ -66,7 +85,7 @@ test('remote CDP can be observed but is never accepted as a launch target', asyn
     env: { CDP_URL: 'http://192.0.2.10:9333' },
     runtime: {
       platform: 'win32',
-      accessPath: async () => undefined,
+      accessPath: readyProfileAccess,
       fetchImpl: (async () => jsonResponse({ Browser: 'Chrome/140' })) as typeof fetch,
     },
   });
@@ -79,7 +98,7 @@ test('remote CDP can be observed but is never accepted as a launch target', asyn
       env: { CDP_URL: 'http://192.0.2.10:9333' },
       runtime: {
         platform: 'win32',
-        accessPath: async () => undefined,
+        accessPath: readyProfileAccess,
         fetchImpl: (async () => jsonResponse({ Browser: 'Chrome/140' })) as typeof fetch,
         runScript: async () => { throw new Error('must not run'); },
       },
@@ -94,7 +113,7 @@ test('start is idempotent when configured Research Chrome is already connected',
     env: { CDP_URL: 'http://localhost:9333' },
     runtime: {
       platform: 'win32',
-      accessPath: async () => undefined,
+      accessPath: readyProfileAccess,
       fetchImpl: (async () => jsonResponse({ Browser: 'Chrome/140' })) as typeof fetch,
       runScript: async () => { scriptCalls += 1; },
     },
@@ -128,7 +147,7 @@ test('start uses only the fixed script mode, managed profile, and configured loc
     env: { CDP_URL: 'http://127.0.0.1:9444' },
     runtime: {
       platform: 'win32',
-      accessPath: async () => undefined,
+      accessPath: readyProfileAccess,
       fetchImpl: (async () => connected
         ? jsonResponse({ Browser: 'Chrome/140' })
         : (() => { throw new Error('offline'); })()) as typeof fetch,
@@ -150,8 +169,9 @@ test('setup is idempotent after the dedicated profile exists and otherwise uses 
     env: { CDP_URL: 'http://127.0.0.1:9333' },
     runtime: {
       platform: 'win32' as const,
-      accessPath: async () => {
-        if (!profileReady) throw new Error('missing');
+      accessPath: async (path: string) => {
+        if (path.endsWith('.runner-profile-incomplete')) throw new Error('marker absent');
+        if (!profileReady) throw new Error('profile missing');
       },
       fetchImpl: (async () => { throw new Error('offline'); }) as typeof fetch,
       runScript: async (input: { mode: 'setup' | 'start'; profileRoot: string; port: number }) => {
