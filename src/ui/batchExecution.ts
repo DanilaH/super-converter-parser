@@ -10,6 +10,7 @@ import {
 import { loadSeedRows } from '../input/seeds/load.js';
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import { ResearchError } from '../shared/errors.js';
+import { ensureResearchChromeForDiscovery } from './researchChromeDiscovery.js';
 
 export type UiBatchDraftV1 = {
   version: 1;
@@ -34,12 +35,14 @@ export type UiBatchExecutionDeps = {
   previewResearchBatch: typeof previewResearchBatch;
   appendResearchBatch: typeof appendResearchBatch;
   loadSeedRows: typeof loadSeedRows;
+  ensureResearchChromeForDiscovery?: typeof ensureResearchChromeForDiscovery;
 };
 
 export const DEFAULT_UI_BATCH_EXECUTION_DEPS: UiBatchExecutionDeps = {
   previewResearchBatch,
   appendResearchBatch,
   loadSeedRows,
+  ensureResearchChromeForDiscovery,
 };
 
 export async function previewUiResearchBatch(
@@ -75,6 +78,7 @@ export async function executeUiResearchBatch(
 ): Promise<ResearchBatchExecutionResultV1> {
   const draft = validateUiBatchDraft(value);
   const lines = parseKeywordLines(draft.keywords);
+  await deps.ensureResearchChromeForDiscovery?.({ env: options.env });
   const workspace = await mkdtemp(join(tmpdir(), 'runner-ui-batch-'));
   try {
     const seedsPath = join(workspace, 'seeds.csv');
