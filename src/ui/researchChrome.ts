@@ -158,9 +158,17 @@ function parseCdpConfiguration(rawValue: string | undefined): {
 
   const origin = url.origin;
   const statusUrl = new URL('/json/version', origin).href;
-  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1';
+  const loopback = url.hostname === '127.0.0.1'
+    || url.hostname === 'localhost'
+    || url.hostname === '::1'
+    || url.hostname === '[::1]';
   const port = url.port === '' ? null : Number(url.port);
-  const localControlPort = url.protocol === 'http:' && loopback && Number.isInteger(port) && port !== null && port >= 1 && port <= 65_535
+  const localControlPort = url.protocol === 'http:'
+    && loopback
+    && port !== null
+    && Number.isInteger(port)
+    && port >= 1
+    && port <= 65_535
     ? port
     : null;
   return { raw, origin, statusUrl, localControlPort, error: null };
