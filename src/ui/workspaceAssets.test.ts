@@ -5,10 +5,11 @@ import test from 'node:test';
 
 test('browser shell is one persistent split workspace instead of primary full-screen navigation', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [html, source, css] = await Promise.all([
+  const [html, source, css, serverSource] = await Promise.all([
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
     readFile(fileURLToPath(new URL('workspace.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('workspace.css', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('./server.ts', import.meta.url)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(source));
@@ -19,6 +20,7 @@ test('browser shell is one persistent split workspace instead of primary full-sc
   assert.match(html, /class="main workspace-main"/);
   assert.match(html, /<link rel="stylesheet" href="\/workspace\.css">/);
   assert.match(html, /<script type="module" src="\/workspace\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="\/seed-import\.js"><\/script>/);
   assert.doesNotMatch(html, /<nav class="nav"/);
 
   assert.match(source, /window\.location\.hash === '#\/researches'/);
@@ -31,6 +33,10 @@ test('browser shell is one persistent split workspace instead of primary full-sc
   assert.match(css, /grid-template-columns:\s*var\(--workspace-rail\) minmax\(0, 1fr\)/);
   assert.match(css, /\.workspace-researches/);
   assert.match(css, /\.main\.workspace-main/);
+
+  for (const route of ['/workspace.js', '/seed-import.js', '/workspace.css']) {
+    assert.match(serverSource, new RegExp(`\\['${route.replace('.', '\\.')}')`));
+  }
 });
 
 test('seed importer accepts TXT, canonical keyword CSV, and strict JSON shapes', async () => {
