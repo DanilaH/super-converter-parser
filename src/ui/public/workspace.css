@@ -206,6 +206,10 @@
   padding-top: 30px;
 }
 
+.main.workspace-main .back-link {
+  display: none;
+}
+
 .seed-import-zone {
   margin-top: 8px;
   min-height: 62px;
