@@ -5,9 +5,10 @@ import test from 'node:test';
 
 test('System page loads CSP-safe Research Chrome controls with fixed API actions', async () => {
   const base = new URL('./public/', import.meta.url);
-  const [source, html] = await Promise.all([
+  const [source, html, setupScript] = await Promise.all([
     readFile(fileURLToPath(new URL('research-chrome.js', base)), 'utf8'),
     readFile(fileURLToPath(new URL('index.html', base)), 'utf8'),
+    readFile(fileURLToPath(new URL('../../scripts/research-chrome.ps1', import.meta.url)), 'utf8'),
   ]);
 
   assert.doesNotThrow(() => new Function(source));
@@ -22,4 +23,7 @@ test('System page loads CSP-safe Research Chrome controls with fixed API actions
   assert.doesNotMatch(source, /innerHTML\s*=/);
   assert.doesNotMatch(source, /eval\(|new Function\(/);
   assert.doesNotMatch(source, /command|executable|arguments/);
+
+  assert.match(setupScript, /robocopy .* \/R:2 \/W:1 /);
+  assert.match(setupScript, /Close regular Chrome and retry if profile files are locked/);
 });
