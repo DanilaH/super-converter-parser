@@ -25,5 +25,7 @@ test('System page loads CSP-safe Research Chrome controls with fixed API actions
   assert.doesNotMatch(source, /command|executable|arguments/);
 
   assert.match(setupScript, /robocopy .* \/R:2 \/W:1 /);
+  assert.match(setupScript, /\.runner-profile-ready/);
+  assert.match(setupScript, /Set-Content -Path \$setupMarker -Value "v1"/);
   assert.match(setupScript, /Close regular Chrome and retry if profile files are locked/);
 });
