@@ -3,50 +3,24 @@ const root = document.querySelector('#research-chrome-root');
 if (!root) throw new Error('Missing Research Chrome workspace root.');
 
 let refreshEpoch = 0;
-let autoStartAttempted = false;
 let statusTimer = null;
 
-void refreshStatus({ autoStart: true });
+void refreshStatus();
 scheduleRefresh();
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) void refreshStatus({ autoStart: false });
+  if (!document.hidden) void refreshStatus();
 });
+window.addEventListener('runner:research-chrome-refresh', () => void refreshStatus());
 
-async function refreshStatus(options = { autoStart: false }) {
+async function refreshStatus() {
   const epoch = ++refreshEpoch;
-  renderChecking();
   try {
     const payload = await api('/api/system/research-chrome');
     if (epoch !== refreshEpoch) return;
-    const status = payload.researchChrome;
-
-    if (
-      options.autoStart
-      && !autoStartAttempted
-      && !status.connected
-      && status.profileReady === true
-      && status.controlSupported
-      && !status.configurationError
-    ) {
-      autoStartAttempted = true;
-      await startAutomatically(epoch);
-      return;
-    }
-    renderStatus(status);
-  } catch (error) {
-    if (epoch === refreshEpoch) renderFailure('Could not inspect Research Chrome', error);
-  }
-}
-
-async function startAutomatically(epoch) {
-  renderStarting('Starting Research Chrome automatically…');
-  try {
-    const payload = await apiMutation('/api/system/research-chrome/start', {});
-    if (epoch !== refreshEpoch) return;
     renderStatus(payload.researchChrome);
   } catch (error) {
-    if (epoch === refreshEpoch) renderFailure('Automatic Research Chrome start failed', error, true);
+    if (epoch === refreshEpoch) renderFailure('Could not inspect Research Chrome', error);
   }
 }
 
@@ -56,9 +30,13 @@ function renderStatus(status) {
   card.className = 'workspace-chrome-card';
   const line = document.createElement('div');
   line.className = 'workspace-chrome-line';
-  line.append(dot(status.connected ? 'connected' : status.profileReady === false ? 'setup' : 'starting'));
+  line.append(dot(status.connected ? 'connected' : status.profileReady === false ? 'setup' : 'idle'));
   const title = document.createElement('strong');
-  title.textContent = status.connected ? 'Research Chrome connected' : status.profileReady === false ? 'Chrome setup required' : 'Research Chrome offline';
+  title.textContent = status.connected
+    ? 'Research Chrome connected'
+    : status.profileReady === false
+      ? 'Chrome setup required'
+      : 'Research Chrome ready';
   line.append(title);
   card.append(line);
 
@@ -71,77 +49,78 @@ function renderStatus(status) {
   } else if (status.controlReason) {
     detail.textContent = status.controlReason;
   } else if (status.profileReady === false) {
-    detail.textContent = 'One-time setup copies your Chrome Default profile. Close regular Chrome first if Windows reports locked files.';
+    detail.textContent = 'Run the one-time setup here. After that discovery starts Research Chrome automatically when it needs Google.';
   } else {
-    detail.textContent = `Ready profile · ${status.endpoint}`;
+    detail.textContent = 'No manual Google launch needed. Discovery will start this Chrome automatically.';
   }
   card.append(detail);
 
   const actions = document.createElement('div');
   actions.className = 'workspace-chrome-actions';
-  if (!status.connected && status.controlSupported) {
-    const primary = document.createElement('button');
-    primary.type = 'button';
-    primary.className = 'button compact';
-    const setup = status.profileReady !== true;
-    primary.textContent = setup ? 'Setup once' : 'Start Chrome';
-    primary.addEventListener('click', () => void runManualAction(setup ? 'setup' : 'start'));
-    actions.append(primary);
+  if (!status.connected && status.controlSupported && status.profileReady === false) {
+    const setup = document.createElement('button');
+    setup.type = 'button';
+    setup.className = 'button compact';
+    setup.textContent = 'Setup once';
+    setup.addEventListener('click', () => void runSetup());
+    actions.append(setup);
+  }
+  if (!status.connected && status.controlSupported && status.profileReady === true) {
+    const start = document.createElement('button');
+    start.type = 'button';
+    start.className = 'button compact';
+    start.textContent = 'Start now';
+    start.addEventListener('click', () => void runStart());
+    actions.append(start);
   }
   const refresh = document.createElement('button');
   refresh.type = 'button';
   refresh.className = 'button compact';
   refresh.textContent = 'Refresh';
-  refresh.addEventListener('click', () => void refreshStatus({ autoStart: false }));
+  refresh.addEventListener('click', () => void refreshStatus());
   actions.append(refresh);
   card.append(actions);
   root.append(card);
 }
 
-async function runManualAction(action) {
+async function runSetup() {
   const epoch = ++refreshEpoch;
-  renderStarting(action === 'setup' ? 'Preparing Research Chrome profile…' : 'Starting Research Chrome…');
+  renderWorking('Preparing Research Chrome profile…', 'Close regular Chrome first if Windows reports locked profile files.');
   try {
-    let payload = await apiMutation(`/api/system/research-chrome/${action}`, {});
+    const payload = await apiMutation('/api/system/research-chrome/setup', {});
     if (epoch !== refreshEpoch) return;
-    if (action === 'setup' && payload.researchChrome.profileReady === true && !payload.researchChrome.connected) {
-      renderStarting('Profile ready. Starting Research Chrome…');
-      payload = await apiMutation('/api/system/research-chrome/start', {});
-      if (epoch !== refreshEpoch) return;
-    }
-    autoStartAttempted = true;
     renderStatus(payload.researchChrome);
   } catch (error) {
-    if (epoch === refreshEpoch) renderFailure(action === 'setup' ? 'Research Chrome setup failed' : 'Research Chrome start failed', error, action === 'start');
+    if (epoch === refreshEpoch) renderFailure('Research Chrome setup failed', error);
   }
 }
 
-function renderChecking() {
-  root.replaceChildren(statusCard('starting', 'Checking Research Chrome…', 'Reading live CDP/profile status.'));
+async function runStart() {
+  const epoch = ++refreshEpoch;
+  renderWorking('Starting Research Chrome…', 'This is optional; discovery also starts it automatically when needed.');
+  try {
+    const payload = await apiMutation('/api/system/research-chrome/start', {});
+    if (epoch !== refreshEpoch) return;
+    renderStatus(payload.researchChrome);
+  } catch (error) {
+    if (epoch === refreshEpoch) renderFailure('Research Chrome start failed', error);
+  }
 }
 
-function renderStarting(message) {
-  root.replaceChildren(statusCard('starting', message, 'No terminal command is needed.'));
+function renderWorking(titleText, detailText) {
+  root.replaceChildren(statusCard('running', titleText, detailText));
 }
 
-function renderFailure(title, error, offerStart = false) {
+function renderFailure(title, error) {
   root.replaceChildren();
   const card = statusCard('error', title, error instanceof Error ? error.message : String(error));
-  const actions = document.createElement('div');
-  actions.className = 'workspace-chrome-actions';
-  if (offerStart) {
-    const retryStart = document.createElement('button');
-    retryStart.type = 'button';
-    retryStart.className = 'button compact';
-    retryStart.textContent = 'Retry start';
-    retryStart.addEventListener('click', () => void runManualAction('start'));
-    actions.append(retryStart);
-  }
   const refresh = document.createElement('button');
   refresh.type = 'button';
   refresh.className = 'button compact';
   refresh.textContent = 'Refresh';
-  refresh.addEventListener('click', () => void refreshStatus({ autoStart: false }));
+  refresh.addEventListener('click', () => void refreshStatus());
+  const actions = document.createElement('div');
+  actions.className = 'workspace-chrome-actions';
   actions.append(refresh);
   card.append(actions);
   root.append(card);
@@ -173,7 +152,7 @@ function scheduleRefresh() {
   if (statusTimer !== null) window.clearTimeout(statusTimer);
   statusTimer = window.setTimeout(async () => {
     statusTimer = null;
-    if (!document.hidden) await refreshStatus({ autoStart: false });
+    if (!document.hidden) await refreshStatus();
     scheduleRefresh();
   }, 8000);
 }
