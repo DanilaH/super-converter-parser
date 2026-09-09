@@ -70,9 +70,9 @@ On Windows, when `CDP_URL` is loopback HTTP with an explicit local port, the wor
 - `Setup once` when the dedicated profile is missing or a previous UI-driven setup was left incomplete;
 - optional `Start now` when the dedicated profile is ready but CDP is not currently responding.
 
-Normal new-research discovery does not require `Start now`. Immediately before discovery execution, the UI execution adapter checks the configured Research Chrome status. If the prepared managed local profile is available but CDP is disconnected, it starts Research Chrome through the same fixed launcher and then proceeds. Batch append performs the same preflight only after its current read-only batch classification confirms that the append will actually create/promote discovery work; duplicate-only batches do not open Chrome unnecessarily.
+Normal new-research discovery does not require `Start now`. Immediately before discovery execution, the UI execution adapter checks the configured Research Chrome status. If the prepared managed local profile is available but CDP is disconnected, it starts Research Chrome through the same fixed launcher and then proceeds. Batch append performs the same preflight only after its current read-only batch classification confirms that the append will actually create/promote discovery work; duplicate-only batches do not open Chrome unnecessarily. The same preflight runs inside the already-admitted UI job before canonical `resume_discovery` continuation and before explicit `repair_discovery`. Enrichment continuation, finalization continuation, and Library publication do not start Research Chrome.
 
-If the managed local profile has never been prepared, discovery fails clearly and directs the operator to `Setup once` rather than falling through to an opaque Google/CDP timeout. Remote/non-loopback CDP endpoints and non-Windows environments remain externally managed: the UI may inspect them, but the built-in discovery preflight does not claim process ownership when `controlSupported` is false.
+If the managed local profile has never been prepared, discovery fails clearly and directs the operator to `Setup once` rather than falling through to an opaque Google/CDP timeout. Invalid Research Chrome configuration fails at the preflight boundary. Valid remote/non-loopback CDP endpoints and non-Windows environments remain externally managed: the UI may inspect them, but the built-in discovery preflight does not claim process ownership when `controlSupported` is false.
 
 These controls and the just-in-time preflight are bounded convenience operations over the existing `scripts/research-chrome.ps1` helper, not a generic command runner. Browser mutation bodies remain fixed/empty for explicit setup/start actions, inherit the same same-origin localhost mutation policy as the rest of the UI, and cannot supply executable paths, shell commands, arbitrary arguments, profile roots, or ports. Remote/non-loopback CDP endpoints may be inspected read-only but are never accepted as process-launch targets.
 
@@ -89,13 +89,13 @@ Research Detail exposes a browser continuation button only when all of the follo
 - the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
 - no other UI execution job is active.
 
-The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection.
+The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection. When that projection says `resume_discovery`, the admitted resume job performs Research Chrome preflight immediately before the existing continuation workflow. Other continuation codes do not perform that machine preflight.
 
 ### Explicit discovery repair
 
 `repair_discovery` remains separate from ordinary Continue because `retryFailed` is a distinct mutation with its own eligibility semantics.
 
-Research Detail exposes the specialist repair action only when canonical status says `nextAction.code === repair_discovery` and the current discovery has one or more `repairable` checkpoints. The browser does not equate generic `failed` or `partial` counts with repair eligibility.
+Research Detail exposes the specialist repair action only when canonical status says `nextAction.code === repair_discovery` and the current discovery has one or more `repairable` checkpoints. The browser does not equate generic `failed` or `partial` counts with repair eligibility. After the repair request is admitted as the active UI job, Research Chrome preflight runs before the existing application repair action so a disconnected prepared local browser does not turn repair into a manual terminal step.
 
 Before mutation, the application repair action:
 
@@ -235,7 +235,7 @@ Mutation requests are stricter than reads: they require `POST`, `Content-Type: a
 
 Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair, shortlist continuation, finalist-scope continuation, and human-decision continuation share the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
 
-Research Chrome explicit setup/start is outside the research job registry because it does not mutate research truth. Just-in-time discovery preflight is invoked from the UI execution adapter before actual managed local browser-backed discovery and delegates only to the same fixed Research Chrome status/start functions; it does not expose browser-controlled executable or process arguments.
+Research Chrome explicit setup/start is outside the research job registry because it does not mutate research truth. Just-in-time discovery preflight runs only inside already-admitted UI execution jobs that are about to perform managed browser-backed discovery: new research, changed batch append, canonical `resume_discovery`, and explicit `repair_discovery`. It delegates only to the same fixed Research Chrome status/start functions; enrichment/finalization/Library continuation does not invoke it, and it does not expose browser-controlled executable or process arguments.
 
 New-research and batch seed text, shortlist continuation CSV input, and human-decision continuation JSON input are materialized only into temporary local workspaces long enough for the normal loader/workflow to consume them; those workspaces are removed after execution. Finalist scope is pathless canonical continuation data and needs no temporary file. OperatorConfig provenance and immutable research evidence keep their existing semantics.
 
