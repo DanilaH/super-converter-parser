@@ -54,7 +54,7 @@ function renderStatus(card, status) {
     spacer(12),
     kvRow('CDP', status.endpoint),
     kvRow('Browser', status.browser ?? (status.connected ? 'connected' : 'not available')),
-    kvRow('Profile', status.profileReady === true ? 'ready' : status.profileReady === false ? 'missing' : 'not managed on this OS'),
+    kvRow('Profile', status.profileReady === true ? 'ready' : status.profileReady === false ? 'missing / incomplete' : 'not managed on this OS'),
     kvRow('Profile root', status.profileRoot),
   );
 
