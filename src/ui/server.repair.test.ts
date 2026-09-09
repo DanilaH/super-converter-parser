@@ -92,7 +92,7 @@ test('repair endpoint preflights Research Chrome inside the admitted repair job 
     env: { CDP_URL: 'http://127.0.0.1:9333' },
     deps: deps({
       ensureResearchChromeForDiscovery: async (options) => {
-        sequence.push(`chrome:${options.env?.CDP_URL ?? ''}`);
+        sequence.push(`chrome:${options?.env?.CDP_URL ?? ''}`);
         return connectedChrome;
       },
       repairResearchDiscovery: async (researchId, options) => {
