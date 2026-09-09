@@ -70,7 +70,7 @@ test('Research Chrome status is a dedicated read-only System projection', async 
     env: { CDP_URL: 'http://127.0.0.1:9444' },
     deps: deps({
       inspectResearchChrome: async (options) => {
-        observedCdp = options.env?.CDP_URL ?? '';
+        observedCdp = options?.env?.CDP_URL ?? '';
         return { ...disconnected, endpoint: observedCdp };
       },
     }),
