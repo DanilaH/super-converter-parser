@@ -1,7 +1,7 @@
 const MAX_SEED_FILE_BYTES = 2 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set(['txt', 'csv', 'json']);
 
-export function parseSeedContent(fileName, rawContent) {
+function parseSeedContent(fileName, rawContent) {
   const name = String(fileName ?? '').trim();
   const content = String(rawContent ?? '');
   const extension = extensionOf(name);
@@ -24,7 +24,7 @@ export function parseSeedContent(fileName, rawContent) {
   };
 }
 
-export function parseCsvKeywords(content) {
+function parseCsvKeywords(content) {
   const rows = parseCsvRows(stripBom(String(content ?? '')));
   const nonEmpty = rows.filter((row) => row.some((cell) => cell !== ''));
   if (nonEmpty.length < 2) throw new Error('CSV seed file must contain a header and at least one data row.');
@@ -44,7 +44,7 @@ export function parseCsvKeywords(content) {
   return keywords;
 }
 
-export function parseCsvRows(content) {
+function parseCsvRows(content) {
   const rows = [];
   let row = [];
   let field = '';
@@ -94,7 +94,7 @@ export function parseCsvRows(content) {
   return rows;
 }
 
-export function parseJsonKeywords(content) {
+function parseJsonKeywords(content) {
   let value;
   try {
     value = JSON.parse(stripBom(String(content ?? '')));
@@ -119,7 +119,7 @@ export function parseJsonKeywords(content) {
   });
 }
 
-export function parseTextKeywords(content) {
+function parseTextKeywords(content) {
   return stripBom(String(content ?? ''))
     .split(/\r?\n/)
     .map((line) => line.trim())
