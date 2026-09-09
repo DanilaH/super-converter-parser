@@ -10,16 +10,22 @@ export type ResearchChromeDiscoveryDeps = {
   startResearchChrome: typeof startResearchChrome;
 };
 
+export type ResearchChromeDiscoveryOptions = {
+  env?: NodeJS.ProcessEnv | undefined;
+  runtime?: ResearchChromeOptions['runtime'] | undefined;
+};
+
 export const DEFAULT_RESEARCH_CHROME_DISCOVERY_DEPS: ResearchChromeDiscoveryDeps = {
   inspectResearchChrome,
   startResearchChrome,
 };
 
 export async function ensureResearchChromeForDiscovery(
-  options: ResearchChromeOptions = {},
+  options: ResearchChromeDiscoveryOptions = {},
   deps: ResearchChromeDiscoveryDeps = DEFAULT_RESEARCH_CHROME_DISCOVERY_DEPS,
 ): Promise<ResearchChromeStatus> {
-  const before = await deps.inspectResearchChrome(options);
+  const chromeOptions = normalizeResearchChromeOptions(options);
+  const before = await deps.inspectResearchChrome(chromeOptions);
   if (before.connected) return before;
 
   // A remote/custom CDP endpoint or a non-Windows host can still be managed outside
@@ -33,5 +39,12 @@ export async function ensureResearchChromeForDiscovery(
     );
   }
 
-  return deps.startResearchChrome(options);
+  return deps.startResearchChrome(chromeOptions);
+}
+
+function normalizeResearchChromeOptions(options: ResearchChromeDiscoveryOptions): ResearchChromeOptions {
+  const normalized: ResearchChromeOptions = {};
+  if (options.env !== undefined) normalized.env = options.env;
+  if (options.runtime !== undefined) normalized.runtime = options.runtime;
+  return normalized;
 }
