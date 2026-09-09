@@ -304,6 +304,47 @@ Explicitly not included:
 
 ---
 
+## Post-MVP operator ergonomics — single workspace and zero-terminal discovery
+
+**Status:** implemented in PR #179; exact-head validation required before merge.
+
+This slice is driven by observed first-use friction, not speculative U5/U6 expansion. The operator reported that Chrome startup was unclear/manual, seed entry was unnecessarily text-only, and primary work was spread across too many screens.
+
+Implemented scope:
+
+- replace primary Researches/New/System full-screen navigation with a persistent split workspace: lightweight research/search/machine/job rail on the left and the selected work surface on the right;
+- keep existing hash routes only as deep-link/state mechanics so specialist human-gate modules and durable workflow semantics remain unchanged;
+- keep the research rail lightweight by continuing to use the catalog projection rather than deep-inspecting every research;
+- expose Research Chrome status and one-time `Setup once` in the persistent rail, with optional manual `Start now` only as a convenience;
+- add a just-in-time Research Chrome discovery preflight for normal new-research execution: connected Chrome is reused, a prepared managed local profile is started automatically, missing first-time setup fails clearly, invalid configuration fails clearly, and valid unsupported/remote CDP ownership remains external;
+- apply the same preflight to batch append only after a current read-only batch classification proves discovery work is actually required, so duplicate-only batches do not open Chrome;
+- apply the same preflight inside the already-admitted UI job before canonical `resume_discovery` and explicit `repair_discovery`, while enrichment/finalization/Library continuation deliberately skips Chrome startup;
+- add TXT/CSV/JSON file picker and drag-and-drop convenience to new-research and batch seed editors while retaining normal paste/edit flow and canonical preview/normalization;
+- keep CSV semantics aligned with the existing required `keyword` column and restrict JSON to explicit string-array shapes rather than guessing arbitrary schemas;
+- keep new browser assets on the server's explicit static allowlist and preserve the existing CSP/same-origin mutation boundary;
+- add browser/parser/execution regressions for split layout, file import, static-asset serving, Chrome preflight, continuation/repair gating, and batch ordering.
+
+Cold review corrections within the slice:
+
+- new static assets were added to the explicit server allowlist rather than broadening static-file serving;
+- a prepared-but-disconnected Chrome state is visually distinct from a healthy CDP connection;
+- duplicate-only batch append skips Chrome preflight;
+- the first JIT cut covered new/batch execution, but cold review found that `resume_discovery` and `repair_discovery` would reintroduce manual Chrome/terminal friction; both now preflight inside their admitted UI jobs while non-discovery continuation does not;
+- malformed/invalid Research Chrome configuration fails at the preflight boundary instead of being mistaken for externally managed CDP;
+- optional Chrome discovery options are normalized explicitly to satisfy strict `exactOptionalPropertyTypes` rather than weakening compiler settings;
+- workspace static-asset regression uses exact allowlist strings rather than a dynamically constructed regular expression that could fail independently of runtime behavior.
+
+Explicitly not included:
+
+- a new UI database or durable navigation state;
+- React/Electron migration;
+- automatic shortlist/finalist/business decisions;
+- eager Chrome launch merely from opening `npm run ui`;
+- Stop/Kill/general process control;
+- broad U5/U6 configuration, Library, GSC, or analytics work.
+
+---
+
 ## U5 — Configuration UX
 
 ### Scope

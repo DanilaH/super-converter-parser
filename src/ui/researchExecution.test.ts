@@ -62,12 +62,28 @@ test('preview validates through the real OperatorConfig resolver and reports dis
   assert.ok(!JSON.stringify(preview).includes('runner-ui-preview'));
 });
 
-test('draft execution materializes a temporary valid seed CSV and disables process-signal ownership', async () => {
+test('draft execution starts Research Chrome before materializing a temporary valid seed CSV', async () => {
   let observedCsv = '';
   let observedSignals: boolean | undefined;
+  const sequence: string[] = [];
   const deps: UiResearchExecutionDeps = {
     resolveOperatorResearchConfigInput,
+    ensureResearchChromeForDiscovery: async () => {
+      sequence.push('chrome');
+      return {
+        version: 1,
+        endpoint: 'http://127.0.0.1:9333',
+        connected: true,
+        browser: 'Chrome/140',
+        profileRoot: 'C:\\tmp\\research-profile',
+        profileReady: true,
+        controlSupported: true,
+        controlReason: null,
+        configurationError: null,
+      };
+    },
     executeNewResearch: async (loaded, options) => {
+      sequence.push('execute');
       observedCsv = await readFile(loaded.plan.semantics.research.input.resolvedPath, 'utf8');
       observedSignals = options?.manageProcessSignals;
       return EXECUTION;
@@ -79,6 +95,7 @@ test('draft execution materializes a temporary valid seed CSV and disables proce
   assert.equal(result, EXECUTION);
   assert.equal(observedSignals, false);
   assert.equal(observedCsv, 'keyword\n"alpha tool"\n"beta, tool"\n"alpha   tool"\n');
+  assert.deepEqual(sequence, ['chrome', 'execute']);
 });
 
 test('live initialization chains after the existing fresh-research callback instead of replacing it', async () => {

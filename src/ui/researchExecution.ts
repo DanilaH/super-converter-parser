@@ -15,6 +15,7 @@ import {
 import { buildSeedKeywords } from '../input/seeds/normalize.js';
 import type { OperatorResearchConfigSourceV1 } from '../operatorConfig/contracts.js';
 import { ResearchError } from '../shared/errors.js';
+import { ensureResearchChromeForDiscovery } from './researchChromeDiscovery.js';
 
 export type UiCreateResearchDraftV1 = {
   version: 1;
@@ -63,12 +64,14 @@ export type UiResearchExecutionDeps = {
   resolveOperatorResearchConfigInput: typeof resolveOperatorResearchConfigInput;
   executeNewResearch: typeof executeNewResearch;
   executeExistingResearch: typeof executeExistingResearch;
+  ensureResearchChromeForDiscovery?: typeof ensureResearchChromeForDiscovery;
 };
 
 export const DEFAULT_UI_RESEARCH_EXECUTION_DEPS: UiResearchExecutionDeps = {
   resolveOperatorResearchConfigInput,
   executeNewResearch,
   executeExistingResearch,
+  ensureResearchChromeForDiscovery,
 };
 
 type UiResearchExecutionOptions = Omit<ResearchControlOptions, 'manageProcessSignals'> & {
@@ -128,6 +131,7 @@ export async function executeUiResearchDraft(
 ): Promise<ResearchRunExecution> {
   const draft = validateUiCreateResearchDraft(value);
   const keywords = parseKeywordLines(draft.keywords);
+  await deps.ensureResearchChromeForDiscovery?.({ env: options.env });
   const workspace = await mkdtemp(join(tmpdir(), 'runner-ui-create-'));
   try {
     await writeFile(join(workspace, 'seeds.csv'), seedCsv(keywords), 'utf8');

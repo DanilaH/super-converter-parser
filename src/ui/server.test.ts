@@ -6,6 +6,7 @@ import type { ResearchConsoleDetail } from '../application/researchConsole.js';
 import type { ResearchRunExecution } from '../application/researchWorkflow.js';
 import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { outputLayout } from '../outputs/researchLayout.js';
+import type { ResearchChromeStatus } from './researchChrome.js';
 import type { UiResearchPlanPreviewV1 } from './researchExecution.js';
 import { DEFAULT_UI_SERVER_DEPS, startUiServer, type UiServerDeps } from './server.js';
 
@@ -34,12 +35,31 @@ const item: ResearchCatalogItem = {
   operatorConfigAvailable: true,
 };
 
-const detail = {
+function detailForAction(nextAction: string = 'run_enrichment'): ResearchConsoleDetail {
+  return {
+    version: 1,
+    status: {
+      researchId: 'research-1',
+      nextAction: { code: nextAction },
+    },
+    container: null,
+    operatorConfig: null,
+  } as unknown as ResearchConsoleDetail;
+}
+
+const detail = detailForAction();
+
+const connectedChrome: ResearchChromeStatus = {
   version: 1,
-  status: { researchId: 'research-1' },
-  container: null,
-  operatorConfig: null,
-} as unknown as ResearchConsoleDetail;
+  endpoint: 'http://127.0.0.1:9333',
+  connected: true,
+  browser: 'Chrome/140',
+  profileRoot: 'C:\\tmp\\research-profile',
+  profileReady: true,
+  controlSupported: true,
+  controlReason: null,
+  configurationError: null,
+};
 
 const execution: ResearchRunExecution = {
   exitCode: 0,
@@ -105,6 +125,7 @@ function deps(overrides: Partial<UiServerDeps> = {}): UiServerDeps {
     previewUiResearchDraft: async () => plan,
     executeUiResearchDraft: async () => execution,
     executeUiResearchResume: async () => execution,
+    ensureResearchChromeForDiscovery: async () => connectedChrome,
     loadStaticAssets: async () => new Map([
       ['/index.html', { contentType: 'text/html; charset=utf-8', body: Buffer.from('shell', 'utf8') }],
       ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: Buffer.from('app', 'utf8') }],
@@ -240,16 +261,28 @@ test('a second UI execution is rejected while the first job is still running', a
   }
 });
 
-test('resume preflights the stable research id and starts the same application workflow', async () => {
+test('resume discovery preflights Research Chrome inside the admitted job before application workflow', async () => {
   let inspectedId = '';
   let resumedId = '';
+  const sequence: string[] = [];
   const started = await startUiServer({
     port: 0,
     openBrowser: false,
-    env: {},
+    env: { CDP_URL: 'http://127.0.0.1:9333' },
     deps: deps({
-      inspectResearchConsole: async (researchId) => { inspectedId = researchId; return detail; },
-      executeUiResearchResume: async (researchId) => { resumedId = researchId; return execution; },
+      inspectResearchConsole: async (researchId) => {
+        inspectedId = researchId;
+        return detailForAction('resume_discovery');
+      },
+      ensureResearchChromeForDiscovery: async (options) => {
+        sequence.push(`chrome:${options?.env?.CDP_URL ?? ''}`);
+        return connectedChrome;
+      },
+      executeUiResearchResume: async (researchId) => {
+        resumedId = researchId;
+        sequence.push('resume');
+        return execution;
+      },
     }),
   });
   try {
@@ -259,6 +292,32 @@ test('resume preflights the stable research id and starts the same application w
     await waitForFinishedJob(started.url, accepted.job.jobId);
     assert.equal(inspectedId, 'research-1');
     assert.equal(resumedId, 'research-1');
+    assert.deepEqual(sequence, ['chrome:http://127.0.0.1:9333', 'resume']);
+  } finally {
+    await started.close();
+  }
+});
+
+test('non-discovery continuation does not start Research Chrome', async () => {
+  let chromeCalls = 0;
+  let resumeCalls = 0;
+  const started = await startUiServer({
+    port: 0,
+    openBrowser: false,
+    env: {},
+    deps: deps({
+      inspectResearchConsole: async () => detailForAction('run_enrichment'),
+      ensureResearchChromeForDiscovery: async () => { chromeCalls += 1; return connectedChrome; },
+      executeUiResearchResume: async () => { resumeCalls += 1; return execution; },
+    }),
+  });
+  try {
+    const response = await post(started.url, '/api/researches/research-1/resume', {});
+    assert.equal(response.status, 202);
+    const accepted = await response.json() as { job: { jobId: string } };
+    await waitForFinishedJob(started.url, accepted.job.jobId);
+    assert.equal(chromeCalls, 0);
+    assert.equal(resumeCalls, 1);
   } finally {
     await started.close();
   }

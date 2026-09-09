@@ -21,33 +21,39 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist/finalist-scope/human-decision gates, mutable display-label management, managed seed-batch append, terminal Library continuation through the existing workflow, durable-state inspection, and bounded Research Chrome machine setup/start from the System page.
+The console is a persistent split workspace rather than a set of primary full-screen screens. The left rail keeps Research Chrome machine status, New Research, research search/list, current UI-job state, and System access visible; the right work area renders creation, the selected research, human gates, or System diagnostics. Existing hash routes remain deep-link/state mechanics for the right work area rather than the primary navigation model.
+
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist/finalist-scope/human-decision gates, mutable display-label management, managed seed-batch append, terminal Library continuation through the existing workflow, durable-state inspection, and bounded Research Chrome setup/start without requiring a terminal-driven Chrome launch during normal discovery work.
 
 ### Researches
 
-- browse researches discovered from the canonical run index;
+- browse researches discovered from the canonical run index in the persistent left rail;
 - search by persisted display label, stable `researchId`, current run id, or another indexed run id;
-- open one research and inspect canonical durable status;
+- open one research into the right work area and inspect canonical durable status;
 - show/copy stable research, current discovery, and current enrichment IDs;
 - inspect pipeline state, discovery keyword counts, quality warnings, batch history, immutable OperatorConfig provenance, and the Runner's canonical next operator action.
 
 ### New Research
 
-The `New research` screen:
+The `New research` work area:
 
 - uses the existing built-in OperatorConfig presets rather than inventing UI-only semantics;
 - accepts pasted seed keywords, one per line;
+- accepts local `.txt`, `.csv`, and `.json` seed files by file picker or drag-and-drop while preserving the same editable textarea;
+- interprets TXT as one keyword per non-empty line, CSV through a required `keyword` column, and JSON only as a string array or `{ "keywords": [...] }`;
 - accepts optional market / Google `hl` / `gl` overrides;
 - requires a plan preview before execution;
 - shows supplied line count versus discovery-normalized unique keyword count;
 - shows the resolved workflow target, stages, preset revision, discovery semantics, enrichment modules, external providers, and expected human stop points;
 - starts the exact existing application workflow through the U2 execution boundary.
 
+File import is presentation convenience only: imported values are placed into the normal seed editor, any current preview is invalidated, and the existing preview/execution path still owns canonical normalization and validation.
+
 Changing any draft input invalidates the previous preview. The server resolves/validates the plan again at mutation time and the execution adapter resolves it again before durable work, so the browser preview is guidance rather than an authority that can bypass current contracts.
 
 ### Running jobs
 
-Create, resume, shortlist-continuation, finalist-scope continuation, human-decision continuation, discovery-repair, and batch-append work runs in-process under existing Runner locks. The browser polls a bounded RAM-only job registry for convenience while continuing to read canonical research detail from existing SQLite/research files/indexes.
+Create, resume, shortlist-continuation, finalist-scope continuation, human-decision continuation, discovery-repair, and batch-append work runs in-process under existing Runner locks. The persistent left rail polls a bounded RAM-only job registry for convenience while the selected work area continues to read canonical research detail from existing SQLite/research files/indexes.
 
 A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. Long-running discovery, including discovery created by a new appended batch, is observed through canonical research status in parallel with ephemeral job state.
 
@@ -55,20 +61,24 @@ The job registry is not durable truth. Restarting the UI may forget the convenie
 
 ### System / Research Chrome
 
-The System page keeps the canonical output-root diagnostics and also exposes the dedicated browser machine prerequisite used by browser-backed discovery evidence.
+The persistent workspace rail exposes the dedicated browser machine prerequisite used by browser-backed discovery evidence. The System work area continues to expose canonical output-root diagnostics.
 
 Research Chrome status is read from the configured `CDP_URL` by querying its `/json/version` endpoint. A connection is considered healthy only when the response contains the normal non-empty CDP `Browser` field; an arbitrary HTTP 200 JSON response is not treated as Chrome.
 
-On Windows, when `CDP_URL` is loopback HTTP with an explicit local port, the page can expose two fixed machine actions:
+On Windows, when `CDP_URL` is loopback HTTP with an explicit local port, the workspace exposes bounded fixed controls:
 
-- `Setup Research Chrome` when the dedicated profile is missing or a previous UI-driven setup was left incomplete;
-- `Start Research Chrome` when the dedicated profile is ready but CDP is not currently responding.
+- `Setup once` when the dedicated profile is missing or a previous UI-driven setup was left incomplete;
+- optional `Start now` when the dedicated profile is ready but CDP is not currently responding.
 
-These are bounded convenience actions over the existing `scripts/research-chrome.ps1` helper, not a generic command runner. Mutation bodies must be empty JSON objects, inherit the same same-origin localhost mutation policy as the rest of the UI, and cannot supply executable paths, shell commands, arbitrary arguments, profile roots, or ports. Remote/non-loopback CDP endpoints may be inspected read-only but are never accepted as process-launch targets.
+Normal new-research discovery does not require `Start now`. Immediately before discovery execution, the UI execution adapter checks the configured Research Chrome status. If the prepared managed local profile is available but CDP is disconnected, it starts Research Chrome through the same fixed launcher and then proceeds. Batch append performs the same preflight only after its current read-only batch classification confirms that the append will actually create/promote discovery work; duplicate-only batches do not open Chrome unnecessarily. The same preflight runs inside the already-admitted UI job before canonical `resume_discovery` continuation and before explicit `repair_discovery`. Enrichment continuation, finalization continuation, and Library publication do not start Research Chrome.
+
+If the managed local profile has never been prepared, discovery fails clearly and directs the operator to `Setup once` rather than falling through to an opaque Google/CDP timeout. Invalid Research Chrome configuration fails at the preflight boundary. Valid remote/non-loopback CDP endpoints and non-Windows environments remain externally managed: the UI may inspect them, but the built-in discovery preflight does not claim process ownership when `controlSupported` is false.
+
+These controls and the just-in-time preflight are bounded convenience operations over the existing `scripts/research-chrome.ps1` helper, not a generic command runner. Browser mutation bodies remain fixed/empty for explicit setup/start actions, inherit the same same-origin localhost mutation policy as the rest of the UI, and cannot supply executable paths, shell commands, arbitrary arguments, profile roots, or ports. Remote/non-loopback CDP endpoints may be inspected read-only but are never accepted as process-launch targets.
 
 Setup preserves already-existing Research Chrome profiles. New setup attempts use a temporary incomplete marker so a failed/partial profile copy is not subsequently reported as ready. `robocopy` retries are bounded (`/R:2 /W:1`) so locked regular-Chrome profile files fail visibly instead of retrying indefinitely. Start is idempotent when the configured CDP endpoint is already healthy.
 
-On non-Windows hosts the status projection remains available, but built-in setup/start controls are disabled. `npm run ui` still does not automatically launch Research Chrome, and there is intentionally no Stop/Kill or general machine-control surface.
+On non-Windows hosts the status projection remains available, but built-in setup/start controls are disabled. `npm run ui` intentionally does not launch Research Chrome merely because the console was opened; launch is either an explicit `Start now` convenience or a just-in-time prerequisite of actual managed local discovery. There is intentionally no Stop/Kill or general machine-control surface.
 
 ### Continue existing research
 
@@ -79,13 +89,13 @@ Research Detail exposes a browser continuation button only when all of the follo
 - the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
 - no other UI execution job is active.
 
-The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection.
+The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection. When that projection says `resume_discovery`, the admitted resume job performs Research Chrome preflight immediately before the existing continuation workflow. Other continuation codes do not perform that machine preflight.
 
 ### Explicit discovery repair
 
 `repair_discovery` remains separate from ordinary Continue because `retryFailed` is a distinct mutation with its own eligibility semantics.
 
-Research Detail exposes the specialist repair action only when canonical status says `nextAction.code === repair_discovery` and the current discovery has one or more `repairable` checkpoints. The browser does not equate generic `failed` or `partial` counts with repair eligibility.
+Research Detail exposes the specialist repair action only when canonical status says `nextAction.code === repair_discovery` and the current discovery has one or more `repairable` checkpoints. The browser does not equate generic `failed` or `partial` counts with repair eligibility. After the repair request is admitted as the active UI job, Research Chrome preflight runs before the existing application repair action so a disconnected prepared local browser does not turn repair into a manual terminal step.
 
 Before mutation, the application repair action:
 
@@ -202,19 +212,20 @@ The browser disables rename while it already knows another UI execution job is a
 
 ### Add batch
 
-Managed Research Detail exposes an `Add batch` editor for extending a long-lived research with additional explicit seed keywords.
+Managed Research Detail exposes an `Add batch` editor for extending a long-lived research with additional explicit seed keywords. The same TXT/CSV/JSON file picker and drag-and-drop convenience used by New Research is available here; imported keywords are appended into the normal batch textarea and invalidate any prior preview.
 
 The batch flow deliberately reuses the existing append/fork contract:
 
-1. pasted keywords are normalized through the normal seed semantics;
+1. pasted or imported keywords are normalized through the normal seed semantics;
 2. a read-only preview reports supplied lines, normalized unique keywords, new keywords, already-known keywords, and expansion children that would be promoted to explicit roots;
-3. changing the pasted input invalidates the preview;
+3. changing the pasted/imported input invalidates the preview;
 4. commit revalidates the draft and repeats authoritative append classification under the canonical `execution → batch` research lock;
-5. the existing `prepareResearchAppend` implementation creates batch metadata and, when necessary, forks a new immutable discovery generation while carrying forward eligible evidence;
-6. when a fork is created, only the resulting discovery generation is collected while the composite lock remains held;
-7. enrichment/finalization are **not** entered implicitly; after discovery, canonical `nextAction` again determines the next operator action.
+5. the UI execution adapter performs Research Chrome preflight only when the current batch classification indicates discovery work is required;
+6. the existing `prepareResearchAppend` implementation creates batch metadata and, when necessary, forks a new immutable discovery generation while carrying forward eligible evidence;
+7. when a fork is created, only the resulting discovery generation is collected while the composite lock remains held;
+8. enrichment/finalization are **not** entered implicitly; after discovery, canonical `nextAction` again determines the next operator action.
 
-A duplicate-only batch is still persisted as batch history but does not create a pointless discovery generation. An append that introduces new roots or promotes expansion-only keywords produces a new current discovery generation. Preview is advisory only and never serves as authorization for commit.
+A duplicate-only batch is still persisted as batch history but does not create a pointless discovery generation and does not start Research Chrome. An append that introduces new roots or promotes expansion-only keywords produces a new current discovery generation. Preview is advisory only and never serves as authorization for commit; authoritative append classification is still repeated under the existing lock.
 
 The UI does not silently adopt historical/indexed runs lacking a managed `research.json` container. Such researches fail closed for batch append rather than acquiring invented long-lived lineage.
 
@@ -224,7 +235,7 @@ Mutation requests are stricter than reads: they require `POST`, `Content-Type: a
 
 Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair, shortlist continuation, finalist-scope continuation, and human-decision continuation share the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
 
-Research Chrome setup/start is outside the research job registry because it does not mutate research truth. It remains a narrow fixed machine action with the same same-origin mutation boundary and no browser-controlled process arguments.
+Research Chrome explicit setup/start is outside the research job registry because it does not mutate research truth. Just-in-time discovery preflight runs only inside already-admitted UI execution jobs that are about to perform managed browser-backed discovery: new research, changed batch append, canonical `resume_discovery`, and explicit `repair_discovery`. It delegates only to the same fixed Research Chrome status/start functions; enrichment/finalization/Library continuation does not invoke it, and it does not expose browser-controlled executable or process arguments.
 
 New-research and batch seed text, shortlist continuation CSV input, and human-decision continuation JSON input are materialized only into temporary local workspaces long enough for the normal loader/workflow to consume them; those workspaces are removed after execution. Finalist scope is pathless canonical continuation data and needs no temporary file. OperatorConfig provenance and immutable research evidence keep their existing semantics.
 
@@ -232,7 +243,7 @@ New-research and batch seed text, shortlist continuation CSV input, and human-de
 
 The console does not have a UI database. Existing Runner SQLite/research files and indexes remain truth.
 
-The research list is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. The discovery-repair specialist reuses the already-rendered deep-status projection instead of issuing a second full Research Detail request. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding planner-derived human gate.
+The persistent research rail is deliberately lightweight: it reads canonical run indexes and `research.json` rather than executing full deep status inspection for every row. Full status is built only for an opened or actively observed research. The discovery-repair specialist reuses the already-rendered deep-status projection instead of issuing a second full Research Detail request. Shortlist candidate evidence, finalist cluster evidence, and finalist decision evidence are loaded only when the current Research Detail is actually at the corresponding planner-derived human gate.
 
 The small `data-*` projection on `#app` exists only to coordinate independently loaded browser modules without coupling them to display strings or duplicating deep status reads. It is disposable and has no authority over server mutation checks.
 
@@ -245,10 +256,10 @@ Research Chrome status is machine/environment state only. It is not persisted in
 - automatic shortlist/finalist/business decisions;
 - automatic downstream enrichment/finalization after batch append;
 - configuration evolution within an existing V1 research container;
-- automatic Research Chrome launch with `npm run ui`, Stop/Kill controls, or a generic process runner;
+- eager Research Chrome launch merely from `npm run ui`, Stop/Kill controls, or a generic process runner;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database;
 - post-MVP evidence/Library/GSC polish until actual operator usage justifies it.
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP browser hardening slice removes confirmed UI fragility without opening U5/U6 scope; PR #177 adds only the observed Research Chrome startup/setup convenience and does not activate broader U5/U6 configuration work.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP browser hardening and operator-ergonomics slices remove confirmed UI friction without opening U5/U6 scope; the single-workspace/JIT-Chrome/file-import work is the direct response to observed first-use friction rather than a broader configuration expansion.

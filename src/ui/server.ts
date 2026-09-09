@@ -38,6 +38,7 @@ import {
   setupResearchChrome,
   startResearchChrome,
 } from './researchChrome.js';
+import { ensureResearchChromeForDiscovery } from './researchChromeDiscovery.js';
 
 const DEFAULT_PORT = 4173;
 const HOST = '127.0.0.1';
@@ -80,6 +81,7 @@ export type UiServerDeps = {
   inspectResearchChrome: typeof inspectResearchChrome;
   setupResearchChrome: typeof setupResearchChrome;
   startResearchChrome: typeof startResearchChrome;
+  ensureResearchChromeForDiscovery: typeof ensureResearchChromeForDiscovery;
   loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
   openBrowser: (url: string) => void;
 };
@@ -104,6 +106,7 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   inspectResearchChrome,
   setupResearchChrome,
   startResearchChrome,
+  ensureResearchChromeForDiscovery,
   loadStaticAssets,
   openBrowser: openBrowserBestEffort,
 };
@@ -422,11 +425,13 @@ async function handlePost(
         `Research ${detail.status.researchId} is not currently eligible for explicit discovery repair.`,
       );
     }
-    const job = context.jobs.startRepair(detail.status.researchId, () =>
-      context.deps.repairResearchDiscovery(detail.status.researchId, {
+    const job = context.jobs.startRepair(detail.status.researchId, async () => {
+      await context.deps.ensureResearchChromeForDiscovery({ env: context.env });
+      return context.deps.repairResearchDiscovery(detail.status.researchId, {
         outputRoot: context.outputRoot,
         env: context.env,
-      }));
+      });
+    });
     sendJson(response, 202, { version: 1, job });
     return;
   }
@@ -435,15 +440,20 @@ async function handlePost(
   if (resumeMatch) {
     assertEmptyObject(body, 'Resume request body');
     const researchId = decodeRouteId(resumeMatch[1] ?? '', 'research');
-    await context.deps.inspectResearchConsole(researchId, {
+    const detail = await context.deps.inspectResearchConsole(researchId, {
       outputRoot: context.outputRoot,
       env: context.env,
     });
-    const job = context.jobs.start('resume_research', researchId, () =>
-      context.deps.executeUiResearchResume(researchId, {
+    const needsDiscoveryChrome = detail.status.nextAction.code === 'resume_discovery';
+    const job = context.jobs.start('resume_research', researchId, async () => {
+      if (needsDiscoveryChrome) {
+        await context.deps.ensureResearchChromeForDiscovery({ env: context.env });
+      }
+      return context.deps.executeUiResearchResume(researchId, {
         outputRoot: context.outputRoot,
         env: context.env,
-      }));
+      });
+    });
     sendJson(response, 202, { version: 1, job });
     return;
   }
@@ -456,7 +466,9 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/workspace.js', 'workspace.js', 'text/javascript; charset=utf-8'],
     ['/research-chrome.js', 'research-chrome.js', 'text/javascript; charset=utf-8'],
+    ['/seed-import.js', 'seed-import.js', 'text/javascript; charset=utf-8'],
     ['/batches.js', 'batches.js', 'text/javascript; charset=utf-8'],
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
@@ -464,6 +476,7 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
     ['/finalists.js', 'finalists.js', 'text/javascript; charset=utf-8'],
     ['/decisions.js', 'decisions.js', 'text/javascript; charset=utf-8'],
     ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/workspace.css', 'workspace.css', 'text/css; charset=utf-8'],
     ['/batches.css', 'batches.css', 'text/css; charset=utf-8'],
     ['/metadata.css', 'metadata.css', 'text/css; charset=utf-8'],
     ['/repair.css', 'repair.css', 'text/css; charset=utf-8'],
