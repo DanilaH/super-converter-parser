@@ -203,10 +203,9 @@ async function inspectCdp(statusUrl: string, fetchImpl: typeof fetch): Promise<{
     });
     if (!response.ok) return { connected: false, browser: null };
     const payload = await response.json() as { Browser?: unknown };
-    return {
-      connected: true,
-      browser: typeof payload.Browser === 'string' && payload.Browser.trim() !== '' ? payload.Browser : null,
-    };
+    const browser = typeof payload.Browser === 'string' ? payload.Browser.trim() : '';
+    if (browser === '') return { connected: false, browser: null };
+    return { connected: true, browser };
   } catch {
     return { connected: false, browser: null };
   }
