@@ -28,9 +28,13 @@ export async function ensureResearchChromeForDiscovery(
   const before = await deps.inspectResearchChrome(chromeOptions);
   if (before.connected) return before;
 
-  // A remote/custom CDP endpoint or a non-Windows host can still be managed outside
-  // this personal UI. Do not convert that supported read-only configuration into a
-  // new UI failure mode merely because the built-in launcher cannot own it.
+  if (before.configurationError !== null) {
+    throw new Error(`Research Chrome configuration is invalid: ${before.configurationError}`);
+  }
+
+  // A valid remote/custom CDP endpoint or a non-Windows host can still be managed
+  // outside this personal UI. Do not convert that supported read-only configuration
+  // into a new UI failure mode merely because the built-in launcher cannot own it.
   if (!before.controlSupported) return before;
 
   if (before.profileReady !== true) {
