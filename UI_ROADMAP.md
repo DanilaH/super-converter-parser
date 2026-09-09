@@ -306,7 +306,7 @@ Explicitly not included:
 
 ## Post-MVP operator ergonomics — single workspace and zero-terminal discovery
 
-**Status:** implemented in PR #179; exact-head validation required before merge.
+**Status:** complete; merged in PR #179. Exact-head CI #977 passed on Ubuntu and Windows.
 
 This slice is driven by observed first-use friction, not speculative U5/U6 expansion. The operator reported that Chrome startup was unclear/manual, seed entry was unnecessarily text-only, and primary work was spread across too many screens.
 
