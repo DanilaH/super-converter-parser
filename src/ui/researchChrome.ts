@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9333';
 const DEFAULT_PROFILE_ROOT = 'C:\\tmp\\research-profile';
-const SETUP_MARKER = '.runner-profile-ready';
+const INCOMPLETE_MARKER = '.runner-profile-incomplete';
 const CDP_STATUS_TIMEOUT_MS = 750;
 const MAX_PROCESS_OUTPUT_BYTES = 32 * 1024;
 
@@ -42,7 +42,7 @@ export async function inspectResearchChrome(options: ResearchChromeOptions = {})
   const profileRoot = DEFAULT_PROFILE_ROOT;
   const parsed = parseCdpConfiguration(env.CDP_URL);
   const profileReady = runtime.platform === 'win32'
-    ? await pathExists(join(profileRoot, SETUP_MARKER), runtime.accessPath)
+    ? await inspectProfileReady(profileRoot, runtime.accessPath)
     : null;
 
   if (parsed.error !== null) {
@@ -89,7 +89,7 @@ export async function setupResearchChrome(options: ResearchChromeOptions = {}): 
 
   if (before.profileReady === true) return before;
   if (before.connected) {
-    throw new Error('Research Chrome is already connected, but its managed profile is not present. Stop that Chrome instance before running Setup.');
+    throw new Error('Research Chrome is already connected, but its managed profile is not ready. Stop that Chrome instance before running Setup.');
   }
 
   await runtime.runScript({
@@ -99,7 +99,7 @@ export async function setupResearchChrome(options: ResearchChromeOptions = {}): 
   });
   const after = await inspectResearchChrome({ env, runtime });
   if (after.profileReady !== true) {
-    throw new Error(`Research Chrome setup finished, but the completion marker was not found at ${after.profileRoot}.`);
+    throw new Error(`Research Chrome setup finished, but the managed profile is still incomplete at ${after.profileRoot}.`);
   }
   return after;
 }
@@ -185,6 +185,13 @@ function requireControllableConfiguration(rawValue: string | undefined, platform
     throw new Error('Built-in Research Chrome control requires CDP_URL to use loopback HTTP with an explicit local port.');
   }
   return { port: parsed.localControlPort };
+}
+
+async function inspectProfileReady(profileRoot: string, accessPath: ResearchChromeRuntime['accessPath']): Promise<boolean> {
+  const profileExists = await pathExists(join(profileRoot, 'Default'), accessPath);
+  if (!profileExists) return false;
+  const incomplete = await pathExists(join(profileRoot, INCOMPLETE_MARKER), accessPath);
+  return !incomplete;
 }
 
 async function pathExists(path: string, accessPath: ResearchChromeRuntime['accessPath']): Promise<boolean> {
