@@ -78,7 +78,6 @@ export async function executeUiResearchBatch(
 ): Promise<ResearchBatchExecutionResultV1> {
   const draft = validateUiBatchDraft(value);
   const lines = parseKeywordLines(draft.keywords);
-  await deps.ensureResearchChromeForDiscovery?.({ env: options.env });
   const workspace = await mkdtemp(join(tmpdir(), 'runner-ui-batch-'));
   try {
     const seedsPath = join(workspace, 'seeds.csv');
@@ -87,6 +86,10 @@ export async function executeUiResearchBatch(
     const seeds = buildSeedKeywords(rows);
     if (seeds.length === 0) {
       throw new ResearchError('INPUT_SCHEMA_ERROR', 'Batch input contains no research keywords after normalization.');
+    }
+    const preview = await deps.previewResearchBatch(researchId, seeds, options);
+    if (preview.changed) {
+      await deps.ensureResearchChromeForDiscovery?.({ env: options.env });
     }
     return deps.appendResearchBatch(researchId, seedsPath, seeds, options);
   } finally {
