@@ -57,7 +57,26 @@ test('discovery preflight fails clearly when one-time profile setup is still req
   assert.equal(starts, 0);
 });
 
-test('discovery preflight does not take ownership of remote or unsupported CDP configurations', async () => {
+test('discovery preflight fails clearly on invalid CDP configuration instead of treating it as externally managed', async () => {
+  let starts = 0;
+  await assert.rejects(
+    ensureResearchChromeForDiscovery({}, {
+      inspectResearchChrome: async () => ({
+        ...ready,
+        endpoint: 'not a url',
+        profileReady: false,
+        controlSupported: false,
+        controlReason: 'CDP_URL is not a valid URL: not a url',
+        configurationError: 'CDP_URL is not a valid URL: not a url',
+      }),
+      startResearchChrome: async () => { starts += 1; return connected; },
+    }),
+    /Research Chrome configuration is invalid: CDP_URL is not a valid URL/,
+  );
+  assert.equal(starts, 0);
+});
+
+test('discovery preflight does not take ownership of valid remote or unsupported CDP configurations', async () => {
   let starts = 0;
   const external = {
     ...ready,
