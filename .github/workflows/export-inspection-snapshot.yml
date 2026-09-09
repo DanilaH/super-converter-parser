@@ -10,9 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
       - uses: actions/upload-artifact@v6
         with:
-          name: inspection-snapshot
+          name: inspection-runtime
           path: .
           include-hidden-files: true
           retention-days: 1
