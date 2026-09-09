@@ -37,7 +37,7 @@ test('discovery preflight starts the managed local Chrome just in time', async (
     inspectResearchChrome: async () => ready,
     startResearchChrome: async (options) => {
       starts += 1;
-      assert.equal(options.env?.CDP_URL, 'http://127.0.0.1:9333');
+      assert.equal(options?.env?.CDP_URL, 'http://127.0.0.1:9333');
       return connected;
     },
   });
