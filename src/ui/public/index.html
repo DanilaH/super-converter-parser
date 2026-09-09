@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runner Console</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/workspace.css">
   <link rel="stylesheet" href="/metadata.css">
   <link rel="stylesheet" href="/batches.css">
   <link rel="stylesheet" href="/repair.css">
@@ -14,26 +15,41 @@
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar workspace-rail">
       <div class="brand">
         <div class="brand-mark">R</div>
         <div>
           <strong>Runner</strong>
-          <span>Local console</span>
+          <span>Research workspace</span>
         </div>
       </div>
-      <nav class="nav" aria-label="Main navigation">
-        <a href="#/researches" data-nav="researches">Researches</a>
-        <a href="#/new" data-nav="new">New research</a>
-        <a href="#/system" data-nav="system">System</a>
-      </nav>
-      <div class="sidebar-footer">
-        <span class="status-dot"></span>
-        localhost only
+
+      <div id="research-chrome-root" class="workspace-chrome" aria-live="polite"></div>
+
+      <a id="workspace-new" class="button primary link-button workspace-primary" href="#/new">+ New research</a>
+
+      <div class="workspace-search-wrap">
+        <input id="workspace-search" class="search workspace-search" type="search" placeholder="Search researches…" aria-label="Search researches">
+      </div>
+      <div class="workspace-list-label">
+        <span>Researches</span>
+        <span>open on right</span>
+      </div>
+      <div id="workspace-researches" class="workspace-researches" aria-live="polite"></div>
+
+      <div class="workspace-footer">
+        <div class="workspace-footer-row">
+          <div id="workspace-job-status" class="workspace-job-line" aria-live="polite"></div>
+          <button id="workspace-system" class="button compact" type="button">System</button>
+        </div>
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          localhost only
+        </div>
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main workspace-main">
       <div id="metadata-action-root" class="metadata-action-shell hidden" aria-live="polite"></div>
       <div id="batch-action-root" class="batch-action-shell hidden" aria-live="polite"></div>
       <div id="repair-action-root" class="repair-action-shell repair-action hidden" aria-live="polite"></div>
@@ -43,8 +59,10 @@
       <div id="app" class="page" aria-live="polite"></div>
     </main>
   </div>
+  <script type="module" src="/workspace.js"></script>
   <script type="module" src="/app.js"></script>
   <script type="module" src="/research-chrome.js"></script>
+  <script type="module" src="/seed-import.js"></script>
   <script type="module" src="/metadata.js"></script>
   <script type="module" src="/batches.js"></script>
   <script type="module" src="/repair.js"></script>
