@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9333';
 const DEFAULT_PROFILE_ROOT = 'C:\\tmp\\research-profile';
+const SETUP_MARKER = '.runner-profile-ready';
 const CDP_STATUS_TIMEOUT_MS = 750;
 const MAX_PROCESS_OUTPUT_BYTES = 32 * 1024;
 
@@ -41,7 +42,7 @@ export async function inspectResearchChrome(options: ResearchChromeOptions = {})
   const profileRoot = DEFAULT_PROFILE_ROOT;
   const parsed = parseCdpConfiguration(env.CDP_URL);
   const profileReady = runtime.platform === 'win32'
-    ? await pathExists(join(profileRoot, 'Default'), runtime.accessPath)
+    ? await pathExists(join(profileRoot, SETUP_MARKER), runtime.accessPath)
     : null;
 
   if (parsed.error !== null) {
@@ -98,7 +99,7 @@ export async function setupResearchChrome(options: ResearchChromeOptions = {}): 
   });
   const after = await inspectResearchChrome({ env, runtime });
   if (after.profileReady !== true) {
-    throw new Error(`Research Chrome setup finished, but the managed profile was not found at ${after.profileRoot}.`);
+    throw new Error(`Research Chrome setup finished, but the completion marker was not found at ${after.profileRoot}.`);
   }
   return after;
 }
@@ -111,7 +112,7 @@ export async function startResearchChrome(options: ResearchChromeOptions = {}): 
 
   if (before.connected) return before;
   if (before.profileReady !== true) {
-    throw new Error('Research Chrome profile is missing. Run Setup Research Chrome once before starting it.');
+    throw new Error('Research Chrome profile is missing or incomplete. Run Setup Research Chrome once before starting it.');
   }
 
   await runtime.runScript({
