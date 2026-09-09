@@ -35,9 +35,9 @@ test('browser shell is one persistent split workspace instead of primary full-sc
   assert.match(css, /\.main\.workspace-main/);
   assert.match(css, /\.main\.workspace-main \.back-link\s*\{\s*display:\s*none;/);
 
-  for (const route of ['/workspace.js', '/seed-import.js', '/workspace.css']) {
-    assert.match(serverSource, new RegExp(`\\['${route.replace('.', '\\.')}')`));
-  }
+  assert.ok(serverSource.includes("['/workspace.js', 'workspace.js', 'text/javascript; charset=utf-8']"));
+  assert.ok(serverSource.includes("['/seed-import.js', 'seed-import.js', 'text/javascript; charset=utf-8']"));
+  assert.ok(serverSource.includes("['/workspace.css', 'workspace.css', 'text/css; charset=utf-8']"));
 });
 
 test('seed importer accepts TXT, canonical keyword CSV, and strict JSON shapes', async () => {
