@@ -30,6 +30,20 @@ test('status reports configured CDP independently from Windows-only process cont
   assert.match(status.controlReason ?? '', /Windows only/);
 });
 
+test('status requires a real CDP Browser field rather than any 200 JSON response', async () => {
+  const status = await inspectResearchChrome({
+    env: { CDP_URL: 'http://127.0.0.1:9333' },
+    runtime: {
+      platform: 'win32',
+      accessPath: async () => undefined,
+      fetchImpl: (async () => jsonResponse({ ok: true })) as typeof fetch,
+    },
+  });
+
+  assert.equal(status.connected, false);
+  assert.equal(status.browser, null);
+});
+
 test('malformed CDP configuration fails read-only inspection closed without throwing', async () => {
   let fetchCalls = 0;
   const status = await inspectResearchChrome({
@@ -45,6 +59,33 @@ test('malformed CDP configuration fails read-only inspection closed without thro
   assert.equal(status.controlSupported, false);
   assert.match(status.configurationError ?? '', /not a valid URL/);
   assert.equal(fetchCalls, 0);
+});
+
+test('remote CDP can be observed but is never accepted as a launch target', async () => {
+  const status = await inspectResearchChrome({
+    env: { CDP_URL: 'http://192.0.2.10:9333' },
+    runtime: {
+      platform: 'win32',
+      accessPath: async () => undefined,
+      fetchImpl: (async () => jsonResponse({ Browser: 'Chrome/140' })) as typeof fetch,
+    },
+  });
+  assert.equal(status.connected, true);
+  assert.equal(status.controlSupported, false);
+  assert.match(status.controlReason ?? '', /loopback HTTP/);
+
+  await assert.rejects(
+    startResearchChrome({
+      env: { CDP_URL: 'http://192.0.2.10:9333' },
+      runtime: {
+        platform: 'win32',
+        accessPath: async () => undefined,
+        fetchImpl: (async () => jsonResponse({ Browser: 'Chrome/140' })) as typeof fetch,
+        runScript: async () => { throw new Error('must not run'); },
+      },
+    }),
+    /loopback HTTP/,
+  );
 });
 
 test('start is idempotent when configured Research Chrome is already connected', async () => {
