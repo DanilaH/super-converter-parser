@@ -5,6 +5,7 @@ import type { ResearchConsoleDetail } from '../application/researchConsole.js';
 import type { ResearchDiscoveryRepairResultV1 } from '../application/researchRepair.js';
 import type { OutputDiagnostics } from '../outputs/outputDiagnostics.js';
 import { outputLayout } from '../outputs/researchLayout.js';
+import type { ResearchChromeStatus } from './researchChrome.js';
 import { DEFAULT_UI_SERVER_DEPS, startUiServer, type UiServerDeps } from './server.js';
 
 const root = resolve('/tmp/runner-ui-repair-output');
@@ -35,6 +36,18 @@ function detail(nextAction = 'repair_discovery', repairable = 2): ResearchConsol
   } as unknown as ResearchConsoleDetail;
 }
 
+const connectedChrome: ResearchChromeStatus = {
+  version: 1,
+  endpoint: 'http://127.0.0.1:9333',
+  connected: true,
+  browser: 'Chrome/140',
+  profileRoot: 'C:\\tmp\\research-profile',
+  profileReady: true,
+  controlSupported: true,
+  controlReason: null,
+  configurationError: null,
+};
+
 const repairResult: ResearchDiscoveryRepairResultV1 = {
   version: 1,
   researchId: 'research-1',
@@ -51,6 +64,7 @@ function deps(overrides: Partial<UiServerDeps> = {}): UiServerDeps {
     buildOutputDiagnostics: async () => diagnostics,
     inspectResearchConsole: async () => detail(),
     repairResearchDiscovery: async () => repairResult,
+    ensureResearchChromeForDiscovery: async () => connectedChrome,
     loadStaticAssets: async () => new Map([
       ['/index.html', { contentType: 'text/html; charset=utf-8', body: Buffer.from('shell') }],
     ]),
@@ -70,18 +84,24 @@ function post(url: string, body: unknown): Promise<Response> {
   });
 }
 
-test('repair endpoint starts a distinct repair job after canonical preflight', async () => {
-  let calls = 0;
+test('repair endpoint preflights Research Chrome inside the admitted repair job before canonical repair', async () => {
+  const sequence: string[] = [];
   const started = await startUiServer({
     port: 0,
     openBrowser: false,
-    env: {},
-    deps: deps({ repairResearchDiscovery: async (researchId, options) => {
-      calls += 1;
-      assert.equal(researchId, 'research-1');
-      assert.equal(options?.outputRoot, root);
-      return repairResult;
-    } }),
+    env: { CDP_URL: 'http://127.0.0.1:9333' },
+    deps: deps({
+      ensureResearchChromeForDiscovery: async (options) => {
+        sequence.push(`chrome:${options.env?.CDP_URL ?? ''}`);
+        return connectedChrome;
+      },
+      repairResearchDiscovery: async (researchId, options) => {
+        sequence.push('repair');
+        assert.equal(researchId, 'research-1');
+        assert.equal(options?.outputRoot, root);
+        return repairResult;
+      },
+    }),
   });
   try {
     const response = await post(started.url, {});
@@ -96,27 +116,30 @@ test('repair endpoint starts a distinct repair job after canonical preflight', a
     assert.equal(payload.job.state, 'finished');
     assert.equal(payload.job.result, null);
     assert.deepEqual(payload.job.repairResult, repairResult);
-    assert.equal(calls, 1);
+    assert.deepEqual(sequence, ['chrome:http://127.0.0.1:9333', 'repair']);
   } finally {
     await started.close();
   }
 });
 
 test('repair endpoint fails closed when canonical status no longer authorizes repair', async () => {
-  let calls = 0;
+  let repairCalls = 0;
+  let chromeCalls = 0;
   const started = await startUiServer({
     port: 0,
     openBrowser: false,
     env: {},
     deps: deps({
       inspectResearchConsole: async () => detail('run_enrichment', 0),
-      repairResearchDiscovery: async () => { calls += 1; return repairResult; },
+      ensureResearchChromeForDiscovery: async () => { chromeCalls += 1; return connectedChrome; },
+      repairResearchDiscovery: async () => { repairCalls += 1; return repairResult; },
     }),
   });
   try {
     const response = await post(started.url, {});
     assert.equal(response.status, 400);
-    assert.equal(calls, 0);
+    assert.equal(repairCalls, 0);
+    assert.equal(chromeCalls, 0);
     const payload = await response.json() as { error: { code: string } };
     assert.equal(payload.error.code, 'INPUT_SCHEMA_ERROR');
   } finally {
@@ -126,16 +149,21 @@ test('repair endpoint fails closed when canonical status no longer authorizes re
 
 test('repair endpoint accepts only an empty JSON object', async () => {
   let calls = 0;
+  let chromeCalls = 0;
   const started = await startUiServer({
     port: 0,
     openBrowser: false,
     env: {},
-    deps: deps({ repairResearchDiscovery: async () => { calls += 1; return repairResult; } }),
+    deps: deps({
+      ensureResearchChromeForDiscovery: async () => { chromeCalls += 1; return connectedChrome; },
+      repairResearchDiscovery: async () => { calls += 1; return repairResult; },
+    }),
   });
   try {
     const response = await post(started.url, { retryFailed: false });
     assert.equal(response.status, 400);
     assert.equal(calls, 0);
+    assert.equal(chromeCalls, 0);
   } finally {
     await started.close();
   }
