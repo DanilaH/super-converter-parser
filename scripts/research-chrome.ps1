@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $sourceProfile = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default"
 $targetProfile = Join-Path $ProfileRoot "Default"
+$incompleteMarker = Join-Path $ProfileRoot ".runner-profile-incomplete"
 $chromeCandidates = @(
   (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
   (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
@@ -24,10 +25,12 @@ if ($Mode -eq "setup") {
     throw "Chrome Default profile was not found: $sourceProfile"
   }
   New-Item -ItemType Directory -Force -Path $ProfileRoot | Out-Null
-  & robocopy $sourceProfile $targetProfile /E /XD Cache "Code Cache" "Service Worker" /XF *.log | Out-Null
+  Set-Content -Path $incompleteMarker -Value "v1" -Encoding ASCII
+  & robocopy $sourceProfile $targetProfile /E /R:2 /W:1 /XD Cache "Code Cache" "Service Worker" /XF *.log | Out-Null
   if ($LASTEXITCODE -ge 8) {
-    throw "robocopy failed with exit code $LASTEXITCODE"
+    throw "robocopy failed with exit code $LASTEXITCODE. Close regular Chrome and retry if profile files are locked."
   }
+  Remove-Item -Path $incompleteMarker -Force
   Write-Host "Research Chrome profile prepared: $ProfileRoot"
   Write-Host "Run npm run chrome:start, then verify Keyword Surfer once in chrome://extensions."
   exit 0
