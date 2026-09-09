@@ -21,7 +21,7 @@ RESEARCH_UI_NO_OPEN=true
 
 ## Current browser surface
 
-The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist/finalist-scope/human-decision gates, mutable display-label management, managed seed-batch append, terminal Library continuation through the existing workflow, and durable-state inspection.
+The console can perform normal no-human-input config-first workflow steps, explicit discovery repair, explicit shortlist/finalist-scope/human-decision gates, mutable display-label management, managed seed-batch append, terminal Library continuation through the existing workflow, durable-state inspection, and bounded Research Chrome machine setup/start from the System page.
 
 ### Researches
 
@@ -52,6 +52,23 @@ Create, resume, shortlist-continuation, finalist-scope continuation, human-decis
 A running create job exposes its durable `researchId` as soon as initialization has produced the normal research identity, so the operator can move to Research Detail while long discovery work continues. Long-running discovery, including discovery created by a new appended batch, is observed through canonical research status in parallel with ephemeral job state.
 
 The job registry is not durable truth. Restarting the UI may forget the convenience job record; the research itself remains recoverable from canonical status and can be continued, repaired, or supplied with the current human-gate input again when canonical state permits it.
+
+### System / Research Chrome
+
+The System page keeps the canonical output-root diagnostics and also exposes the dedicated browser machine prerequisite used by browser-backed discovery evidence.
+
+Research Chrome status is read from the configured `CDP_URL` by querying its `/json/version` endpoint. A connection is considered healthy only when the response contains the normal non-empty CDP `Browser` field; an arbitrary HTTP 200 JSON response is not treated as Chrome.
+
+On Windows, when `CDP_URL` is loopback HTTP with an explicit local port, the page can expose two fixed machine actions:
+
+- `Setup Research Chrome` when the dedicated profile is missing or a previous UI-driven setup was left incomplete;
+- `Start Research Chrome` when the dedicated profile is ready but CDP is not currently responding.
+
+These are bounded convenience actions over the existing `scripts/research-chrome.ps1` helper, not a generic command runner. Mutation bodies must be empty JSON objects, inherit the same same-origin localhost mutation policy as the rest of the UI, and cannot supply executable paths, shell commands, arbitrary arguments, profile roots, or ports. Remote/non-loopback CDP endpoints may be inspected read-only but are never accepted as process-launch targets.
+
+Setup preserves already-existing Research Chrome profiles. New setup attempts use a temporary incomplete marker so a failed/partial profile copy is not subsequently reported as ready. `robocopy` retries are bounded (`/R:2 /W:1`) so locked regular-Chrome profile files fail visibly instead of retrying indefinitely. Start is idempotent when the configured CDP endpoint is already healthy.
+
+On non-Windows hosts the status projection remains available, but built-in setup/start controls are disabled. `npm run ui` still does not automatically launch Research Chrome, and there is intentionally no Stop/Kill or general machine-control surface.
 
 ### Continue existing research
 
@@ -179,7 +196,7 @@ Renaming a display label:
 - does **not** change `researchId`, current/known run IDs, batch lineage, enrichment/finalization evidence, or OperatorConfig provenance;
 - is idempotent when the trimmed label is already current;
 - uses the existing composite research lock in canonical `execution → batch` order, so it cannot overwrite `research.json` concurrently with batch append or config-first continuation;
-- refreshes the derived `results.zip` best-effort after the durable metadata commit. Archive failure is surfaced as a warning rather than making the committed rename look retryable.
+- refreshes the derived `results.zip` best-effort after the durable metadata commit. Archive failure is surfaced as a warning rather than making the committed rename retryable.
 
 The browser disables rename while it already knows another UI execution job is active. Canonical research locks remain authoritative for external CLI/process concurrency.
 
@@ -207,6 +224,8 @@ Mutation requests are stricter than reads: they require `POST`, `Content-Type: a
 
 Only one UI execution job is admitted at a time. Existing Runner execution/discovery/batch locks remain authoritative. Explicit repair, shortlist continuation, finalist-scope continuation, and human-decision continuation share the same per-research execution lock used by config-first continuation. Display-label rename and batch append use the composite execution-plus-batch lock because they mutate the shared research container; batch append keeps that lock through resulting discovery collection.
 
+Research Chrome setup/start is outside the research job registry because it does not mutate research truth. It remains a narrow fixed machine action with the same same-origin mutation boundary and no browser-controlled process arguments.
+
 New-research and batch seed text, shortlist continuation CSV input, and human-decision continuation JSON input are materialized only into temporary local workspaces long enough for the normal loader/workflow to consume them; those workspaces are removed after execution. Finalist scope is pathless canonical continuation data and needs no temporary file. OperatorConfig provenance and immutable research evidence keep their existing semantics.
 
 ## Truth model
@@ -219,14 +238,17 @@ The small `data-*` projection on `#app` exists only to coordinate independently 
 
 The canonical run index does not duplicate the display label. Managed catalog rows read the current label from `research.json`, so a rename needs no run-index rewrite. Historical indexed runs without a durable `research.json` container remain independent and are not renameable or appendable through managed-research actions.
 
+Research Chrome status is machine/environment state only. It is not persisted into research SQLite, `research.json`, OperatorConfig, or the UI job registry and does not become evidence truth merely because the UI reports it as connected.
+
 ## Still out of scope
 
 - automatic shortlist/finalist/business decisions;
 - automatic downstream enrichment/finalization after batch append;
 - configuration evolution within an existing V1 research container;
+- automatic Research Chrome launch with `npm run ui`, Stop/Kill controls, or a generic process runner;
 - auth, accounts, cloud, multi-user operation, Electron/Tauri, or a durable UI queue/database;
 - post-MVP evidence/Library/GSC polish until actual operator usage justifies it.
 
 ## Roadmap
 
-See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP browser hardening slice removes confirmed UI fragility without opening U5/U6 scope; U5/U6 remain post-MVP configuration and comfort work to take only from observed operator friction.
+See [`UI_ROADMAP.md`](./UI_ROADMAP.md) for the U0–U6 sequence. U4.1–U4.3 are merged, and the stated local UI MVP Definition of Done is met: a normal config-first research can be operated end-to-end without hand-authored continuation JSON or a coding agent driving the CLI. The bounded post-MVP browser hardening slice removes confirmed UI fragility without opening U5/U6 scope; PR #177 adds only the observed Research Chrome startup/setup convenience and does not activate broader U5/U6 configuration work.
