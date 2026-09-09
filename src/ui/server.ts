@@ -33,6 +33,11 @@ import {
   executeUiResearchResume,
   previewUiResearchDraft,
 } from './researchExecution.js';
+import {
+  inspectResearchChrome,
+  setupResearchChrome,
+  startResearchChrome,
+} from './researchChrome.js';
 
 const DEFAULT_PORT = 4173;
 const HOST = '127.0.0.1';
@@ -72,6 +77,9 @@ export type UiServerDeps = {
   executeUiResearchBatch: typeof executeUiResearchBatch;
   repairResearchDiscovery: typeof repairResearchDiscovery;
   renameResearchLabel: typeof renameResearchLabel;
+  inspectResearchChrome: typeof inspectResearchChrome;
+  setupResearchChrome: typeof setupResearchChrome;
+  startResearchChrome: typeof startResearchChrome;
   loadStaticAssets: () => Promise<Map<string, StaticAsset>>;
   openBrowser: (url: string) => void;
 };
@@ -93,6 +101,9 @@ export const DEFAULT_UI_SERVER_DEPS: UiServerDeps = {
   executeUiResearchBatch,
   repairResearchDiscovery,
   renameResearchLabel,
+  inspectResearchChrome,
+  setupResearchChrome,
+  startResearchChrome,
   loadStaticAssets,
   openBrowser: openBrowserBestEffort,
 };
@@ -244,6 +255,12 @@ async function handleGet(
     return;
   }
 
+  if (requestUrl.pathname === '/api/system/research-chrome') {
+    const researchChrome = await context.deps.inspectResearchChrome({ env: context.env });
+    sendJson(response, 200, { version: 1, researchChrome });
+    return;
+  }
+
   if (requestUrl.pathname === '/api/system') {
     const current = await context.deps.buildOutputDiagnostics(context.diagnosticsInput);
     sendJson(response, 200, { version: 1, outputs: current });
@@ -270,6 +287,20 @@ async function handlePost(
     env: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
+  if (requestUrl.pathname === '/api/system/research-chrome/setup') {
+    assertEmptyObject(body, 'Research Chrome setup request body');
+    const researchChrome = await context.deps.setupResearchChrome({ env: context.env });
+    sendJson(response, 200, { version: 1, researchChrome });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/system/research-chrome/start') {
+    assertEmptyObject(body, 'Research Chrome start request body');
+    const researchChrome = await context.deps.startResearchChrome({ env: context.env });
+    sendJson(response, 200, { version: 1, researchChrome });
+    return;
+  }
+
   if (requestUrl.pathname === '/api/researches/plan') {
     const plan = await context.deps.previewUiResearchDraft(body);
     sendJson(response, 200, { version: 1, plan });
@@ -425,6 +456,7 @@ async function loadStaticAssets(): Promise<Map<string, StaticAsset>> {
   const specs: Array<[string, string, string]> = [
     ['/index.html', 'index.html', 'text/html; charset=utf-8'],
     ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
+    ['/research-chrome.js', 'research-chrome.js', 'text/javascript; charset=utf-8'],
     ['/batches.js', 'batches.js', 'text/javascript; charset=utf-8'],
     ['/metadata.js', 'metadata.js', 'text/javascript; charset=utf-8'],
     ['/repair.js', 'repair.js', 'text/javascript; charset=utf-8'],
