@@ -50,6 +50,20 @@ function deps(sequence: string[]): UiBatchExecutionDeps {
         { keyword: 'beta', rowNumber: 4 },
       ];
     },
+    ensureResearchChromeForDiscovery: async () => {
+      sequence.push('chrome');
+      return {
+        version: 1,
+        endpoint: 'http://127.0.0.1:9333',
+        connected: true,
+        browser: 'Chrome/140',
+        profileRoot: 'C:\\tmp\\research-profile',
+        profileReady: true,
+        controlSupported: true,
+        controlReason: null,
+        configurationError: null,
+      };
+    },
   };
 }
 
@@ -68,14 +82,14 @@ test('batch preview reports supplied lines separately from normalized unique key
   assert.deepEqual(sequence, ['preview:research-1:2']);
 });
 
-test('batch execution materializes pasted seeds through the normal CSV loader before append', async () => {
+test('batch execution starts Research Chrome before materializing seeds and appending discovery', async () => {
   const sequence: string[] = [];
   const result = await executeUiResearchBatch('research-1', {
     version: 1,
     keywords: 'alpha\nalpha\nbeta\n',
   }, {}, deps(sequence));
 
-  assert.deepEqual(sequence, ['load', 'append:research-1:2']);
+  assert.deepEqual(sequence, ['chrome', 'load', 'append:research-1:2']);
   assert.equal(result.currentRunId, 'run-2');
   assert.equal(result.discovery.attempted, true);
 });
