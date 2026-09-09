@@ -30,7 +30,7 @@ function renderStatus(status) {
   card.className = 'workspace-chrome-card';
   const line = document.createElement('div');
   line.className = 'workspace-chrome-line';
-  line.append(dot(status.connected ? 'connected' : status.profileReady === false ? 'setup' : 'idle'));
+  line.append(dot(status.connected ? 'connected' : status.profileReady === false ? 'setup' : 'ready'));
   const title = document.createElement('strong');
   title.textContent = status.connected
     ? 'Research Chrome connected'
