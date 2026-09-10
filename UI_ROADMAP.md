@@ -315,7 +315,7 @@ Implemented scope:
 - replace primary Researches/New/System full-screen navigation with a persistent split workspace: lightweight research/search/machine/job rail on the left and the selected work surface on the right;
 - keep existing hash routes only as deep-link/state mechanics so specialist human-gate modules and durable workflow semantics remain unchanged;
 - keep the research rail lightweight by continuing to use the catalog projection rather than deep-inspecting every research;
-- expose Research Chrome status and one-time `Setup once` in the persistent rail, with optional manual `Start now` only as a convenience;
+- expose Research Chrome status and one-time `Setup once` in the persistent rail; normal operation does not ask the operator to decide whether to press a separate Chrome Start button;
 - add a just-in-time Research Chrome discovery preflight for normal new-research execution: connected Chrome is reused, a prepared managed local profile is started automatically, missing first-time setup fails clearly, invalid configuration fails clearly, and valid unsupported/remote CDP ownership remains external;
 - apply the same preflight to batch append only after a current read-only batch classification proves discovery work is actually required, so duplicate-only batches do not open Chrome;
 - apply the same preflight inside the already-admitted UI job before canonical `resume_discovery` and explicit `repair_discovery`, while enrichment/finalization/Library continuation deliberately skips Chrome startup;
@@ -333,6 +333,17 @@ Cold review corrections within the slice:
 - malformed/invalid Research Chrome configuration fails at the preflight boundary instead of being mistaken for externally managed CDP;
 - optional Chrome discovery options are normalized explicitly to satisfy strict `exactOptionalPropertyTypes` rather than weakening compiler settings;
 - workspace static-asset regression uses exact allowlist strings rather than a dynamically constructed regular expression that could fail independently of runtime behavior.
+
+Subsequent operator-guidance hardening is intentionally still part of this same observed-friction track rather than a new Runner workflow:
+
+- New Research keeps plan preview automatic/advisory and exposes one primary `Start discovery` action; mutation still performs a fresh plan validation immediately before create;
+- the running create job automatically opens Research Detail as soon as durable identity exists;
+- preview stages use operator-facing sequencing (`Starts now`, `After discovery`, `After enrichment`) rather than presenting expected future stages as blocked errors;
+- Research Detail owns a single Workflow focus panel that explains the next action and places the ordinary continuation CTA beside that explanation;
+- shortlist/finalist/decision steps use direct stage actions (`Start enrichment`, `Start finalization`, `Finish research`), sticky action footers for long evidence lists, and retryable transient-error handling that preserves the current browser selection;
+- finalist scope visually promotes `all` only while no explicit selection exists, then promotes the explicit-selected action once the operator selects clusters;
+- one-time Research Chrome setup immediately attempts browser start, while later discovery owns just-in-time launch; a post-setup launch failure is reported as a launch failure rather than falsely telling the operator that setup failed;
+- UI contract tests assert the actual preview render path and retry/CTA behavior, avoiding string-presence tests that can pass while the visible wiring is wrong.
 
 Explicitly not included:
 
