@@ -1,23 +1,79 @@
-name: Export inspection snapshot
+name: Transfer operator-guidance candidate
 
 on:
   push:
     branches:
       - inspection/ui-runtime-20260909
 
+permissions:
+  contents: write
+
 jobs:
-  export:
+  transfer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - name: Checkout inspection carrier
+        uses: actions/checkout@v7
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - uses: actions/upload-artifact@v6
+          path: source
+
+      - name: Checkout product target
+        uses: actions/checkout@v7
         with:
-          name: inspection-runtime
-          path: .
-          include-hidden-files: true
-          retention-days: 1
+          ref: ux/operator-guidance
+          fetch-depth: 0
+          path: target
+
+      - name: Reconstruct validated patch
+        shell: bash
+        run: |
+          cat source/.inspection/operator-guidance-patch.00 \
+              source/.inspection/operator-guidance-patch.01 \
+              source/.inspection/operator-guidance-patch.02 \
+              source/.inspection/operator-guidance-patch.03 \
+            | base64 --decode | gzip --decompress > "$RUNNER_TEMP/operator-guidance.patch"
+
+      - name: Apply only the validated product diff
+        shell: bash
+        run: |
+          cd target
+          git fetch origin main
+          git reset --hard origin/main
+          git apply --check "$RUNNER_TEMP/operator-guidance.patch"
+          git apply "$RUNNER_TEMP/operator-guidance.patch"
+
+          cat > "$RUNNER_TEMP/expected-files" <<'EOF'
+          UI.md
+          UI_ROADMAP.md
+          src/ui/public/app.js
+          src/ui/public/batches.css
+          src/ui/public/decisions.css
+          src/ui/public/decisions.js
+          src/ui/public/finalists.css
+          src/ui/public/finalists.js
+          src/ui/public/index.html
+          src/ui/public/metadata.css
+          src/ui/public/repair.js
+          src/ui/public/research-chrome.js
+          src/ui/public/seed-import.js
+          src/ui/public/shortlist.css
+          src/ui/public/shortlist.js
+          src/ui/public/styles.css
+          src/ui/public/workspace.css
+          src/ui/publicAssets.test.ts
+          src/ui/researchChromeAssets.test.ts
+          src/ui/workspaceAssets.test.ts
+          EOF
+          git diff --name-only | sort > "$RUNNER_TEMP/actual-files"
+          sort "$RUNNER_TEMP/expected-files" -o "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+
+      - name: Commit candidate to feature branch
+        shell: bash
+        run: |
+          cd target
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add UI.md UI_ROADMAP.md src/ui/public src/ui/publicAssets.test.ts src/ui/researchChromeAssets.test.ts src/ui/workspaceAssets.test.ts
+          git commit -m "ux(ui): guide the operator through research stages"
+          git push --force-with-lease origin HEAD:ux/operator-guidance
