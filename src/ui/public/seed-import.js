@@ -202,7 +202,7 @@ function enhanceTextarea(textarea) {
   });
 
   zone.append(copy, choose, input);
-  textarea.insertAdjacentElement('afterend', zone);
+  textarea.insertAdjacentElement('beforebegin', zone);
 }
 
 async function importFile(file, textarea, zone, title, status) {
@@ -216,7 +216,7 @@ async function importFile(file, textarea, zone, title, status) {
     textarea.value = current ? `${current}\n${parsed.keywordText}` : parsed.keywordText;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     title.textContent = `${parsed.fileName}: ${parsed.keywords.length} imported`;
-    status.textContent = `Added ${parsed.format.toUpperCase()} keywords to the editor. Preview will apply canonical normalization.`;
+    status.textContent = `Added ${parsed.format.toUpperCase()} keywords to the editor. The automatic plan will apply canonical normalization.`;
   } catch (error) {
     zone.classList.add('error');
     title.textContent = 'Could not import seed file';

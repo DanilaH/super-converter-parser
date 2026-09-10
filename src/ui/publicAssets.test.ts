@@ -78,6 +78,18 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(appSource, /app\.dataset\.repairable/);
   assert.match(appSource, /function researchIdFromHash/);
   assert.match(appSource, /decodeURIComponent/);
+  assert.doesNotMatch(appSource, /Preview plan/);
+  assert.match(appSource, /Start discovery/);
+  assert.match(appSource, /previewStageLabel\(stage, index\)/);
+  assert.match(appSource, /node\('span', \{ text: previewStageLabel\(stage, index\) \}\)/);
+  assert.match(appSource, /stage\.state === 'not_requested'\) return 'Not included'/);
+  assert.match(appSource, /Next: run enrichment/);
+  assert.match(appSource, /className: 'button primary workflow-action'/);
+  assert.match(appSource, /onSnapshot: \(job\) => \{[\s\S]*window\.location\.hash = `#\/research\/\$\{encodeURIComponent\(job\.researchId\)\}`/);
+  assert.match(appSource, /active\.kind === 'create_research'/);
+  assert.match(appSource, /Another research action is running\. You can start a new research when it finishes\./);
+  assert.doesNotMatch(appSource, /kvRow\('Stop point'/);
+  assert.doesNotMatch(appSource, /kvRow\('Exit code'/);
   assert.doesNotMatch(appSource, /nextActionRequiresInput/);
   assert.doesNotMatch(appSource, /will be added in U2\.3/);
   assert.doesNotMatch(appSource, /innerHTML\s*=/);
@@ -110,39 +122,47 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(shortlistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/shortlist/);
   assert.match(shortlistSource, /app\.dataset\.humanRequirement/);
   assert.match(shortlistSource, /currentGateResearchId\('shortlist'\)/);
-  assert.match(shortlistSource, /Could not load current shortlist gate/);
+  assert.match(shortlistSource, /Could not load the shortlist step/);
   assert.match(shortlistSource, /discoveryRunId:\s*gate\.discoveryRunId/);
   assert.match(shortlistSource, /normalizedKeywords:\s*keywords/);
   assert.match(shortlistSource, /Select filtered/);
   assert.match(shortlistSource, /gate\.minSelection/);
   assert.match(shortlistSource, /gate\.maxSelection/);
+  assert.match(shortlistSource, /Start enrichment with \${count}/);
+  assert.match(shortlistSource, /let submitting = false/);
+  assert.match(shortlistSource, /Your current shortlist is still selected/);
   assert.doesNotMatch(shortlistSource, /shortlistHintIsRendered|title === 'Run Enrichment'|nextActionRequiresInput/);
   assert.doesNotMatch(shortlistSource, /innerHTML\s*=/);
 
   assert.match(finalistSource, /\/api\/researches\/\$\{encodeURIComponent\(routeResearchId\)\}\/finalist-scope/);
   assert.match(finalistSource, /app\.dataset\.humanRequirement/);
   assert.match(finalistSource, /currentGateResearchId\('finalist_scope'\)/);
-  assert.match(finalistSource, /Could not load current finalist-scope gate/);
+  assert.match(finalistSource, /Could not load the finalization-scope step/);
   assert.match(finalistSource, /enrichmentId:\s*gate\.enrichmentId/);
   assert.match(finalistSource, /mode:\s*'selected'/);
   assert.match(finalistSource, /clusterIds/);
   assert.match(finalistSource, /mode:\s*'all'/);
-  assert.match(finalistSource, /Use all \$\{gate\.clusterCount\} clusters/);
+  assert.match(finalistSource, /Start finalization: all \$\{gate\.clusterCount\}/);
   assert.match(finalistSource, /not recommendation order/);
+  assert.match(finalistSource, /Start finalization: \${count} selected/);
+  assert.match(finalistSource, /allButton\.className = `button \${count === 0 \? 'primary' : ''}`/);
+  assert.match(finalistSource, /Your current cluster selection is still here/);
   assert.doesNotMatch(finalistSource, /finalistScopeHintIsRendered|title === 'Run Finalization'|nextActionRequiresInput/);
   assert.doesNotMatch(finalistSource, /innerHTML\s*=/);
 
   assert.match(decisionSource, /\/api\/researches\/\$\{encodeURIComponent\(researchId\)\}\/decisions/);
   assert.match(decisionSource, /app\.dataset\.humanRequirement/);
   assert.match(decisionSource, /currentGateResearchId\('human_decisions'\)/);
-  assert.match(decisionSource, /Could not load current human-decision gate/);
+  assert.match(decisionSource, /Could not load the decision step/);
   assert.match(decisionSource, /representativeRevision:\s*gate\.representativeRevision/);
   assert.match(decisionSource, /entrantFingerprint:\s*gate\.entrantFingerprint/);
   assert.match(decisionSource, /decisionStateUpdatedAt:\s*gate\.decisionStateUpdatedAt/);
   assert.match(decisionSource, /buildDecision:\s*current\.buildDecision/);
   assert.match(decisionSource, /seoProductRole:\s*current\.seoProductRole/);
-  assert.match(decisionSource, /both empty keeps that finalist unresolved/);
-  assert.match(decisionSource, /Save & continue to Library/);
+  assert.match(decisionSource, /unfinished rows can be saved and completed later/);
+  assert.match(decisionSource, /Finish research/);
+  assert.match(decisionSource, /let submitting = false/);
+  assert.match(decisionSource, /Your unsaved choices are still here/);
   assert.doesNotMatch(decisionSource, /decisionHintIsRendered|title === 'Supply Decisions'|nextActionRequiresInput/);
   assert.doesNotMatch(decisionSource, /innerHTML\s*=/);
 
@@ -156,10 +176,13 @@ test('operator browser shell is syntactically valid, external-only, and exposes 
   assert.match(repairCss, /\.repair-action-shell/);
   assert.match(shortlistCss, /\.shortlist-action-shell/);
   assert.match(shortlistCss, /\.shortlist-table/);
+  assert.match(shortlistCss, /\.shortlist-footer[\s\S]*position:\s*sticky/);
   assert.match(finalistCss, /\.finalist-action-shell/);
   assert.match(finalistCss, /\.finalist-card/);
+  assert.match(finalistCss, /\.finalist-footer[\s\S]*position:\s*sticky/);
   assert.match(decisionCss, /\.decision-action-shell/);
   assert.match(decisionCss, /\.decision-card/);
+  assert.match(decisionCss, /\.decision-footer[\s\S]*position:\s*sticky/);
 });
 
 test('ordinary browser continuation allowlist excludes repair and human-input gates', async () => {

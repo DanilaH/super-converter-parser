@@ -75,11 +75,11 @@ function renderSelector(gate, activeJob) {
   copy.className = 'shortlist-copy';
   const eyebrow = document.createElement('div');
   eyebrow.className = 'eyebrow';
-  eyebrow.textContent = 'Human gate · explicit selection';
+  eyebrow.textContent = 'Step · choose shortlist';
   const title = document.createElement('strong');
-  title.textContent = 'Choose enrichment shortlist';
+  title.textContent = 'Choose what to enrich';
   const description = document.createElement('span');
-  description.textContent = `Choose ${gate.minSelection}–${gate.maxSelection} keywords from discovery ${gate.discoveryRunId}. Nothing is preselected and the Runner will revalidate the same discovery under its execution lock.`;
+  description.textContent = `Select ${gate.minSelection}–${gate.maxSelection} keywords. Nothing is chosen for you; when you continue, enrichment starts from exactly this selection.`;
   copy.append(eyebrow, title, description);
   header.append(copy);
 
@@ -90,6 +90,7 @@ function renderSelector(gate, activeJob) {
   root.append(header);
 
   const selected = new Set();
+  let submitting = false;
   const toolbar = document.createElement('div');
   toolbar.className = 'shortlist-toolbar';
 
@@ -149,7 +150,7 @@ function renderSelector(gate, activeJob) {
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'button primary';
-  submit.textContent = 'Continue with shortlist';
+  submit.textContent = 'Start enrichment';
   footer.append(footerNote, submit);
   root.append(footer);
 
@@ -166,11 +167,20 @@ function renderSelector(gate, activeJob) {
 
   const updateState = () => {
     const count = selected.size;
+    const blocked = Boolean(activeJob) || submitting;
     selectionState.textContent = `${count} selected`;
     selectionState.classList.toggle('valid', count >= gate.minSelection && count <= gate.maxSelection);
-    submit.disabled = Boolean(activeJob) || count < gate.minSelection || count > gate.maxSelection;
-    submit.textContent = activeJob ? 'Another job is running' : `Continue with ${count}`;
-    clear.disabled = count === 0;
+    search.disabled = blocked;
+    tier.disabled = blocked;
+    submit.disabled = blocked || count < gate.minSelection || count > gate.maxSelection;
+    submit.textContent = activeJob
+      ? 'Another job is running'
+      : submitting
+        ? 'Starting enrichment…'
+        : count >= gate.minSelection && count <= gate.maxSelection
+          ? `Start enrichment with ${count}`
+          : `Select ${gate.minSelection}–${gate.maxSelection}`;
+    clear.disabled = blocked || count === 0;
   };
 
   const renderRows = () => {
@@ -184,7 +194,7 @@ function renderSelector(gate, activeJob) {
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = selected.has(candidate.normalizedKeyword);
-      checkbox.disabled = Boolean(activeJob) || (!checkbox.checked && selected.size >= gate.maxSelection);
+      checkbox.disabled = Boolean(activeJob) || submitting || (!checkbox.checked && selected.size >= gate.maxSelection);
       checkbox.setAttribute('aria-label', `Select ${candidate.keyword}`);
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) selected.add(candidate.normalizedKeyword);
@@ -216,7 +226,7 @@ function renderSelector(gate, activeJob) {
       tr.append(td);
       tbody.append(tr);
     }
-    selectVisible.disabled = Boolean(activeJob) || rows.length === 0 || selected.size >= gate.maxSelection;
+    selectVisible.disabled = Boolean(activeJob) || submitting || rows.length === 0 || selected.size >= gate.maxSelection;
   };
 
   search.addEventListener('input', renderRows);
@@ -243,11 +253,9 @@ function renderSelector(gate, activeJob) {
     const keywords = gate.candidates
       .filter((candidate) => selected.has(candidate.normalizedKeyword))
       .map((candidate) => candidate.normalizedKeyword);
-    submit.disabled = true;
-    search.disabled = true;
-    tier.disabled = true;
-    selectVisible.disabled = true;
-    clear.disabled = true;
+    submitting = true;
+    renderRows();
+    updateState();
     renderSubmitting(root, keywords.length);
     try {
       const payload = await apiMutation(`/api/researches/${encodeURIComponent(gate.researchId)}/shortlist`, {
@@ -257,6 +265,9 @@ function renderSelector(gate, activeJob) {
       });
       await pollShortlistJob(payload.job.jobId);
     } catch (error) {
+      submitting = false;
+      renderRows();
+      updateState();
       renderFailure(error);
     }
   });
@@ -271,9 +282,9 @@ function renderSubmitting(container, count) {
   const panel = document.createElement('div');
   panel.className = 'shortlist-job';
   const strong = document.createElement('strong');
-  strong.textContent = `Submitting ${count} explicit shortlist keywords…`;
+  strong.textContent = `Starting enrichment with ${count} keywords…`;
   const span = document.createElement('span');
-  span.textContent = 'The canonical workflow is revalidating discovery and enrichment state under the research execution lock.';
+  span.textContent = 'Checking the current research state before enrichment starts.';
   panel.append(strong, span);
   container.append(panel);
 }
@@ -303,18 +314,18 @@ function renderJob(job) {
   const strong = document.createElement('strong');
   const span = document.createElement('span');
   if (job.state === 'running') {
-    strong.textContent = 'Enrichment is running from the explicit shortlist';
-    span.textContent = `Job ${job.jobId} · shortlist scope is now handled by the canonical workflow.`;
+    strong.textContent = 'Enrichment is running';
+    span.textContent = 'Your shortlist was accepted. Waiting for the research state to update.';
   } else if (job.state === 'failed') {
-    strong.textContent = 'Shortlist continuation failed';
+    strong.textContent = 'Enrichment did not start';
     span.textContent = `${job.error?.code ?? 'INTERNAL_ERROR'}: ${job.error?.message ?? 'Unknown error'}`;
     panel.classList.add('failed');
   } else {
-    strong.textContent = 'Shortlist continuation finished';
+    strong.textContent = 'Enrichment step finished';
     const result = job.result;
-    span.textContent = result
-      ? `Workflow ${humanize(result.workflowState)} · stop ${humanize(result.stopPoint)} · enrichment ${result.enrichmentId ?? 'none'} · exit ${result.exitCode}.`
-      : 'Workflow job finished; refreshing canonical research state.';
+    span.textContent = result?.enrichmentId
+      ? `Enrichment ${result.enrichmentId} is recorded. Refreshing the research state.`
+      : 'Refreshing the research state.';
     panel.classList.add('finished');
   }
   panel.append(strong, span);
@@ -327,13 +338,13 @@ function renderGateLoadFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'shortlist-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not load current shortlist gate';
+  strong.textContent = 'Could not load the shortlist step';
   const span = document.createElement('span');
   span.textContent = error instanceof Error ? error.message : String(error);
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
+  retry.textContent = 'Reload current step';
   retry.addEventListener('click', () => {
     loadedFor = null;
     scheduleSync();
@@ -349,18 +360,10 @@ function renderFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'shortlist-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not submit shortlist';
+  strong.textContent = 'Could not start enrichment';
   const span = document.createElement('span');
-  span.textContent = error instanceof Error ? error.message : String(error);
-  const retry = document.createElement('button');
-  retry.type = 'button';
-  retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
-  retry.addEventListener('click', () => {
-    loadedFor = null;
-    scheduleSync();
-  });
-  panel.append(strong, span, retry);
+  span.textContent = `${error instanceof Error ? error.message : String(error)} Your current shortlist is still selected; retry with the main button.`;
+  panel.append(strong, span);
   root.append(panel);
 }
 

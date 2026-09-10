@@ -1,6 +1,6 @@
 .metadata-action-shell {
   width: min(1180px, calc(100% - 64px));
-  margin: 30px auto -18px;
+  margin: 18px auto 0;
   min-height: 48px;
   display: flex;
   align-items: center;
@@ -54,6 +54,3 @@
   line-height: 1.4;
 }
 
-.metadata-action-shell:not(.hidden) + .repair-action-shell {
-  margin-top: 10px;
-}

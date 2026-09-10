@@ -8,10 +8,10 @@ const CONTINUABLE_ACTIONS = new Set([
   'publish_library',
 ]);
 const PRESETS = [
-  { id: 'quick-scan', label: 'Quick scan' },
-  { id: 'standard', label: 'Standard' },
-  { id: 'deep-research', label: 'Deep research' },
-  { id: 'finalist-validation', label: 'Finalist validation' },
+  { id: 'quick-scan', label: 'Quick scan — discovery only' },
+  { id: 'standard', label: 'Standard — discovery + clustering' },
+  { id: 'deep-research', label: 'Deep research — discovery + full enrichment' },
+  { id: 'finalist-validation', label: 'Finalist validation — through finalization' },
 ];
 
 if (!app) throw new Error('Missing #app root.');
@@ -125,7 +125,7 @@ function renderResearchRows(container, researches) {
 }
 
 async function renderNewResearch(epoch) {
-  app.replaceChildren(pageHeader('New research', 'Configure, preview, and start a research without authoring JSON or using the CLI.'));
+  app.replaceChildren(pageHeader('New research', 'Name it, add seed keywords, then start discovery. The Runner will guide each next step from there.'));
 
   const layout = node('div', { className: 'create-grid' });
   const formPanel = node('section', { className: 'panel create-panel' });
@@ -139,7 +139,7 @@ async function renderNewResearch(epoch) {
   const form = node('form', { className: 'research-form' });
   formPanel.append(
     node('h2', { text: 'Research setup' }),
-    node('div', { className: 'section-subtitle', text: 'Preset semantics remain the canonical Runner presets. Locale fields are optional overrides.' }),
+    node('div', { className: 'section-subtitle', text: 'Pick how far this research should go. You can leave locale overrides alone unless this run needs a different market.' }),
     form,
   );
 
@@ -148,7 +148,7 @@ async function renderNewResearch(epoch) {
     placeholder: 'e.g. browser audio tools',
     autocomplete: 'off',
   });
-  const preset = formControl('Preset', 'select');
+  const preset = formControl('Research depth', 'select');
   for (const item of PRESETS) {
     const option = node('option', { text: item.label, value: item.id });
     if (item.id === 'standard') option.selected = true;
@@ -158,7 +158,7 @@ async function renderNewResearch(epoch) {
     placeholder: 'one keyword per line\nmic test\nheadphone test\nspeaker test',
     rows: 14,
   });
-  keywords.wrapper.append(node('div', { className: 'field-help', text: 'One seed per line. The preview reports both supplied lines and normalized unique keywords.' }));
+  keywords.wrapper.append(node('div', { className: 'field-help', text: 'Paste keywords, type them one per line, or drop a TXT / CSV / JSON file above the editor.' }));
 
   const advanced = node('details', { className: 'advanced-fields' });
   advanced.append(node('summary', { text: 'Locale overrides' }));
@@ -170,86 +170,107 @@ async function renderNewResearch(epoch) {
   advanced.append(localeGrid, node('div', { className: 'field-help', text: 'Leave empty to use the selected preset/default semantics.' }));
 
   const actions = node('div', { className: 'form-actions' });
-  const previewButton = node('button', { className: 'button', type: 'submit', text: 'Preview plan' });
-  const startButton = node('button', { className: 'button primary', type: 'button', text: 'Start research', disabled: true });
-  const formState = node('div', { className: 'form-state muted', text: 'Preview the current draft before starting.' });
-  actions.append(previewButton, startButton, formState);
+  const startButton = node('button', { className: 'button primary', type: 'submit', text: 'Start discovery', disabled: true });
+  const formState = node('div', { className: 'form-state muted', text: 'Add a name and at least one seed keyword.' });
+  actions.append(startButton, formState);
   form.append(label.wrapper, preset.wrapper, keywords.wrapper, advanced, actions);
   renderPreviewPlaceholder(previewHolder);
 
-  let previewKey = null;
   let busy = false;
+  let previewTimer = null;
+  let previewRequestEpoch = 0;
   const inputs = [label.control, preset.control, keywords.control, market.control, googleHl.control, googleGl.control];
+  const currentDraft = () => createDraftFromControls({ label, preset, keywords, market, googleHl, googleGl });
+  const draftReady = () => label.control.value.trim() !== '' && keywords.control.value.trim() !== '';
+
   const setBusy = (value) => {
     busy = value;
     for (const control of inputs) control.disabled = value;
-    previewButton.disabled = value;
-    startButton.disabled = value || previewKey === null;
+    startButton.disabled = value || !draftReady();
     form.classList.toggle('is-busy', value);
   };
-  const invalidatePreview = () => {
+
+  const updateReadyState = () => {
     if (busy) return;
-    previewKey = null;
-    startButton.disabled = true;
-    formState.textContent = 'Draft changed — preview again before starting.';
+    startButton.disabled = !draftReady();
+    if (!draftReady()) formState.textContent = 'Add a name and at least one seed keyword.';
   };
+
+  const refreshPreview = async () => {
+    if (busy || !draftReady()) return;
+    const requestEpoch = ++previewRequestEpoch;
+    const draft = currentDraft();
+    formState.textContent = 'Checking the plan…';
+    try {
+      const payload = await apiMutation('/api/researches/plan', draft);
+      if (epoch !== routeEpoch || requestEpoch !== previewRequestEpoch || busy) return;
+      renderPlanPreview(previewHolder, payload.plan);
+      formState.textContent = 'Ready. Start discovery when you are happy with the inputs.';
+    } catch (error) {
+      if (epoch !== routeEpoch || requestEpoch !== previewRequestEpoch || busy) return;
+      renderPanelError(previewHolder, 'Plan needs attention', error);
+      formState.textContent = 'Fix the highlighted plan problem, then start discovery.';
+    }
+  };
+
+  const schedulePreview = () => {
+    if (previewTimer !== null) window.clearTimeout(previewTimer);
+    previewRequestEpoch += 1;
+    updateReadyState();
+    if (!draftReady()) {
+      renderPreviewPlaceholder(previewHolder);
+      return;
+    }
+    previewTimer = window.setTimeout(() => {
+      previewTimer = null;
+      void refreshPreview();
+    }, 220);
+  };
+
   for (const control of inputs) {
-    control.addEventListener('input', invalidatePreview);
-    control.addEventListener('change', invalidatePreview);
+    control.addEventListener('input', schedulePreview);
+    control.addEventListener('change', schedulePreview);
   }
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (busy) return;
-    previewButton.disabled = true;
-    formState.textContent = 'Validating plan…';
-    try {
-      const draft = createDraftFromControls({ label, preset, keywords, market, googleHl, googleGl });
-      const payload = await apiMutation('/api/researches/plan', draft);
-      if (epoch !== routeEpoch) return;
-      previewKey = JSON.stringify(draft);
-      renderPlanPreview(previewHolder, payload.plan);
-      formState.textContent = 'Plan is current. Ready to start.';
-      startButton.disabled = false;
-    } catch (error) {
-      if (epoch !== routeEpoch) return;
-      previewKey = null;
-      startButton.disabled = true;
-      renderPanelError(previewHolder, 'Plan rejected', error);
-      formState.textContent = 'Fix the draft and preview again.';
-    } finally {
-      if (epoch === routeEpoch && !busy) previewButton.disabled = false;
+    if (busy || !draftReady()) return;
+    if (previewTimer !== null) {
+      window.clearTimeout(previewTimer);
+      previewTimer = null;
     }
-  });
-
-  startButton.addEventListener('click', async () => {
-    if (busy || previewKey === null) return;
-    const draft = createDraftFromControls({ label, preset, keywords, market, googleHl, googleGl });
-    if (JSON.stringify(draft) !== previewKey) {
-      invalidatePreview();
-      return;
-    }
+    previewRequestEpoch += 1;
+    const draft = currentDraft();
     setBusy(true);
     jobHolder.classList.remove('hidden');
-    jobHolder.replaceChildren(node('div', { className: 'loading compact-loading', text: 'Starting research…' }));
-    formState.textContent = 'Research job is starting…';
+    jobHolder.replaceChildren(node('div', { className: 'loading compact-loading', text: 'Checking the current plan…' }));
+    formState.textContent = 'Validating the current draft before discovery starts…';
     try {
+      const planPayload = await apiMutation('/api/researches/plan', draft);
+      if (epoch !== routeEpoch) return;
+      renderPlanPreview(previewHolder, planPayload.plan);
+      jobHolder.replaceChildren(node('div', { className: 'loading compact-loading', text: 'Starting discovery…' }));
+      formState.textContent = 'Starting discovery…';
       const payload = await apiMutation('/api/researches', draft);
       if (epoch !== routeEpoch) return;
-      formState.textContent = 'Research is running. Durable progress appears as soon as the research is initialized.';
+      let openedResearch = false;
       await pollJob(payload.job.jobId, jobHolder, epoch, {
+        onSnapshot: (job) => {
+          if (openedResearch || !job.researchId || epoch !== routeEpoch) return;
+          openedResearch = true;
+          window.location.hash = `#/research/${encodeURIComponent(job.researchId)}`;
+        },
         onTerminal: () => {
+          if (epoch !== routeEpoch) return;
           setBusy(false);
-          previewKey = null;
-          startButton.disabled = true;
-          formState.textContent = 'Job finished. Preview again before starting another research.';
+          formState.textContent = 'Discovery step finished.';
         },
       });
     } catch (error) {
       if (epoch !== routeEpoch) return;
       setBusy(false);
-      renderPanelError(jobHolder, 'Could not start research', error);
-      formState.textContent = 'Start failed. The draft is unchanged.';
+      renderPanelError(jobHolder, 'Could not start discovery', error);
+      formState.textContent = 'Nothing was started. Fix the problem and try Start discovery again.';
     }
   });
 
@@ -260,17 +281,32 @@ async function renderNewResearch(epoch) {
     if (active) {
       setBusy(true);
       jobHolder.classList.remove('hidden');
-      formState.textContent = 'Another UI execution job is already running.';
-      await pollJob(active.jobId, jobHolder, epoch, {
-        onTerminal: () => {
-          setBusy(false);
-          formState.textContent = 'Previous job finished. Preview this draft before starting.';
-        },
-      });
+      if (active.kind === 'create_research') {
+        formState.textContent = 'A new research is already starting. Opening it as soon as its ID is ready…';
+        void pollJob(active.jobId, jobHolder, epoch, {
+          onSnapshot: (job) => {
+            if (job.researchId && epoch === routeEpoch) {
+              window.location.hash = `#/research/${encodeURIComponent(job.researchId)}`;
+            }
+          },
+        });
+      } else {
+        formState.textContent = 'Another research action is running. You can start a new research when it finishes.';
+        void pollJob(active.jobId, jobHolder, epoch, {
+          onTerminal: () => {
+            if (epoch !== routeEpoch) return;
+            setBusy(false);
+            updateReadyState();
+          },
+        });
+      }
     }
-  } catch (error) {
-    if (epoch === routeEpoch) renderPanelError(jobHolder, 'Could not inspect active jobs', error);
+  } catch {
+    // The create form remains usable even if convenience job-state loading fails.
   }
+
+  updateReadyState();
+  schedulePreview();
 }
 
 function createDraftFromControls(controls) {
@@ -291,15 +327,24 @@ function createDraftFromControls(controls) {
 
 function renderPreviewPlaceholder(container) {
   container.replaceChildren(
-    node('h2', { text: 'Plan preview' }),
-    node('p', { className: 'muted preview-copy', text: 'Preview resolves the real OperatorConfig preset and shows what the Runner will execute before any research is created.' }),
+    node('h2', { text: 'What will run' }),
+    node('p', { className: 'muted preview-copy', text: 'Add a name and seeds. The current Runner plan will appear here automatically before you start.' }),
   );
+}
+
+function previewStageLabel(stage, index) {
+  if (stage.state === 'not_requested') return 'Not included';
+  if (stage.state === 'ready') return index === 0 ? 'Starts now' : 'Ready';
+  if (stage.id === 'enrichment') return 'After discovery';
+  if (stage.id === 'finalization') return 'After enrichment';
+  if (stage.id === 'library') return 'At the end';
+  return humanize(stage.state);
 }
 
 function renderPlanPreview(container, plan) {
   container.replaceChildren();
   const header = node('div', { className: 'panel-title-row' });
-  header.append(node('h2', { text: 'Plan preview' }), badge(`${humanize(plan.workflowTarget)} target`, 'info'));
+  header.append(node('h2', { text: 'What will run' }), badge(`${humanize(plan.workflowTarget)} target`, 'info'));
   container.append(header);
 
   const metrics = node('div', { className: 'preview-metrics' });
@@ -307,10 +352,10 @@ function renderPlanPreview(container, plan) {
   container.append(metrics);
 
   const stages = node('div', { className: 'preview-stages' });
-  for (const stage of plan.stages ?? []) {
+  for (const [index, stage] of (plan.stages ?? []).entries()) {
     const stageNode = node('div', { className: `preview-stage ${stage.state === 'ready' ? 'ready' : ''}`.trim() });
-    stageNode.append(node('strong', { text: humanize(stage.id) }), node('span', { text: humanize(stage.state) }));
-    if (stage.reason) stageNode.append(node('small', { text: stage.reason }));
+    stageNode.append(node('strong', { text: humanize(stage.id) }), node('span', { text: previewStageLabel(stage, index) }));
+    if (stage.reason && stage.state === 'ready') stageNode.append(node('small', { text: stage.reason }));
     stages.append(stageNode);
   }
   container.append(stages);
@@ -367,51 +412,22 @@ async function renderResearchDetail(researchId, epoch) {
     );
     header.append(titleBlock);
 
-    const operationHolder = node('section', { className: `panel create-panel job-panel ${activeForThisResearch ? '' : 'hidden'}`.trim() });
+    const operationHolder = node('div', { className: `workflow-job ${activeForThisResearch ? '' : 'hidden'}`.trim() });
     const continueInfo = continuableAction(status, operatorConfig);
-    if (continueInfo) {
-      const continueButton = node('button', {
-        className: 'button primary detail-action',
-        type: 'button',
-        text: continueInfo.label,
-        disabled: Boolean(activeJob),
-      });
-      if (activeJob && !activeForThisResearch) continueButton.title = 'Another UI execution job is currently running.';
-      continueButton.addEventListener('click', async () => {
-        continueButton.disabled = true;
-        operationHolder.classList.remove('hidden');
-        operationHolder.replaceChildren(node('div', { className: 'loading compact-loading', text: 'Starting continuation…' }));
-        try {
-          const payload = await apiMutation(`/api/researches/${encodeURIComponent(status.researchId)}/resume`, {});
-          if (epoch !== routeEpoch) return;
-          await pollJob(payload.job.jobId, operationHolder, epoch, {
-            onTerminal: async () => {
-              if (epoch === routeEpoch) await renderResearchDetail(status.researchId, epoch);
-            },
-          });
-        } catch (error) {
-          if (epoch !== routeEpoch) return;
-          continueButton.disabled = false;
-          renderPanelError(operationHolder, 'Could not continue research', error);
-        }
-      });
-      header.append(continueButton);
-    }
     app.append(header);
 
     const ids = node('div', { className: 'ids' });
     ids.append(idPill('researchId', status.researchId));
     ids.append(idPill('currentRunId', status.discovery.runId));
     if (status.currentEnrichmentId) ids.append(idPill('enrichmentId', status.currentEnrichmentId));
-    app.append(ids, spacer(18), operationHolder);
+    app.append(ids, spacer(18));
+    app.append(renderWorkflow(status, humanRequirement, continueInfo, activeJob, operationHolder, epoch));
 
     const grid = node('div', { className: 'grid' });
     const left = node('div', { className: 'stack' });
     const right = node('div', { className: 'stack' });
-    left.append(renderPipeline(status));
     left.append(renderDiscovery(status));
     left.append(renderBatches(container, status));
-    right.append(renderNextAction(status, humanRequirement));
     right.append(renderResearchFacts(status, container, operatorConfig));
     right.append(renderConfig(operatorConfig));
     grid.append(left, right);
@@ -439,10 +455,10 @@ function continuableAction(status, operatorConfig) {
   if (!operatorConfig || status.legacy || !status.nextAction?.command || !CONTINUABLE_ACTIONS.has(status.nextAction.code)) return null;
   const labels = {
     resume_discovery: 'Resume discovery',
-    run_enrichment: 'Run enrichment',
+    run_enrichment: 'Start enrichment',
     resume_enrichment: 'Resume enrichment',
-    run_finalization: 'Continue finalization',
-    publish_library: 'Continue library step',
+    run_finalization: 'Start finalization',
+    publish_library: 'Finish Library step',
   };
   return { code: status.nextAction.code, label: labels[status.nextAction.code] ?? 'Continue research' };
 }
@@ -470,6 +486,8 @@ async function pollJob(jobId, container, epoch, options = {}) {
     }
     if (epoch !== routeEpoch) return;
     renderJobSnapshot(container, job, cachedDetail);
+    await options.onSnapshot?.(job, cachedDetail);
+    if (epoch !== routeEpoch) return;
 
     if (job.state !== 'running') {
       await options.onTerminal?.(job, cachedDetail);
@@ -517,13 +535,10 @@ function renderJobSnapshot(container, job, detail) {
 
   if (job.state === 'finished' && job.result) {
     const result = node('div', { className: 'job-result' });
-    result.append(
-      kvRow('Workflow', humanize(job.result.workflowState)),
-      kvRow('Stop point', humanize(job.result.stopPoint)),
-      kvRow('Exit code', String(job.result.exitCode)),
-    );
     if (job.result.unresolvedHumanRequirements?.length) {
-      result.append(node('div', { className: 'plan-note attention-note', text: `Human input required: ${job.result.unresolvedHumanRequirements.map(humanize).join(', ')}` }));
+      result.append(node('div', { className: 'plan-note attention-note', text: `Next: ${job.result.unresolvedHumanRequirements.map(humanize).join(', ')}` }));
+    } else {
+      result.append(node('div', { className: 'plan-note', text: 'This step finished successfully. Refreshing the research state…' }));
     }
     container.append(result);
   }
@@ -533,8 +548,9 @@ function renderJobSnapshot(container, job, detail) {
   }
 }
 
-function renderPipeline(status) {
-  const section = panelSection('Pipeline', 'Current durable stage projection.');
+function renderWorkflow(status, humanRequirement, continueInfo, activeJob, operationHolder, epoch) {
+  const section = panelSection('Workflow', 'Follow the highlighted next step; diagnostics stay below.');
+  section.classList.add('workflow-panel');
   const pipeline = node('div', { className: 'pipeline' });
   pipeline.append(
     pipelineStep('Discovery', displayState(status.discovery.state), discoveryClass(status.discovery.state)),
@@ -547,7 +563,61 @@ function renderPipeline(status) {
     pipelineStep('Library', status.library.published ? 'Published' : 'Not published', status.library.published ? 'done' : ''),
   );
   section.append(pipeline);
+
+  const focus = node('div', { className: 'workflow-focus' });
+  const copy = workflowNextCopy(status, humanRequirement);
+  const copyBlock = node('div', { className: 'workflow-focus-copy' });
+  copyBlock.append(node('strong', { text: copy.title }), node('p', { text: copy.description }));
+  focus.append(copyBlock);
+
+  if (continueInfo) {
+    const continueButton = node('button', {
+      className: 'button primary workflow-action',
+      type: 'button',
+      text: continueInfo.label,
+      disabled: Boolean(activeJob),
+    });
+    if (activeJob && activeJob.researchId !== status.researchId) continueButton.title = 'Another research action is currently running.';
+    continueButton.addEventListener('click', async () => {
+      continueButton.disabled = true;
+      operationHolder.classList.remove('hidden');
+      operationHolder.replaceChildren(node('div', { className: 'loading compact-loading', text: `${continueInfo.label}…` }));
+      try {
+        const payload = await apiMutation(`/api/researches/${encodeURIComponent(status.researchId)}/resume`, {});
+        if (epoch !== routeEpoch) return;
+        await pollJob(payload.job.jobId, operationHolder, epoch, {
+          onTerminal: async () => {
+            if (epoch === routeEpoch) await renderResearchDetail(status.researchId, epoch);
+          },
+        });
+      } catch (error) {
+        if (epoch !== routeEpoch) return;
+        continueButton.disabled = false;
+        renderPanelError(operationHolder, `Could not ${continueInfo.label.toLowerCase()}`, error);
+      }
+    });
+    focus.append(continueButton);
+  }
+
+  section.append(focus, operationHolder);
   return section;
+}
+
+function workflowNextCopy(status, humanRequirement) {
+  if (humanRequirement === 'shortlist') return { title: 'Next: choose shortlist', description: 'Select the keywords you want to enrich in the step above. Enrichment starts from that explicit selection.' };
+  if (humanRequirement === 'finalist_scope') return { title: 'Next: choose finalization scope', description: 'Choose specific clusters or use all current clusters in the finalization step above.' };
+  if (humanRequirement === 'human_decisions') return { title: 'Next: review decisions', description: 'Record the current finalist decisions in the step above. When every finalist is decided, you can finish the research.' };
+  const copies = {
+    resume_discovery: ['Next: resume discovery', 'Discovery stopped before it finished. Resume from the durable state; Research Chrome will start automatically if needed.'],
+    run_enrichment: ['Next: run enrichment', 'Discovery is complete. Start enrichment to build the evidence needed for finalization.'],
+    resume_enrichment: ['Next: resume enrichment', 'Enrichment stopped before it finished. Resume it from the durable state.'],
+    run_finalization: ['Next: run finalization', 'Enrichment is complete. Start finalization for the current scope.'],
+    publish_library: ['Next: finish Library step', 'The research work is complete. Finish the final Library publication step.'],
+    repair_discovery: ['Discovery needs a retry', 'Some discovery checks can be retried. Use the Retry discovery action above before continuing.'],
+    none: ['Research complete', status.library.published ? 'All configured stages are finished and the research is published to the Library.' : 'No further operator action is currently required.'],
+  };
+  const [title, description] = copies[status.nextAction.code] ?? [humanize(status.nextAction.code), status.nextAction.message];
+  return { title, description };
 }
 
 function renderDiscovery(status) {
@@ -573,21 +643,6 @@ function renderDiscovery(status) {
   return section;
 }
 
-function renderNextAction(status, humanRequirement) {
-  const section = panelSection('Next action');
-  const body = node('div', { className: 'next-action' });
-  body.append(
-    node('strong', { text: status.nextAction.code === 'none' ? 'Nothing required' : humanize(status.nextAction.code) }),
-    node('p', { text: status.nextAction.message }),
-  );
-  if (status.nextAction.code === 'repair_discovery') {
-    body.append(node('div', { className: 'action-note', text: 'Use the explicit discovery-repair action for eligible checkpoints; repair remains separate from ordinary Continue.' }));
-  } else if (humanRequirement) {
-    body.append(node('div', { className: 'action-note', text: 'This step requires explicit human input; the console will not invent it.' }));
-  }
-  section.append(body);
-  return section;
-}
 
 function renderBatches(container, status) {
   const section = panelSection('Batches & history');

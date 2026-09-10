@@ -75,11 +75,11 @@ function renderSelector(gate, activeJob) {
   copy.className = 'finalist-copy';
   const eyebrow = document.createElement('div');
   eyebrow.className = 'eyebrow';
-  eyebrow.textContent = 'Human gate · finalist scope';
+  eyebrow.textContent = 'Step · finalization scope';
   const title = document.createElement('strong');
-  title.textContent = 'Choose clusters for finalization';
+  title.textContent = 'Choose what to finalize';
   const description = document.createElement('span');
-  description.textContent = 'Choose explicit current cluster IDs, or deliberately use every current cluster. The Runner does not rank or preselect finalists for you.';
+  description.textContent = 'Choose specific current clusters, or use all of them. Nothing is ranked or preselected for you.';
   copy.append(eyebrow, title, description);
   header.append(copy);
 
@@ -90,6 +90,7 @@ function renderSelector(gate, activeJob) {
   root.append(header);
 
   const selected = new Set();
+  let submitting = false;
   const toolbar = document.createElement('div');
   toolbar.className = 'finalist-toolbar';
 
@@ -127,12 +128,12 @@ function renderSelector(gate, activeJob) {
   buttons.className = 'finalist-footer-actions';
   const allButton = document.createElement('button');
   allButton.type = 'button';
-  allButton.className = 'button';
-  allButton.textContent = `Use all ${gate.clusterCount} clusters`;
+  allButton.className = 'button primary';
+  allButton.textContent = `Start finalization: all ${gate.clusterCount}`;
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'button primary';
-  submit.textContent = 'Continue with selected';
+  submit.textContent = 'Start finalization';
   buttons.append(allButton, submit);
   footer.append(footerNote, buttons);
   root.append(footer);
@@ -152,18 +153,30 @@ function renderSelector(gate, activeJob) {
     const count = selected.size;
     selectionState.textContent = `${count} selected`;
     selectionState.classList.toggle('valid', count > 0);
-    const blocked = Boolean(activeJob);
+    const blocked = Boolean(activeJob) || submitting;
+    search.disabled = blocked;
     submit.disabled = blocked || count === 0;
     allButton.disabled = blocked || gate.clusterCount === 0;
     selectVisible.disabled = blocked || filtered().length === 0;
     clear.disabled = blocked || count === 0;
-    submit.textContent = blocked ? 'Another job is running' : `Continue with ${count} selected`;
+    allButton.className = `button ${count === 0 ? 'primary' : ''}`.trim();
+    submit.className = `button ${count > 0 ? 'primary' : ''}`.trim();
+    allButton.textContent = activeJob
+      ? 'Another job is running'
+      : submitting
+        ? 'Starting finalization…'
+        : `Start finalization: all ${gate.clusterCount}`;
+    submit.textContent = activeJob
+      ? 'Another job is running'
+      : submitting
+        ? 'Starting finalization…'
+        : `Start finalization: ${count} selected`;
   };
 
   const renderRows = () => {
     list.replaceChildren();
     const rows = filtered();
-    for (const cluster of rows) list.append(clusterCard(cluster, selected, activeJob, renderRows, updateState));
+    for (const cluster of rows) list.append(clusterCard(cluster, selected, Boolean(activeJob) || submitting, renderRows, updateState));
     if (rows.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'finalist-empty';
@@ -206,16 +219,17 @@ function renderSelector(gate, activeJob) {
   });
 
   async function submitScope(currentGate, body, count) {
-    search.disabled = true;
-    selectVisible.disabled = true;
-    clear.disabled = true;
-    submit.disabled = true;
-    allButton.disabled = true;
+    submitting = true;
+    renderRows();
+    updateState();
     renderSubmitting(count, body.mode === 'all');
     try {
       const payload = await apiMutation(`/api/researches/${encodeURIComponent(currentGate.researchId)}/finalist-scope`, body);
       await pollFinalistJob(payload.job.jobId);
     } catch (error) {
+      submitting = false;
+      renderRows();
+      updateState();
       renderFailure(error);
     }
   }
@@ -223,7 +237,7 @@ function renderSelector(gate, activeJob) {
   renderRows();
 }
 
-function clusterCard(cluster, selected, activeJob, rerender, updateState) {
+function clusterCard(cluster, selected, blocked, rerender, updateState) {
   const card = document.createElement('article');
   card.className = 'finalist-card';
   if (selected.has(cluster.clusterId)) card.classList.add('selected');
@@ -231,7 +245,7 @@ function clusterCard(cluster, selected, activeJob, rerender, updateState) {
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.checked = selected.has(cluster.clusterId);
-  checkbox.disabled = Boolean(activeJob);
+  checkbox.disabled = blocked;
   checkbox.setAttribute('aria-label', `Select finalist cluster ${cluster.canonicalKeyword}`);
   checkbox.addEventListener('change', () => {
     if (checkbox.checked) selected.add(cluster.clusterId);
@@ -320,10 +334,10 @@ function renderSubmitting(count, all) {
   panel.className = 'finalist-job';
   const strong = document.createElement('strong');
   strong.textContent = all
-    ? `Submitting explicit all-clusters scope (${count})…`
-    : `Submitting ${count} explicit finalist clusters…`;
+    ? `Starting finalization with all ${count} clusters…`
+    : `Starting finalization with ${count} selected clusters…`;
   const span = document.createElement('span');
-  span.textContent = 'The canonical workflow will revalidate research, discovery, enrichment, and the unopened finalization gate under the execution lock.';
+  span.textContent = 'Checking the current enrichment and scope before finalization starts.';
   panel.append(strong, span);
   root.append(panel);
 }
@@ -353,18 +367,18 @@ function renderJob(job) {
   const strong = document.createElement('strong');
   const span = document.createElement('span');
   if (job.state === 'running') {
-    strong.textContent = 'Finalization is running from the explicit finalist scope';
-    span.textContent = `Job ${job.jobId} · the selected scope is now owned by the canonical workflow.`;
+    strong.textContent = 'Finalization is running';
+    span.textContent = 'Your scope was accepted. Waiting for the research state to update.';
   } else if (job.state === 'failed') {
-    strong.textContent = 'Finalist scope continuation failed';
+    strong.textContent = 'Finalization did not start';
     span.textContent = `${job.error?.code ?? 'INTERNAL_ERROR'}: ${job.error?.message ?? 'Unknown error'}`;
     panel.classList.add('failed');
   } else {
-    strong.textContent = 'Finalist scope continuation finished';
+    strong.textContent = 'Finalization step finished';
     const result = job.result;
-    span.textContent = result
-      ? `Workflow ${humanize(result.workflowState)} · stop ${humanize(result.stopPoint)} · finalization ${humanize(result.finalizationState ?? 'none')} · exit ${result.exitCode}.`
-      : 'Workflow job finished; refreshing canonical research state.';
+    span.textContent = result?.finalizationState
+      ? `Finalization is ${humanize(result.finalizationState)}. Refreshing the research state.`
+      : 'Refreshing the research state.';
     panel.classList.add('finished');
   }
   panel.append(strong, span);
@@ -377,13 +391,13 @@ function renderGateLoadFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'finalist-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not load current finalist-scope gate';
+  strong.textContent = 'Could not load the finalization-scope step';
   const span = document.createElement('span');
   span.textContent = error instanceof Error ? error.message : String(error);
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
+  retry.textContent = 'Reload current step';
   retry.addEventListener('click', () => {
     loadedFor = null;
     scheduleSync();
@@ -399,18 +413,10 @@ function renderFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'finalist-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not submit finalist scope';
+  strong.textContent = 'Could not start finalization';
   const span = document.createElement('span');
-  span.textContent = error instanceof Error ? error.message : String(error);
-  const retry = document.createElement('button');
-  retry.type = 'button';
-  retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
-  retry.addEventListener('click', () => {
-    loadedFor = null;
-    scheduleSync();
-  });
-  panel.append(strong, span, retry);
+  span.textContent = `${error instanceof Error ? error.message : String(error)} Your current cluster selection is still here; retry with the main action.`;
+  panel.append(strong, span);
   root.append(panel);
 }
 

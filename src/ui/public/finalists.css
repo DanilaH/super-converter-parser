@@ -243,3 +243,12 @@
   }
   .finalist-card-title code { max-width: 100%; }
 }
+
+.finalist-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin: 0 -6px -6px;
+  padding: 10px 6px 6px;
+  background: linear-gradient(to bottom, rgba(17,21,28,.88), #11151c 28%);
+}

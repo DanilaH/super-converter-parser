@@ -77,6 +77,7 @@ function renderDecisionGate(gate, activeJob) {
     },
   ]));
   const persisted = snapshotState(state);
+  let submitting = false;
 
   const header = document.createElement('div');
   header.className = 'decision-header';
@@ -84,11 +85,11 @@ function renderDecisionGate(gate, activeJob) {
   copy.className = 'decision-copy';
   const eyebrow = document.createElement('div');
   eyebrow.className = 'eyebrow';
-  eyebrow.textContent = 'Human gate · decisions';
+  eyebrow.textContent = 'Step · decisions';
   const title = document.createElement('strong');
-  title.textContent = 'Review finalists and record decisions';
+  title.textContent = 'Review finalists and finish the research';
   const description = document.createElement('span');
-  description.textContent = 'The Runner does not choose for you. Either field records a human decision; leaving both empty keeps that finalist unresolved. Partial saves remain at this gate.';
+  description.textContent = 'Choose the decision and/or product role for each finalist. Nothing is chosen for you; unfinished rows can be saved and completed later.';
   copy.append(eyebrow, title, description);
   header.append(copy);
 
@@ -150,22 +151,24 @@ function renderDecisionGate(gate, activeJob) {
     const changed = JSON.stringify(snapshotState(state)) !== JSON.stringify(persisted);
     status.textContent = `${decided}/${gate.finalistCount} recorded${changed ? ' · unsaved changes' : ''}`;
     status.classList.toggle('complete', decided === gate.finalistCount);
-    const blocked = Boolean(activeJob);
+    const blocked = Boolean(activeJob) || submitting;
     submit.disabled = blocked || !changed;
     reset.disabled = blocked || !changed;
     search.disabled = blocked;
-    submit.textContent = blocked
+    submit.textContent = activeJob
       ? 'Another job is running'
-      : decided === gate.finalistCount
-        ? 'Save & continue to Library'
-        : `Save ${decided}/${gate.finalistCount} decisions`;
+      : submitting
+        ? 'Saving decisions…'
+        : decided === gate.finalistCount
+          ? 'Finish research'
+          : `Save ${decided}/${gate.finalistCount} decisions`;
   };
 
   const renderRows = () => {
     list.replaceChildren();
     const rows = filtered();
     for (const finalist of rows) {
-      list.append(decisionCard(finalist, gate, state, Boolean(activeJob), updateState));
+      list.append(decisionCard(finalist, gate, state, Boolean(activeJob) || submitting, updateState));
     }
     if (rows.length === 0) {
       const empty = document.createElement('div');
@@ -198,9 +201,9 @@ function renderDecisionGate(gate, activeJob) {
         seoProductRole: current.seoProductRole,
       };
     });
-    search.disabled = true;
-    reset.disabled = true;
-    submit.disabled = true;
+    submitting = true;
+    renderRows();
+    updateState();
     renderSubmitting(decisionCount(state), gate.finalistCount);
     try {
       const payload = await apiMutation(`/api/researches/${encodeURIComponent(gate.researchId)}/decisions`, {
@@ -214,6 +217,9 @@ function renderDecisionGate(gate, activeJob) {
       });
       await pollDecisionJob(payload.job.jobId);
     } catch (error) {
+      submitting = false;
+      renderRows();
+      updateState();
       renderFailure(error);
     }
   });
@@ -394,9 +400,9 @@ function renderSubmitting(recorded, total) {
   const panel = document.createElement('div');
   panel.className = 'decision-job';
   const strong = document.createElement('strong');
-  strong.textContent = `Submitting ${recorded}/${total} recorded finalists…`;
+  strong.textContent = recorded === total ? 'Finishing research…' : `Saving ${recorded}/${total} decisions…`;
   const span = document.createElement('span');
-  span.textContent = 'The canonical workflow will revalidate discovery, enrichment, finalist lineage, and persisted decision state under the execution lock.';
+  span.textContent = 'Checking the current finalist state before the decisions are saved.';
   panel.append(strong, span);
   root.append(panel);
 }
@@ -426,18 +432,18 @@ function renderJob(job) {
   const strong = document.createElement('strong');
   const span = document.createElement('span');
   if (job.state === 'running') {
-    strong.textContent = 'Human decisions are being applied';
-    span.textContent = `Job ${job.jobId} · canonical finalization owns the submitted snapshot.`;
+    strong.textContent = 'Saving decisions';
+    span.textContent = 'Your decisions were accepted. Waiting for the research state to update.';
   } else if (job.state === 'failed') {
-    strong.textContent = 'Human-decision continuation failed';
+    strong.textContent = 'Decisions were not saved';
     span.textContent = `${job.error?.code ?? 'INTERNAL_ERROR'}: ${job.error?.message ?? 'Unknown error'}`;
     panel.classList.add('failed');
   } else {
-    strong.textContent = 'Human-decision continuation finished';
+    strong.textContent = 'Decision step finished';
     const result = job.result;
-    span.textContent = result
-      ? `Workflow ${humanize(result.workflowState)} · finalization ${humanize(result.finalizationState ?? 'none')} · stop ${humanize(result.stopPoint)}.`
-      : 'Workflow job finished; refreshing canonical research state.';
+    span.textContent = result?.finalizationState
+      ? `Finalization is ${humanize(result.finalizationState)}. Refreshing the research state.`
+      : 'Refreshing the research state.';
     panel.classList.add('finished');
   }
   panel.append(strong, span);
@@ -450,13 +456,13 @@ function renderGateLoadFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'decision-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not load current human-decision gate';
+  strong.textContent = 'Could not load the decision step';
   const span = document.createElement('span');
   span.textContent = error instanceof Error ? error.message : String(error);
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
+  retry.textContent = 'Reload current step';
   retry.addEventListener('click', () => {
     loadedFor = null;
     scheduleSync();
@@ -472,18 +478,10 @@ function renderFailure(error) {
   const panel = document.createElement('div');
   panel.className = 'decision-job failed';
   const strong = document.createElement('strong');
-  strong.textContent = 'Could not save human decisions';
+  strong.textContent = 'Could not save decisions';
   const span = document.createElement('span');
-  span.textContent = error instanceof Error ? error.message : String(error);
-  const retry = document.createElement('button');
-  retry.type = 'button';
-  retry.className = 'button compact';
-  retry.textContent = 'Reload current gate';
-  retry.addEventListener('click', () => {
-    loadedFor = null;
-    scheduleSync();
-  });
-  panel.append(strong, span, retry);
+  span.textContent = `${error instanceof Error ? error.message : String(error)} Your unsaved choices are still here; retry with the main action.`;
+  panel.append(strong, span);
   root.append(panel);
 }
 

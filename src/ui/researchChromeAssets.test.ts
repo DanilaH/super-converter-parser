@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('workspace exposes persistent CSP-safe Research Chrome status and fixed setup/start actions', async () => {
+test('workspace exposes persistent CSP-safe Research Chrome status with one-time setup and automatic start after setup', async () => {
   const base = new URL('./public/', import.meta.url);
   const [source, html, setupScript] = await Promise.all([
     readFile(fileURLToPath(new URL('research-chrome.js', base)), 'utf8'),
@@ -18,12 +18,15 @@ test('workspace exposes persistent CSP-safe Research Chrome status and fixed set
   assert.match(source, /\/api\/system\/research-chrome\/setup/);
   assert.match(source, /\/api\/system\/research-chrome\/start/);
   assert.match(source, /Setup once/);
-  assert.match(source, /Start now/);
-  assert.match(source, /No manual Google launch needed/);
+  assert.doesNotMatch(source, /Start now/);
+  assert.match(source, /Ready\. Discovery will start this Chrome automatically/);
   assert.match(source, /Discovery will start this Chrome automatically/);
   assert.match(source, /runner:research-chrome-refresh/);
   assert.match(source, /status\.controlSupported/);
   assert.match(source, /status\.profileReady/);
+  assert.match(source, /Setup complete\. Starting Research Chrome/);
+  assert.match(source, /apiMutation\('\/api\/system\/research-chrome\/start', \{\}\)/);
+  assert.match(source, /Setup complete — Chrome did not start/);
   assert.doesNotMatch(source, /autoStartAttempted|autoStart:\s*true/);
   assert.doesNotMatch(source, /window\.location\.hash !== '#\/system'/);
   assert.doesNotMatch(source, /innerHTML\s*=/);

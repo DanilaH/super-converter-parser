@@ -73,15 +73,15 @@ function renderEligible({ researchId, repairable, activeJob }) {
   showRoot();
   root.replaceChildren();
   const copy = repairCopy(
-    'Repair discovery checkpoints',
-    `${repairable} checkpoint${repairable === 1 ? '' : 's'} are repairable under the Runner primary-evidence rules. This retries only failed or provably incomplete primary checkpoints and preserves attempt history.`,
-    'Explicit specialist action',
+    'Retry discovery',
+    `${repairable} discovery check${repairable === 1 ? '' : 's'} need another attempt. Retry only those checks; completed work stays intact.`,
+    'Discovery needs attention',
   );
 
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'button repair-button';
-  button.textContent = activeJob ? 'Another job is running' : `Repair ${repairable}`;
+  button.textContent = activeJob ? 'Another job is running' : `Retry ${repairable}`;
   button.disabled = Boolean(activeJob);
   if (activeJob) button.title = `UI job ${activeJob.jobId} is already running.`;
   button.addEventListener('click', () => void startRepair(researchId));
@@ -136,8 +136,8 @@ async function pollRepairJob(jobId, epoch) {
 function renderStarting() {
   showRoot();
   root.replaceChildren(repairCopy(
-    'Starting discovery repair…',
-    'Canonical eligibility is being revalidated under the research execution lock.',
+    'Starting discovery retry…',
+    'Checking the current research state before retrying the failed discovery checks.',
   ));
 }
 
@@ -145,8 +145,8 @@ function renderRunning(job) {
   showRoot();
   root.replaceChildren();
   const copy = repairCopy(
-    'Repairing discovery',
-    `Job ${job.jobId} is retrying eligible primary checkpoints. Ordinary continuation remains blocked until this job finishes.`,
+    'Retrying discovery',
+    'Retrying the discovery checks that still need attention. You can continue when this finishes.',
   );
   const state = document.createElement('span');
   state.className = 'badge info';
@@ -159,9 +159,9 @@ function renderFinished(job) {
   root.replaceChildren();
   const result = job.repairResult;
   const copy = repairCopy(
-    'Discovery repair finished',
+    'Discovery retry finished',
     result
-      ? `${result.repairableBefore} → ${result.repairableAfter} repairable checkpoints · discovery ${humanize(result.discoveryState ?? 'unknown')} · exit ${result.exitCode}.`
+      ? `${result.repairableBefore} retried · ${result.repairableAfter} still need attention · discovery ${humanize(result.discoveryState ?? 'unknown')}.`
       : 'Repair job finished; refreshing canonical research state.',
   );
   const state = document.createElement('span');
@@ -174,13 +174,13 @@ function renderFailure(error) {
   showRoot();
   root.replaceChildren();
   const copy = repairCopy(
-    'Discovery repair did not complete',
+    'Discovery retry did not complete',
     error instanceof Error ? error.message : String(error),
   );
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'button';
-  retry.textContent = 'Reload current state';
+  retry.textContent = 'Try again';
   retry.addEventListener('click', () => scheduleRefresh());
   root.append(copy, retry);
 }

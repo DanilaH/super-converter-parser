@@ -211,7 +211,7 @@
 }
 
 .seed-import-zone {
-  margin-top: 8px;
+  margin: 2px 0 8px;
   min-height: 62px;
   border: 1px dashed #3a414f;
   border-radius: 9px;
