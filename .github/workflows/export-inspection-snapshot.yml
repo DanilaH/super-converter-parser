@@ -41,6 +41,8 @@ jobs:
           git reset --hard origin/main
           git apply --check "$RUNNER_TEMP/operator-guidance.patch"
           git apply "$RUNNER_TEMP/operator-guidance.patch"
+          git apply --check ../source/.inspection/create-recovery.patch
+          git apply ../source/.inspection/create-recovery.patch
 
           cat > "$RUNNER_TEMP/expected-files" <<'EOF'
           UI.md
