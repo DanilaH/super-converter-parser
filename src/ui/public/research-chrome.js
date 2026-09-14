@@ -51,7 +51,7 @@ function renderStatus(status) {
   } else if (status.profileReady === false) {
     detail.textContent = 'Run the one-time setup here. After that discovery starts Research Chrome automatically when it needs Google.';
   } else {
-    detail.textContent = 'No manual Google launch needed. Discovery will start this Chrome automatically.';
+    detail.textContent = 'Ready. Discovery will start this Chrome automatically when it needs Google.';
   }
   card.append(detail);
 
@@ -64,14 +64,6 @@ function renderStatus(status) {
     setup.textContent = 'Setup once';
     setup.addEventListener('click', () => void runSetup());
     actions.append(setup);
-  }
-  if (!status.connected && status.controlSupported && status.profileReady === true) {
-    const start = document.createElement('button');
-    start.type = 'button';
-    start.className = 'button compact';
-    start.textContent = 'Start now';
-    start.addEventListener('click', () => void runStart());
-    actions.append(start);
   }
   const refresh = document.createElement('button');
   refresh.type = 'button';
@@ -89,22 +81,41 @@ async function runSetup() {
   try {
     const payload = await apiMutation('/api/system/research-chrome/setup', {});
     if (epoch !== refreshEpoch) return;
-    renderStatus(payload.researchChrome);
+    const status = payload.researchChrome;
+    if (status.connected || !status.controlSupported || status.profileReady !== true) {
+      renderStatus(status);
+      return;
+    }
+    renderWorking('Setup complete. Starting Research Chrome…', 'The one-time profile setup succeeded. Discovery will also retry browser start automatically when needed.');
+    try {
+      const started = await apiMutation('/api/system/research-chrome/start', {});
+      if (epoch !== refreshEpoch) return;
+      renderStatus(started.researchChrome);
+    } catch (error) {
+      if (epoch === refreshEpoch) renderSetupStartFailure(error);
+    }
   } catch (error) {
     if (epoch === refreshEpoch) renderFailure('Research Chrome setup failed', error);
   }
 }
 
-async function runStart() {
-  const epoch = ++refreshEpoch;
-  renderWorking('Starting Research Chrome…', 'This is optional; discovery also starts it automatically when needed.');
-  try {
-    const payload = await apiMutation('/api/system/research-chrome/start', {});
-    if (epoch !== refreshEpoch) return;
-    renderStatus(payload.researchChrome);
-  } catch (error) {
-    if (epoch === refreshEpoch) renderFailure('Research Chrome start failed', error);
-  }
+function renderSetupStartFailure(error) {
+  root.replaceChildren();
+  const card = statusCard(
+    'error',
+    'Setup complete — Chrome did not start',
+    `${error instanceof Error ? error.message : String(error)} Discovery will retry the prepared browser automatically when you start or resume discovery.`,
+  );
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'button compact';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => void refreshStatus());
+  const actions = document.createElement('div');
+  actions.className = 'workspace-chrome-actions';
+  actions.append(refresh);
+  card.append(actions);
+  root.append(card);
 }
 
 function renderWorking(titleText, detailText) {

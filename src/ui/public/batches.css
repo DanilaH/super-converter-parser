@@ -1,6 +1,6 @@
 .batch-action-shell {
   width: min(1180px, calc(100% - 64px));
-  margin: 10px auto -18px;
+  margin: 10px auto 0;
   min-height: 54px;
   display: flex;
   align-items: center;
