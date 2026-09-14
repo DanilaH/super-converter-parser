@@ -1,7 +1,11 @@
 diff --git a/src/ui/public/app.js b/src/ui/public/app.js
+index f5d7aaf..ba9d605 100644
 --- a/src/ui/public/app.js
 +++ b/src/ui/public/app.js
-@@
+@@ -260,10 +260,12 @@ async function renderNewResearch(epoch) {
+           openedResearch = true;
+           window.location.hash = `#/research/${encodeURIComponent(job.researchId)}`;
+         },
 -        onTerminal: () => {
 +        onTerminal: (job) => {
            if (epoch !== routeEpoch) return;
@@ -11,10 +15,9 @@ diff --git a/src/ui/public/app.js b/src/ui/public/app.js
 +            ? 'Discovery did not start. Fix the error and try Start discovery again.'
 +            : 'Discovery step finished.';
          },
-@@
-         void pollJob(active.jobId, jobHolder, epoch, {
-           onSnapshot: (job) => {
-             if (job.researchId && epoch === routeEpoch) {
+       });
+     } catch (error) {
+@@ -289,6 +291,13 @@ async function renderNewResearch(epoch) {
                window.location.hash = `#/research/${encodeURIComponent(job.researchId)}`;
              }
            },
@@ -26,13 +29,19 @@ diff --git a/src/ui/public/app.js b/src/ui/public/app.js
 +              : 'Previous research start finished without a research ID. Refresh before retrying.';
 +          },
          });
+       } else {
+         formState.textContent = 'Another research action is running. You can start a new research when it finishes.';
 diff --git a/src/ui/publicAssets.test.ts b/src/ui/publicAssets.test.ts
+index b368a65..8a7d221 100644
 --- a/src/ui/publicAssets.test.ts
 +++ b/src/ui/publicAssets.test.ts
-@@
+@@ -88,6 +88,9 @@ test('operator browser shell is syntactically valid, external-only, and exposes
+   assert.match(appSource, /onSnapshot: \(job\) => \{[\s\S]*window\.location\.hash = `#\/research\/\$\{encodeURIComponent\(job\.researchId\)\}`/);
    assert.match(appSource, /active\.kind === 'create_research'/);
    assert.match(appSource, /Another research action is running\. You can start a new research when it finishes\./);
 +  assert.match(appSource, /Discovery did not start\. Fix the error and try Start discovery again\./);
 +  assert.match(appSource, /Previous research start failed\. Fix the problem and try Start discovery again\./);
 +  assert.match(appSource, /Previous research start finished without a research ID\. Refresh before retrying\./);
    assert.doesNotMatch(appSource, /kvRow\('Stop point'/);
+   assert.doesNotMatch(appSource, /kvRow\('Exit code'/);
+   assert.doesNotMatch(appSource, /nextActionRequiresInput/);
