@@ -1,0 +1,38 @@
+diff --git a/src/ui/public/app.js b/src/ui/public/app.js
+--- a/src/ui/public/app.js
++++ b/src/ui/public/app.js
+@@
+-        onTerminal: () => {
++        onTerminal: (job) => {
+           if (epoch !== routeEpoch) return;
+           setBusy(false);
+-          formState.textContent = 'Discovery step finished.';
++          formState.textContent = job.state === 'failed'
++            ? 'Discovery did not start. Fix the error and try Start discovery again.'
++            : 'Discovery step finished.';
+         },
+@@
+         void pollJob(active.jobId, jobHolder, epoch, {
+           onSnapshot: (job) => {
+             if (job.researchId && epoch === routeEpoch) {
+               window.location.hash = `#/research/${encodeURIComponent(job.researchId)}`;
+             }
+           },
++          onTerminal: (job) => {
++            if (epoch !== routeEpoch || job.researchId) return;
++            setBusy(false);
++            formState.textContent = job.state === 'failed'
++              ? 'Previous research start failed. Fix the problem and try Start discovery again.'
++              : 'Previous research start finished without a research ID. Refresh before retrying.';
++          },
+         });
+diff --git a/src/ui/publicAssets.test.ts b/src/ui/publicAssets.test.ts
+--- a/src/ui/publicAssets.test.ts
++++ b/src/ui/publicAssets.test.ts
+@@
+   assert.match(appSource, /active\.kind === 'create_research'/);
+   assert.match(appSource, /Another research action is running\. You can start a new research when it finishes\./);
++  assert.match(appSource, /Discovery did not start\. Fix the error and try Start discovery again\./);
++  assert.match(appSource, /Previous research start failed\. Fix the problem and try Start discovery again\./);
++  assert.match(appSource, /Previous research start finished without a research ID\. Refresh before retrying\./);
+   assert.doesNotMatch(appSource, /kvRow\('Stop point'/);
