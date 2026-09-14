@@ -42,14 +42,16 @@ The `New research` work area:
 - accepts local `.txt`, `.csv`, and `.json` seed files by file picker or drag-and-drop while preserving the same editable textarea;
 - interprets TXT as one keyword per non-empty line, CSV through a required `keyword` column, and JSON only as a string array or `{ "keywords": [...] }`;
 - accepts optional market / Google `hl` / `gl` overrides;
-- requires a plan preview before execution;
+- keeps the real plan preview updated automatically as the draft changes; the operator does not need a separate Preview click;
 - shows supplied line count versus discovery-normalized unique keyword count;
 - shows the resolved workflow target, stages, preset revision, discovery semantics, enrichment modules, external providers, and expected human stop points;
+- presents one primary `Start discovery` action once name + seeds exist; that action performs a fresh server-side plan validation immediately before research creation, so the automatic preview remains advisory rather than authorization;
+- opens the durable Research Detail automatically as soon as the running create job exposes its `researchId`;
 - starts the exact existing application workflow through the U2 execution boundary.
 
 File import is presentation convenience only: imported values are placed into the normal seed editor, any current preview is invalidated, and the existing preview/execution path still owns canonical normalization and validation.
 
-Changing any draft input invalidates the previous preview. The server resolves/validates the plan again at mutation time and the execution adapter resolves it again before durable work, so the browser preview is guidance rather than an authority that can bypass current contracts.
+Changing any draft input schedules a fresh advisory preview. Starting discovery retires any in-flight preview request, resolves/validates the current draft again at mutation time, and the execution adapter resolves it again before durable work. The preview is guidance rather than an authority that can bypass current contracts.
 
 ### Running jobs
 
@@ -67,10 +69,11 @@ Research Chrome status is read from the configured `CDP_URL` by querying its `/j
 
 On Windows, when `CDP_URL` is loopback HTTP with an explicit local port, the workspace exposes bounded fixed controls:
 
-- `Setup once` when the dedicated profile is missing or a previous UI-driven setup was left incomplete;
-- optional `Start now` when the dedicated profile is ready but CDP is not currently responding.
+- `Setup once` when the dedicated profile is missing or a previous UI-driven setup was left incomplete.
 
-Normal new-research discovery does not require `Start now`. Immediately before discovery execution, the UI execution adapter checks the configured Research Chrome status. If the prepared managed local profile is available but CDP is disconnected, it starts Research Chrome through the same fixed launcher and then proceeds. Batch append performs the same preflight only after its current read-only batch classification confirms that the append will actually create/promote discovery work; duplicate-only batches do not open Chrome unnecessarily. The same preflight runs inside the already-admitted UI job before canonical `resume_discovery` continuation and before explicit `repair_discovery`. Enrichment continuation, finalization continuation, and Library publication do not start Research Chrome.
+There is intentionally no normal `Start now` decision for the operator. Successful one-time setup immediately attempts to start the dedicated browser; after setup, new/resumed/repaired discovery starts it just in time whenever CDP is disconnected. If the post-setup start itself fails, the UI reports that setup completed but browser start failed instead of telling the operator to repeat profile setup.
+
+Immediately before discovery execution, the UI execution adapter checks the configured Research Chrome status. If the prepared managed local profile is available but CDP is disconnected, it starts Research Chrome through the same fixed launcher and then proceeds. Batch append performs the same preflight only after its current read-only batch classification confirms that the append will actually create/promote discovery work; duplicate-only batches do not open Chrome unnecessarily. The same preflight runs inside the already-admitted UI job before canonical `resume_discovery` continuation and before explicit `repair_discovery`. Enrichment continuation, finalization continuation, and Library publication do not start Research Chrome.
 
 If the managed local profile has never been prepared, discovery fails clearly and directs the operator to `Setup once` rather than falling through to an opaque Google/CDP timeout. Invalid Research Chrome configuration fails at the preflight boundary. Valid remote/non-loopback CDP endpoints and non-Windows environments remain externally managed: the UI may inspect them, but the built-in discovery preflight does not claim process ownership when `controlSupported` is false.
 
@@ -78,7 +81,7 @@ These controls and the just-in-time preflight are bounded convenience operations
 
 Setup preserves already-existing Research Chrome profiles. New setup attempts use a temporary incomplete marker so a failed/partial profile copy is not subsequently reported as ready. `robocopy` retries are bounded (`/R:2 /W:1`) so locked regular-Chrome profile files fail visibly instead of retrying indefinitely. Start is idempotent when the configured CDP endpoint is already healthy.
 
-On non-Windows hosts the status projection remains available, but built-in setup/start controls are disabled. `npm run ui` intentionally does not launch Research Chrome merely because the console was opened; launch is either an explicit `Start now` convenience or a just-in-time prerequisite of actual managed local discovery. There is intentionally no Stop/Kill or general machine-control surface.
+On non-Windows hosts the status projection remains available, but built-in setup/start controls are disabled. `npm run ui` intentionally does not launch Research Chrome merely because the console was opened; managed local launch is a just-in-time prerequisite of actual discovery work. There is intentionally no Stop/Kill or general machine-control surface.
 
 ### Continue existing research
 
@@ -89,7 +92,7 @@ Research Detail exposes a browser continuation button only when all of the follo
 - the action is one of the normal config-first continuation actions: discovery resume, enrichment run/resume, finalization continuation, or the idempotent Library publication step;
 - no other UI execution job is active.
 
-The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection. When that projection says `resume_discovery`, the admitted resume job performs Research Chrome preflight immediately before the existing continuation workflow. Other continuation codes do not perform that machine preflight.
+The UI does not infer resumability from timestamps, directory names, or presentation state. It consumes the canonical status projection. Research Detail renders a single Workflow panel that shows Discovery → Enrichment → Finalization → Library, explains the canonical next operator step in plain language, and places the ordinary continuation button in that same highlighted next-step block. The operator should not have to find a detached header action after reading what comes next. When the projection says `resume_discovery`, the admitted resume job performs Research Chrome preflight immediately before the existing continuation workflow. Other continuation codes do not perform that machine preflight.
 
 ### Explicit discovery repair
 
@@ -193,7 +196,7 @@ Specialist shortlist, finalist-scope, and decision modules no longer parse Engli
 
 This projection is presentation coordination, not a new state store: it is cleared on route changes/load failures, is rebuilt from server-side canonical status/planning, and is never used as mutation authorization. Gate endpoints and application services still revalidate durable lineage and lock semantics independently.
 
-If canonical planning says a human gate is active but loading its current evidence fails, the specialist surface shows the failure and a `Reload current gate` action rather than silently hiding the form. This makes stale/corrupt evidence fail visibly while preserving the server-side fail-closed behavior.
+If canonical planning says a human step is active but loading its current evidence fails, the specialist surface shows the failure and a `Reload current step` action rather than silently hiding the form. Submit failures are different: shortlist/finalist/decision controls are re-enabled and the operator's in-memory choices remain visible so a transient failure can be retried without reconstructing the selection. Long shortlist/finalist/decision surfaces keep their primary action footer sticky in the viewport. This preserves the server-side fail-closed behavior without turning transient browser errors into dead-end screens.
 
 ### Display label
 

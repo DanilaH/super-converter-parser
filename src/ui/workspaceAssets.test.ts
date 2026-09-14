@@ -22,6 +22,8 @@ test('browser shell is one persistent split workspace instead of primary full-sc
   assert.match(html, /<script type="module" src="\/workspace\.js"><\/script>/);
   assert.match(html, /<script type="module" src="\/seed-import\.js"><\/script>/);
   assert.doesNotMatch(html, /<nav class="nav"/);
+  assert.ok(html.indexOf('id="app"') < html.indexOf('id="metadata-action-root"'));
+  assert.ok(html.indexOf('id="app"') < html.indexOf('id="batch-action-root"'));
 
   assert.match(source, /window\.location\.hash === '#\/researches'/);
   assert.match(source, /window\.location\.hash = '#\/new'/);
@@ -62,6 +64,7 @@ test('seed importer accepts TXT, canonical keyword CSV, and strict JSON shapes',
   assert.match(source, /\.batch-form textarea\.batch-textarea/);
   assert.match(source, /dataTransfer\?\.files/);
   assert.match(source, /\.txt,\.csv,\.json/);
+  assert.match(source, /textarea\.insertAdjacentElement\('beforebegin', zone\)/);
   assert.match(source, /textarea\.dispatchEvent\(new Event\('input'/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
 });
